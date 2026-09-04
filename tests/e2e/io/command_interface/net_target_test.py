@@ -1253,8 +1253,15 @@ def main() -> int:
             check_start("this machine answers at the Command Interface registers")
             check_skip("$DF1B-$DF1F all read $FF, so no command interface is present "
                        "at those addresses on this machine")
-            suite_ok("net_target_test")
-            return 0
+            # Not a limitation to skip past: this run measured nothing at all,
+            # and the harness derives the suite verdict from the exit code
+            # alone, so returning 0 here reports a green suite with no scenario
+            # lines under it. The rule this follows is the one stated below for
+            # an unreachable route -- a device that cannot be addressed is a
+            # finding, not a limitation.
+            suite_fail("net_target_test",
+                       "$DF1B-$DF1F all read $FF: this run measured nothing")
+            return 1
 
         needs_peer = [name for name in TESTS
                       if name != "read-length-limit" and name in selected]
@@ -1367,7 +1374,21 @@ def main() -> int:
         cleanup_ok = released and restored
 
     section("summary")
-    all_ok = cleanup_ok and not setup_failed
+    # Every scenario that measures the network target needs the peer; only
+    # read-length-limit runs without one. A run that selected those scenarios
+    # and reached a verdict on none of them measured nothing, whatever else
+    # passed, so it must not report success -- a skip stores None, and None
+    # alone would leave all_ok true.
+    #
+    # This asks for positive evidence rather than classifying skips, which is
+    # what keeps the legitimate split-target skip green: there the native route
+    # stores None for every scenario while the rest route still proves them.
+    # `or not wanted` keeps a deliberate --test subset from going spuriously
+    # red; the gate always passes --test all, so wanted is never empty there.
+    wanted = [name for name in selected if name != "read-length-limit"]
+    proved = any(results.get(f"{name} [{route}]") is True
+                 for name in wanted for route in routes)
+    all_ok = cleanup_ok and not setup_failed and (proved or not wanted)
     for label, outcome in results.items():
         state = OK if outcome else (FAIL if outcome is False else SKIP)
         if outcome is False:

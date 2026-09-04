@@ -300,7 +300,7 @@ e2e:
   telnet-stale-session              .      .      .      x      x
   temp-auto-cleanup                 .      .      x      x      x
   transport-usage                   x      x      x      x      x
-  uci-net-target                    .      .      .      x      x
+  uci-net-target                    .      .      x      x      x
   uci-targets                       .      .      x      x      x
   ui-backend-smoke                  x      x      x      x      x
   usb-bulk-out-integrity            .      .      .      x      x
