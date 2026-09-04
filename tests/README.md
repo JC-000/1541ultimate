@@ -279,6 +279,7 @@ e2e:
   freeze-menu                       .      .      x      x      x
   ftp-client                        .      x      x      x      x
   ftp-server                        x      x      x      x      x
+  ident-service-switch              .      .      x      x      x
   input                             .      x      x      x      x
   input-batching                    x      x      x      x      x
   key-injection                     .      .      x      x      x
@@ -326,8 +327,8 @@ soak:
   usb-keyboard-repeat               .      .      .      x      x
 
                                ------ ------ ------ ------ ------
-  suites                            8     21     43     52     52
-  suite runs                        8     21     43    104    156
+  suites                            8     21     45     55     55
+  suite runs                        8     21     45    110    165
 
 Scenario and check counts, and durations, are not shown here:
 the registry does not know them. They depend on the machine and are
