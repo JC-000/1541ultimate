@@ -42,6 +42,15 @@ suite, and every property under test is visible at 64 bytes as clearly as at
 
 Supported on any Ultimate whose FPGA provides the command interface. The suite
 enables the "Command Interface" setting and restores it on exit.
+
+The checks that put received bytes next to the payload that was sent are the
+only assertions here that no run has ever seen fail: firmware without the
+command under test stops every scenario at its first check, long before a byte
+is compared. --prove-wire-oracle corrupts one byte of every payload this host
+puts on the wire so that a correct device fails them, which says those
+comparisons are live and says nothing at all about the device. --self-test
+checks that seam on any machine with no device attached. Both are described at
+corrupt_for_proof below.
 """
 
 import argparse
@@ -165,6 +174,25 @@ TESTS = [
     "reset-closes-uci-sockets",
 ]
 
+# The scenarios that compare received bytes against the payload that was sent,
+# and so the ones a --prove-wire-oracle run has to turn red. The other four
+# measure lengths, block structure or status only, where a corrupted byte is
+# invisible, and stay green in a proof run without that meaning anything.
+WIRE_ORACLE_TESTS = [
+    "datagram-spans-reply-blocks",
+    "udp-truncation-is-detectable",
+    "truncation-spans-reply-blocks",
+    "tcp-read-is-lossless",
+    "oversize-request-keeps-the-datagram",
+    "multi-block-state-does-not-leak",
+]
+
+# The payload sizes this suite actually puts on the wire. The self-test uses
+# them rather than round numbers so that it exercises the seam over the sizes
+# the scenarios depend on, including the one that is read back in part.
+SENT_SIZES = [SMALL_READ, BIG_DATAGRAM, FIRST_BLOCK_PAYLOAD, FIRST_BLOCK_PAYLOAD + 1,
+              TRUNCATED_DATAGRAM, SPANNING_DATAGRAM, MAX_READ]
+
 
 def pattern(size: int, seed: int = 0) -> bytes:
     """A payload whose every byte identifies its own offset.
@@ -246,6 +274,51 @@ def describe_mismatch(actual: bytes, expected: bytes) -> str:
                     f"${want:02X}; the run starting there came from offset "
                     f"{run_offset(tail)}")
     return "identical"
+
+
+# An assertion that has never been seen failing is an assertion that has never
+# been seen working. Every comparison below that puts received bytes next to
+# the payload that was sent is in that position: against firmware without the
+# command under test each scenario stops at its first check, so a red run says
+# the command was missing and nothing more, and against firmware with it the
+# bytes have always agreed.
+#
+# --prove-wire-oracle removes the agreement. It corrupts one byte of every
+# payload this host puts on the wire, so a device that behaves perfectly now
+# hands back bytes that do not match what the scenario expects and every one of
+# those comparisons has to notice. What that demonstrates is exactly one thing:
+# the comparisons are live. It demonstrates nothing whatever about the
+# firmware, because the run is lying to itself about what it sent. That is why
+# a proof run never reports a passing suite however it goes (see
+# wire_oracle_verdict), and why arming it takes a command line flag with no
+# environment variable and no default behind it: left on by accident it can
+# only fail this suite, never pass it.
+_PROVING_WIRE_ORACLE = False
+
+
+def arm_wire_oracle_proof() -> None:
+    """Start corrupting outgoing payloads. Only main() and --self-test call this."""
+    global _PROVING_WIRE_ORACLE
+    _PROVING_WIRE_ORACLE = True
+
+
+def corrupt_for_proof(payload: bytes) -> bytes:
+    """The payload as the wire carries it: itself, or one byte of it inverted.
+
+    Returns its argument unchanged on any run that did not arm the proof, so an
+    ordinary run behaves exactly as if this function were not here.
+
+    Length is preserved and the byte is taken from the middle, both so that the
+    byte comparison is what fails rather than something upstream of it: a
+    payload of a different length would be caught first by the header and
+    block-size checks that surround the comparisons, and the middle of a
+    payload is inside the part every scenario in WIRE_ORACLE_TESTS compares,
+    including the one that asks for less than it sent.
+    """
+    if not _PROVING_WIRE_ORACLE or not payload:
+        return payload
+    middle = len(payload) // 2
+    return payload[:middle] + bytes([payload[middle] ^ 0xFF]) + payload[middle + 1:]
 
 
 class Net:
@@ -416,7 +489,19 @@ class Peer:
     def send_udp(self, payload: bytes) -> None:
         if self.udp_peer is None:
             raise Failure("the device's UDP source address is not known yet")
-        self.udp.sendto(payload, self.udp_peer)
+        self.udp.sendto(corrupt_for_proof(payload), self.udp_peer)
+
+    def send_stream(self, payload: bytes) -> None:
+        """Payload over the TCP connection the device opened to this host.
+
+        A method here rather than a sendall at the call site so that every byte
+        this host puts on the wire leaves through one of two places, which is
+        what lets --prove-wire-oracle be a seam instead of a list of call sites
+        that a later scenario can forget to join.
+        """
+        if self.tcp_conn is None:
+            raise Failure("no TCP connection has been accepted yet")
+        self.tcp_conn.sendall(corrupt_for_proof(payload))
 
     def accept_tcp(self) -> socket.socket:
         self.tcp.settimeout(PEER_TIMEOUT_SECONDS)
@@ -718,7 +803,6 @@ def run_udp_truncation(net: Net, peer: Peer) -> bool:
     nothing to attribute it to.
     """
     section("udp-truncation-is-detectable")
-    ok = True
     handle = net.open_udp(peer.ip, peer.udp_port)
     detail(f"UDP socket handle {handle}")
     try:
@@ -786,7 +870,7 @@ def run_udp_truncation(net: Net, peer: Peer) -> bool:
 
     finally:
         net.close(handle)
-    return ok
+    return True
 
 
 def run_truncation_spans_reply_blocks(net: Net, peer: Peer) -> bool:
@@ -952,13 +1036,12 @@ def run_tcp_lossless(net: Net, peer: Peer) -> bool:
     and that no block exceeds what the transport can deliver.
     """
     section("tcp-read-is-lossless")
-    ok = True
     handle = net.open_tcp(peer.ip, peer.tcp_port)
     detail(f"TCP socket handle {handle}")
     conn = None
     try:
         conn = peer.accept_tcp()
-        conn.sendall(pattern(BIG_DATAGRAM))
+        peer.send_stream(pattern(BIG_DATAGRAM))
         time.sleep(DELIVERY_SETTLE_SECONDS)
         chunks: List[ReadResult] = []
         recovered = bytearray()
@@ -986,7 +1069,7 @@ def run_tcp_lossless(net: Net, peer: Peer) -> bool:
                 raise Failure(f"a stream read answered {unexpected!r}; only {STATUS_OK!r} "
                               f"is correct when no data was lost")
 
-        conn.sendall(pattern(SPANNING_DATAGRAM, seed=3))
+        peer.send_stream(pattern(SPANNING_DATAGRAM, seed=3))
         time.sleep(DELIVERY_SETTLE_SECONDS)
         wide: List[ReadResult] = []
         stream = bytearray()
@@ -1038,7 +1121,7 @@ def run_tcp_lossless(net: Net, peer: Peer) -> bool:
         if conn is not None:
             conn.close()
         net.close(handle)
-    return ok
+    return True
 
 
 def run_oversize_request_keeps_datagram(net: Net, peer: Peer) -> bool:
@@ -1050,7 +1133,6 @@ def run_oversize_request_keeps_datagram(net: Net, peer: Peer) -> bool:
     see nothing.
     """
     section("oversize-request-keeps-the-datagram")
-    ok = True
     over_long = net.largest_accepted_length() + 1
     handle = net.open_udp(peer.ip, peer.udp_port)
     try:
@@ -1074,7 +1156,7 @@ def run_oversize_request_keeps_datagram(net: Net, peer: Peer) -> bool:
                     f"bytes instead of {SMALL_READ}: the refusal consumed it")
     finally:
         net.close(handle)
-    return ok
+    return True
 
 
 def close_quietly(net: Net, handles: List[int]) -> None:
@@ -1154,11 +1236,10 @@ def free_heap(device) -> Optional[int]:
 def restore_settings(device, original: Dict[str, str], keep: bool) -> bool:
     if keep or not original:
         return True
-    ok = True
     for item, value in original.items():
         with check(f"restore {item!r} to {value!r}"):
             device.configs.set(CONFIG_CATEGORY, item, value)
-    return ok
+    return True
 
 
 def build_driver(route: str, computer, busy_timeout: float):
@@ -1168,6 +1249,165 @@ def build_driver(route: str, computer, busy_timeout: float):
     agent = NativeUci(computer.machine, computer.runners, busy_timeout)
     agent.start()
     return agent
+
+
+def wire_oracle_labels(selected: List[str], routes: List[str]) -> List[str]:
+    """The result labels a --prove-wire-oracle run has something to say about."""
+    return [f"{name} [{route}]" for name in selected if name in WIRE_ORACLE_TESTS
+            for route in routes]
+
+
+def wire_oracle_outcome(results: Dict[str, Optional[bool]],
+                        labels: List[str]) -> Tuple[bool, str]:
+    """Whether a proof run proved anything, and why, from what each label did.
+
+    Separated from the reporting below so the self-test can put a table of
+    outcomes in and read the verdict out without a device. The three cases it
+    has to keep apart are a scenario that went red, which is its comparison
+    catching the corrupted byte; one that stayed green, which is the finding a
+    proof run exists to make; and one that never ran, since the native route on
+    a split target stores None for every scenario and counting that as either
+    would make the verdict depend on which bench the proof was run from.
+    """
+    survived = [label for label in labels if results.get(label) is True]
+    fired = [label for label in labels if results.get(label) is False]
+    if survived:
+        return False, (f"{survived} passed while the payload they were given was wrong, so "
+                       f"their byte comparisons are not deciding anything")
+    if not fired:
+        return False, "no scenario that compares payload bytes ran, so nothing was proved"
+    return True, ("every payload comparison that ran caught the corrupted byte, so those "
+                  "comparisons are live; this run says nothing about the firmware")
+
+
+def wire_oracle_verdict(results: Dict[str, Optional[bool]], stopped: Dict[str, str],
+                        selected: List[str], routes: List[str]) -> int:
+    """What a --prove-wire-oracle run reports, which is never a passing suite.
+
+    The verdict is a line to read, not an exit code. A proof run exits 1
+    whichever way it goes, because the alternative is a mode that exits 0 while
+    deliberately lying about what it sent, and a gate that acquired the flag by
+    accident would then be green for a reason that has nothing to do with the
+    firmware. This way the flag can only fail this suite, never pass it.
+
+    What it does not show, and must not be read as showing: that the firmware
+    is right. The bytes on the wire in this run are the test's own corruption,
+    so a scenario going red here is the test catching the test.
+    """
+    section("wire-oracle proof")
+    labels = wire_oracle_labels(selected, routes)
+    for label in labels:
+        outcome = results.get(label)
+        state = ("caught it" if outcome is False
+                 else "COMPARED NOTHING" if outcome is True else "did not run")
+        detail(f"{label}: {state}")
+        # The stop reason names the check that caught the corrupted byte, which
+        # is the part a reader has to read: a scenario that went red somewhere
+        # upstream of its byte comparison would be red for the wrong reason.
+        if label in stopped:
+            detail(f"    {stopped[label]}")
+    detail(f"expected to stay green, since they measure lengths, blocks or status only: "
+           f"{[name for name in selected if name not in WIRE_ORACLE_TESTS]}")
+
+    proved, reason = wire_oracle_outcome(results, labels)
+    suite_fail("net_target_test",
+               f"wire-oracle proof {'PASSED' if proved else 'FAILED'}: {reason}. "
+               f"A proof run never reports a passing suite.")
+    return 1
+
+
+def run_wire_oracle_self_test() -> int:
+    """Prove the proof: that the seam is inert by default and real once armed.
+
+    Runs anywhere, with no device and no network. It cannot show that a check
+    body compares anything -- only a --prove-wire-oracle run against hardware
+    does that -- but it fixes the parts such a run rests on: that an ordinary
+    run is unaffected, so the flag cannot silently change what the gate
+    measures; that an armed run really does put different bytes on the wire, so
+    a scenario that then stays green has a comparison that decided nothing
+    rather than a mutation that never happened; and that the verdict reads a
+    table of outcomes the way it claims to.
+    """
+    section("wire-oracle self-test")
+    with check("every scenario the proof expects to turn red is a scenario that exists"):
+        unknown = [name for name in WIRE_ORACLE_TESTS if name not in TESTS]
+        if unknown:
+            raise Failure(f"{unknown} are named in WIRE_ORACLE_TESTS but are not scenarios; "
+                          f"a proof run would then wait for a verdict that can never arrive")
+        detail(f"{len(WIRE_ORACLE_TESTS)} of {len(TESTS)} scenarios compare payload bytes: "
+               f"{WIRE_ORACLE_TESTS}")
+
+    with check("payloads are untouched until the proof is armed"):
+        # The one property that makes this safe to check in: a run that did not
+        # ask for the proof has to be the run it would have been without it.
+        if _PROVING_WIRE_ORACLE:
+            raise Failure("the proof was already armed at import; arming it must take the flag")
+        for size in SENT_SIZES:
+            payload = pattern(size)
+            if corrupt_for_proof(payload) is not payload:
+                raise Failure(f"a {size}-byte payload did not come back unchanged")
+
+    with check("the proof's verdict tells its three outcomes apart"):
+        # A skipped route must not read as a comparison that failed to fire.
+        # Without this the verdict would depend on the bench: on a split target
+        # every [native] label is None, and the proof would report FAILED there
+        # while the rest route had just demonstrated exactly what it asked for.
+        pair = ["one [rest]", "one [native]"]
+        cases = [
+            ({"one [rest]": False, "one [native]": False}, True, "both routes caught it"),
+            ({"one [rest]": False, "one [native]": None}, True, "a split target's skip"),
+            ({"one [rest]": False, "one [native]": True}, False, "one route caught nothing"),
+            ({"one [rest]": True, "one [native]": True}, False, "neither route caught anything"),
+            ({"one [rest]": None, "one [native]": None}, False, "the scenario never ran"),
+            ({}, False, "no results at all"),
+        ]
+        for outcomes, expected, what in cases:
+            proved, reason = wire_oracle_outcome(outcomes, pair)
+            if proved is not expected:
+                raise Failure(f"{what}: the verdict was {proved}, expected {expected} "
+                              f"({reason})")
+
+    arm_wire_oracle_proof()
+
+    with check("an armed proof changes exactly one byte of every payload the suite sends"):
+        for size in SENT_SIZES:
+            payload = pattern(size)
+            sent = corrupt_for_proof(payload)
+            if len(sent) != len(payload):
+                raise Failure(f"a {size}-byte payload became {len(sent)} bytes; the length has "
+                              f"to survive, or the header and block-size checks fail first and "
+                              f"the byte comparison is never reached")
+            differing = [i for i, (a, b) in enumerate(zip(sent, payload)) if a != b]
+            if differing != [size // 2]:
+                raise Failure(f"a {size}-byte payload differs at {differing}, expected "
+                              f"[{size // 2}]")
+        detail(f"sizes {SENT_SIZES}, each corrupted at its midpoint")
+
+    with check("the comparison the scenarios make rejects a corrupted payload"):
+        # The scenarios compare with != against pattern() and report the
+        # difference through describe_mismatch and run_offset. All three are
+        # exercised here on exactly the value the seam produces.
+        for size in SENT_SIZES:
+            payload = pattern(size)
+            sent = corrupt_for_proof(payload)
+            if sent == payload:
+                raise Failure(f"a corrupted {size}-byte payload still compared equal")
+            described = describe_mismatch(sent, payload)
+            if not described.startswith(f"first difference at offset {size // 2}"):
+                raise Failure(f"describe_mismatch called a corrupted {size}-byte payload "
+                              f"{described!r}")
+            if run_offset(sent) is not None:
+                raise Failure(f"run_offset read a corrupted {size}-byte payload as a run of "
+                              f"pattern() from offset {run_offset(sent)}")
+
+    with check("an empty payload has no byte to corrupt and is left alone"):
+        # drain_socket and the zero-length cases read emptiness as a verdict, so
+        # the seam must not invent a byte for them.
+        if corrupt_for_proof(b"") != b"":
+            raise Failure("the seam changed an empty payload")
+
+    suite_ok("net_target_test wire-oracle self-test")
+    return 0
 
 
 def main() -> int:
@@ -1189,7 +1429,27 @@ def main() -> int:
                              "C64. Both by default.")
     parser.add_argument("--keep-config", action="store_true",
                         help="Don't restore the original Command Interface setting on exit.")
+    parser.add_argument("--self-test", action="store_true",
+                        help="Check the --prove-wire-oracle seam itself on this machine, "
+                             "with no device: that it is inert until armed and that an "
+                             "armed one really changes a byte. Runs nothing else.")
+    parser.add_argument("--prove-wire-oracle", action="store_true",
+                        help="Corrupt one byte of every payload this host sends, so that the "
+                             "checks comparing received bytes against it have to fail. Shows "
+                             "those comparisons are live; shows nothing about the firmware, "
+                             "and never reports a passing suite.")
     args = parser.parse_args()
+
+    if args.self_test:
+        # Before anything that needs a device, so this is runnable on a laptop
+        # and in CI, where the seam is the only part of the proof that can be
+        # checked without hardware.
+        return run_wire_oracle_self_test()
+    if args.prove_wire_oracle:
+        arm_wire_oracle_proof()
+        warn("--prove-wire-oracle is on: one byte of every payload this host sends is "
+             "corrupted, so the byte comparisons in this suite are expected to fail. This "
+             "run measures whether they fire and measures nothing about the device.")
 
     selected = TESTS if not args.test or "all" in args.test else [t for t in TESTS if t in args.test]
     routes = ROUTES if not args.route or "all" in args.route else [r for r in ROUTES if r in args.route]
@@ -1210,6 +1470,10 @@ def main() -> int:
 
     original: Dict[str, str] = {}
     results: Dict[str, Optional[bool]] = {}
+    # Why a scenario stopped, kept as well as printed: a --prove-wire-oracle run
+    # reports it back so a reader can see that what caught the corrupted byte
+    # was the byte comparison rather than something upstream of it.
+    stopped: Dict[str, str] = {}
     peer: Optional[Peer] = None
     interface_enabled = False
     native_started = False
@@ -1234,6 +1498,7 @@ def main() -> int:
             # The interface is stuck for every target; nothing after this can run.
             raise
         except Failure as exc:
+            stopped[label] = format_exception(exc)
             detail(f"{label} stopped: {format_exception(exc)}")
 
     try:
@@ -1395,6 +1660,9 @@ def main() -> int:
             all_ok = False
         detail(f"{label}: {state}")
     detail(f"cleanup: {OK if cleanup_ok else FAIL}")
+
+    if args.prove_wire_oracle:
+        return wire_oracle_verdict(results, stopped, selected, routes)
 
     if all_ok:
         suite_ok("net_target_test")
