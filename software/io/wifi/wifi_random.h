@@ -29,4 +29,10 @@ int wifi_random_take_reply(const uint8_t *reply, int size, uint16_t sequence,
                            uint8_t *buf, uint16_t len, uint8_t *source);
 #define WIFI_RANDOM_FOREIGN   5 // not the answer to this request
 
+// The UCI status number for a result of wifi_get_random: 0 (OK, and the bytes
+// go out) for 0 and nothing else, 88 (busy, retry) for WIFI_RANDOM_BUSY, 86
+// (internal error) for WIFI_RANDOM_INVALID, and 87 (no entropy source) for
+// every other value.
+int wifi_random_status(int result);
+
 #endif /* WIFI_RANDOM_H_ */

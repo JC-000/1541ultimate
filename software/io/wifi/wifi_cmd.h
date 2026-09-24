@@ -61,12 +61,21 @@ int wifi_set_wake_on_wifi(uint8_t enabled);
 int wifi_get_wake_on_wifi(uint8_t *enabled);
 
 extern uint16_t sequence_nr;
-// A reply goes to the task in the slot named by its thread field. The calls
-// below use the number of their transmit buffer, which is handed to the next
-// caller as soon as it has been sent, so two of them can meet in one slot.
-// wifi_get_random runs outside the WiFi task and has a slot of its own.
-#define WIFI_RANDOM_WAITER NUM_TX_BUFFERS
-extern TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS + 1];
+extern TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS];
+
+// wifi_get_random's requests carry this thread number, which no transmit
+// buffer has, and their replies bypass tasksWaitingForReply. While
+// random_waiting is set, the receive interrupt queues them in random_replies,
+// tagged with the UART's buffer generation; otherwise it drops them.
+#define WIFI_RANDOM_THREAD NUM_TX_BUFFERS
+#if U64 == 1
+typedef struct {
+    command_buf_t *buf;
+    uint32_t generation;
+} random_reply_t;
+extern QueueHandle_t random_replies;
+extern volatile bool random_waiting;
+#endif
 extern "C" { void print_uart_status(); }
 extern const char *no_wifi_buf;
 

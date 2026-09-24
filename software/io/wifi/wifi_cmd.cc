@@ -3,7 +3,11 @@
 
 /// C like functions to 'talk' with the WiFi Module
 uint16_t sequence_nr = 0;
-TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS + 1];
+TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS];
+#if U64 == 1
+QueueHandle_t random_replies = xQueueCreate(4, sizeof(random_reply_t));
+volatile bool random_waiting = false;
+#endif
 
 void hex(uint8_t h)
 {
@@ -17,7 +21,17 @@ BaseType_t wifi_rx_isr(command_buf_context_t *context, command_buf_t *buf, BaseT
     rpc_header_t *hdr = (rpc_header_t *)buf->data;
     BaseType_t res;
 
-    if ((hdr->thread <= WIFI_RANDOM_WAITER) && (tasksWaitingForReply[hdr->thread])) {
+#if U64 == 1
+    if (hdr->thread == WIFI_RANDOM_THREAD) {
+        // pdFALSE makes the interrupt handler free the buffer.
+        if (!random_waiting) {
+            return pdFALSE;
+        }
+        random_reply_t reply = { buf, esp32.uart->generation };
+        return xQueueSendFromISR(random_replies, &reply, w);
+    }
+#endif
+    if ((hdr->thread < NUM_TX_BUFFERS) && (tasksWaitingForReply[hdr->thread])) {
         TaskHandle_t thread = tasksWaitingForReply[hdr->thread];
         tasksWaitingForReply[hdr->thread] = NULL;
         ioWrite8(UART_DATA, 'N');
