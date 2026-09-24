@@ -204,6 +204,11 @@ RANDOM_REPEAT_PERIOD_MAX = RANDOM_MAX_BYTES // 2
 # counts as the socket read buffer handed back. A chance match of eight bytes
 # is 1 in 2^56 per position.
 STALE_RUN_BYTES = 8
+# The run length at which bytes handed out again are caught. Every window of
+# this many bytes, at every offset of every GET_RANDOM reply in a route, has
+# to be new. A route holds about 2,900 windows, so honest random bytes repeat
+# one by chance with a probability of about 2,900^2 / 2 / 2^128, 1 in 10^31.
+RANDOM_WINDOW_BYTES = 16
 # How often, and how far apart, a GET_RANDOM that answered 88 is asked again.
 # The ESP32 answers commands one at a time, and one that queues a Wi-Fi scan
 # or connect waits up to 1000 ticks, 10 s at 100 Hz, when that queue is full.
@@ -339,6 +344,9 @@ class Net:
         self.busy_replies = 0
         self.busy_retries = 0
         self.busy_calls = 0
+        # Every RANDOM_WINDOW_BYTES window of every GET_RANDOM reply so far,
+        # with the reply and offset it came from.
+        self.random_windows: dict[bytes, tuple[int, int]] = {}
 
     def identify(self):
         return self.uci.transact(bytes([TARGET_NETWORK, NET_CMD_IDENTIFY]))
@@ -457,7 +465,33 @@ class Net:
             self.no_entropy_replies += 1
         if result.status_text.startswith(STATUS_ENTROPY_BUSY_PREFIX):
             self.busy_replies += 1
+        if result.status_text == STATUS_OK:
+            self._remember_random(result.data)
         return result
+
+    def _remember_random(self, data: bytes) -> None:
+        """Fail if any window of `data` was handed out before on this route.
+
+        A sanity check against bytes handed out twice, not an entropy proof.
+        A handler that fills only part of its buffer still answers with the
+        full length, and the rest is whatever an earlier reply left there:
+        random, so no check on one reply sees it, but the same bytes as
+        before. Every offset is checked rather than aligned blocks, so bytes
+        served again at a different position are caught as well, and so is
+        a reply that repeats itself.
+        """
+        reply = self.random_replies
+        for offset in range(len(data) - RANDOM_WINDOW_BYTES + 1):
+            window = data[offset:offset + RANDOM_WINDOW_BYTES]
+            seen = self.random_windows.get(window)
+            if seen is not None:
+                raise Failure(
+                    f"bytes {offset}-{offset + RANDOM_WINDOW_BYTES - 1} of GET_RANDOM reply "
+                    f"{reply} ({len(data)} bytes) were handed out before, at offset "
+                    f"{seen[1]} of reply {seen[0]}: {window.hex(' ')}. Random bytes do "
+                    f"not repeat {RANDOM_WINDOW_BYTES} at a time, so part of this reply "
+                    f"was left over rather than drawn")
+            self.random_windows[window] = (reply, offset)
 
     def largest_accepted_length(self) -> int:
         """The largest length READ_SOCKET accepts, found by bisection.
