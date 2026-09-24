@@ -28,6 +28,7 @@ Message c_status_socket_closed       = { 28, true, (uint8_t *)"01,CONNECTION CLO
 Message c_status_net_no_data         = { 26, true, (uint8_t *)"03,MORE DATA NOT SUPPORTED" };
 Message c_status_internal_error      = { 17, true, (uint8_t *)"86,INTERNAL ERROR" };
 Message c_status_no_entropy          = { 20, true, (uint8_t *)"87,NO ENTROPY SOURCE" };
+Message c_status_entropy_busy        = { 22, true, (uint8_t *)"88,ENTROPY SOURCE BUSY" };
 
 NetworkTarget::NetworkTarget(int id)
 {
@@ -436,11 +437,20 @@ void NetworkTarget :: get_random(Message *command, Message **reply, Message **st
     if (wifi.getState() < eWifi_AppDetected) {
         return;
     }
-    if (wifi_get_random(data_message.message, length, NULL) == 0) {
-        data_message.length = length;
-        data_message.last_part = true;
-        *reply = &data_message;
-        *status = &c_status_ok;
+    // A refusal by the module keeps the 87 set above.
+    switch (wifi_get_random(data_message.message, length, NULL)) {
+        case 0:
+            data_message.length = length;
+            data_message.last_part = true;
+            *reply = &data_message;
+            *status = &c_status_ok;
+            break;
+        case WIFI_RANDOM_BUSY:
+            *status = &c_status_entropy_busy;
+            break;
+        case WIFI_RANDOM_INVALID:
+            *status = &c_status_internal_error;
+            break;
     }
 #endif
 }

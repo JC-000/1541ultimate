@@ -61,11 +61,20 @@ int wifi_set_wake_on_wifi(uint8_t enabled);
 int wifi_get_wake_on_wifi(uint8_t *enabled);
 
 // Fills buf with len bytes from the module's hardware random number generator
-// and returns 0, or returns nonzero and leaves buf untouched. U64 only.
+// and returns 0, or returns one of the codes below and leaves buf untouched.
+// U64 only.
 int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source);
+#define WIFI_RANDOM_BUSY    1 // no answer in time; the module may be busy
+#define WIFI_RANDOM_REFUSED 2 // the module answered with an error
+#define WIFI_RANDOM_INVALID 3 // the answer is not a well formed reply
 
 extern uint16_t sequence_nr;
-extern TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS];
+// A reply goes to the task in the slot named by its thread field. The calls
+// below use the number of their transmit buffer, which is handed to the next
+// caller as soon as it has been sent, so two of them can meet in one slot.
+// wifi_get_random runs outside the WiFi task and has a slot of its own.
+#define WIFI_RANDOM_WAITER NUM_TX_BUFFERS
+extern TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS + 1];
 extern "C" { void print_uart_status(); }
 extern const char *no_wifi_buf;
 

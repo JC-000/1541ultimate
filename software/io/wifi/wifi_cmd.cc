@@ -3,7 +3,7 @@
 
 /// C like functions to 'talk' with the WiFi Module
 uint16_t sequence_nr = 0;
-TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS];
+TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS + 1];
 
 void hex(uint8_t h)
 {
@@ -17,7 +17,7 @@ BaseType_t wifi_rx_isr(command_buf_context_t *context, command_buf_t *buf, BaseT
     rpc_header_t *hdr = (rpc_header_t *)buf->data;
     BaseType_t res;
 
-    if ((hdr->thread < NUM_TX_BUFFERS) && (tasksWaitingForReply[hdr->thread])) {
+    if ((hdr->thread <= WIFI_RANDOM_WAITER) && (tasksWaitingForReply[hdr->thread])) {
         TaskHandle_t thread = tasksWaitingForReply[hdr->thread];
         tasksWaitingForReply[hdr->thread] = NULL;
         ioWrite8(UART_DATA, 'N');
@@ -325,11 +325,23 @@ int wifi_modem_enable(bool enable)
 int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source)
 {
     command_buf_t *packet;
-    if (esp32.uart->GetBuffer(&packet, 100) == pdFALSE) {
+    if (esp32.uart->GetBuffer(&packet, 4) == pdFALSE) { // 20 ms
         printf(no_wifi_buf);
-        return -1;
+        return WIFI_RANDOM_BUSY;
     }
-    int thread = packet->bufnr;
+    // One request at a time: a second caller fails rather than waits.
+    const int thread = WIFI_RANDOM_WAITER;
+    bool busy;
+    ENTER_SAFE_SECTION;
+    busy = (tasksWaitingForReply[thread] != NULL);
+    if (!busy) {
+        tasksWaitingForReply[thread] = xTaskGetCurrentTaskHandle();
+    }
+    LEAVE_SAFE_SECTION;
+    if (busy) {
+        esp32.uart->FreeBuffer(packet);
+        return WIFI_RANDOM_BUSY;
+    }
     uint16_t sequence = sequence_nr++;
     rpc_get_random_req *args = (rpc_get_random_req *)packet->data;
     args->hdr.command = CMD_GET_RANDOM;
@@ -337,13 +349,15 @@ int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source)
     args->hdr.thread = (uint8_t)thread;
     args->length = len;
     packet->size = sizeof(rpc_get_random_req);
-    tasksWaitingForReply[thread] = xTaskGetCurrentTaskHandle();
 
     if (esp32.uart->TransmitPacket(packet) == pdFALSE) {
         tasksWaitingForReply[thread] = NULL;
-        return -1;
+        return WIFI_RANDOM_BUSY;
     }
-    if (xTaskNotifyWait(0, 0, (uint32_t *)&packet, 200) == pdFALSE) { // 1 second
+    // The reply takes about a millisecond on the wire. The module takes much
+    // longer only while its single dispatcher is busy, for instance with a scan,
+    // which is worth a retry rather than a wait here.
+    if (xTaskNotifyWait(0, 0, (uint32_t *)&packet, 40) == pdFALSE) { // 200 ms
         // Stop the receive interrupt from routing the reply here, then take
         // one that arrived in the meantime, so that a late reply cannot wake
         // this task at its next wait.
@@ -354,23 +368,37 @@ int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source)
         LEAVE_SAFE_SECTION;
         if (xTaskNotifyWait(0, 0, (uint32_t *)&packet, 0) == pdFALSE) {
             printf("Get Random: no reply.\n");
-            return -1;
+            return WIFI_RANDOM_BUSY;
         }
     }
 
     rpc_get_random_resp *result = (rpc_get_random_resp *)packet->data;
+    int with_error = offsetof(rpc_get_random_resp, source);
     int header = offsetof(rpc_get_random_resp, data);
-    int retval = -1;
-    if ((packet->size >= header) && (result->hdr.command == CMD_GET_RANDOM) &&
-            (result->hdr.sequence == sequence) && (result->esp_err == 0) &&
-            (result->length == len) && (packet->size >= header + len)) {
+    int retval;
+    if ((packet->size < (int)sizeof(rpc_header_t)) || (result->hdr.command != CMD_GET_RANDOM) ||
+            (result->hdr.sequence != sequence)) {
+        // Most likely the late answer to an earlier request that timed out.
+        retval = WIFI_RANDOM_BUSY;
+    } else if (packet->size < with_error) {
+        retval = WIFI_RANDOM_INVALID;
+    } else if (result->esp_err != 0) {
+        retval = WIFI_RANDOM_REFUSED;
+    } else if ((packet->size < header) || (result->length != len) || (packet->size < header + len)) {
+        retval = WIFI_RANDOM_INVALID;
+    } else {
         memcpy(buf, result->data, len);
         if (source) {
             *source = result->source;
         }
         retval = 0;
-    } else {
-        printf("Get Random failed. Size: %d. Error: %d.\n", packet->size, result->esp_err);
+    }
+    if (retval) {
+        if (packet->size >= with_error) {
+            printf("Get Random failed (%d). Size: %d. Error: %d.\n", retval, packet->size, result->esp_err);
+        } else {
+            printf("Get Random failed (%d). Size: %d.\n", retval, packet->size);
+        }
     }
     esp32.uart->FreeBuffer(packet);
     return retval;
