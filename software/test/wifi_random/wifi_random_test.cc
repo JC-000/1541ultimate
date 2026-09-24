@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <string.h>
+#include <limits.h>
 #include "rpc_calls.h"
 #include "wifi_random.h"
 
@@ -116,6 +117,18 @@ int main(void)
     check(outcome(size, LEN, WIFI_RANDOM_FOREIGN), "wrong command is not ours");
     size = build();
     check(outcome(3, LEN, WIFI_RANDOM_FOREIGN), "fewer bytes than a header is not ours");
+    bool only_ours = true;
+    for (int command = 0; command < 256; command++) {
+        size = build();
+        answer()->hdr.command = (uint8_t)command;
+        uint8_t buf[LEN];
+        int expected = (command == CMD_GET_RANDOM) ? 0 : WIFI_RANDOM_FOREIGN;
+        if (wifi_random_take_reply(reply.bytes, size, SEQUENCE, buf, LEN, NULL) != expected) {
+            printf("        command 0x%02x\n", command);
+            only_ours = false;
+        }
+    }
+    check(only_ours, "of all 256 commands only CMD_GET_RANDOM is ours");
 
     printf("A refusal\n");
     size = build();
@@ -125,6 +138,14 @@ int main(void)
     size = build();
     answer()->esp_err = 0x103;
     check(outcome(size, LEN, WIFI_RANDOM_REFUSED), "esp_err set, even with len bytes behind it");
+    const int errors[] = { 0x3000, 0x10000, -1, INT_MIN }; // ESP_ERR_WIFI_BASE, beyond 16 bits, ESP_FAIL
+    for (int i = 0; i < 4; i++) {
+        char what[64];
+        size = build();
+        answer()->esp_err = errors[i];
+        snprintf(what, sizeof(what), "esp_err %d, with len bytes behind it", errors[i]);
+        check(outcome(size, LEN, WIFI_RANDOM_REFUSED), what);
+    }
     size = build();
     answer()->esp_err = 0x106; // ESP_ERR_NOT_SUPPORTED, from firmware without the call
     check(outcome(8, LEN, WIFI_RANDOM_REFUSED), "the 8 byte answer of old module firmware");
@@ -163,6 +184,16 @@ int main(void)
         }
     }
     check(only_zero, "no result but 0 maps to OK, from -1000 to 1000");
+
+    printf("Whether a result may carry data\n");
+    bool data_only_for_zero = true;
+    for (int result = -1000; result <= 1000; result++) {
+        if (wifi_random_has_data(result) != (result == 0)) {
+            data_only_for_zero = false;
+        }
+    }
+    check(data_only_for_zero, "only 0 may, from -1000 to 1000");
+    check(!wifi_random_has_data(INT_MIN) && !wifi_random_has_data(INT_MAX), "INT_MIN and INT_MAX may not");
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -35,4 +35,8 @@ int wifi_random_take_reply(const uint8_t *reply, int size, uint16_t sequence,
 // every other value.
 int wifi_random_status(int result);
 
+// Whether a reply to GET_RANDOM may carry data for this result of
+// wifi_get_random: for 0 and nothing else.
+bool wifi_random_has_data(int result);
+
 #endif /* WIFI_RANDOM_H_ */

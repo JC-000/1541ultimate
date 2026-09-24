@@ -68,3 +68,8 @@ int wifi_random_status(int result)
             return 87;
     }
 }
+
+bool wifi_random_has_data(int result)
+{
+    return result == 0;
+}

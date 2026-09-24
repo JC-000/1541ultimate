@@ -433,20 +433,18 @@ void NetworkTarget :: get_random(Message *command, Message **reply, Message **st
     // nowhere else, so without that module there are none.
     *status = &c_status_no_entropy;
 #if U64 == 1
-    // 87 stays for any status not handled here.
-    switch (wifi_random_status(wifi_get_random(data_message.message, length, NULL))) {
-        case 0:
-            data_message.length = length;
-            data_message.last_part = true;
-            *reply = &data_message;
-            *status = &c_status_ok;
-            break;
-        case 88:
-            *status = &c_status_entropy_busy;
-            break;
-        case 86:
-            *status = &c_status_internal_error;
-            break;
+    // The reply stays empty unless the result may carry data, and 87 stays
+    // for any status not handled here.
+    int result = wifi_get_random(data_message.message, length, NULL);
+    if (wifi_random_has_data(result)) {
+        data_message.length = length;
+        data_message.last_part = true;
+        *reply = &data_message;
+        *status = &c_status_ok;
+    } else if (wifi_random_status(result) == 88) {
+        *status = &c_status_entropy_busy;
+    } else if (wifi_random_status(result) == 86) {
+        *status = &c_status_internal_error;
     }
 #endif
 }
