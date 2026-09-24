@@ -479,10 +479,27 @@ void wifi_free(void *driver, void *buffer)
 }
 
 #if U64 == 1
+// Checks a received packet against the request, hands over its bytes if it is
+// the answer, and frees it.
+static int take_random_reply(command_buf_t *packet, uint16_t sequence, uint8_t *buf, uint16_t len, uint8_t *source)
+{
+    int retval = wifi_random_take_reply(packet->data, packet->size, sequence, buf, len, source);
+    if (retval == WIFI_RANDOM_REFUSED) { // only returned for a reply that holds esp_err
+        printf("Get Random refused. Error: %d.\n", ((rpc_get_random_resp *)packet->data)->esp_err);
+    }
+    esp32.uart->FreeBuffer(packet);
+    return retval;
+}
+
 // A C64 program is waiting on the UCI for this one, so unlike the calls in
-// wifi_cmd.cc it neither waits for the module forever nor trusts what comes back. Bytes are
-// only handed out when the reply is the answer to this request and carries all
-// of them.
+// wifi_cmd.cc it neither waits for the module forever nor trusts what comes
+// back. Bytes are only handed out when the reply is the answer to this request
+// and carries all of them.
+//
+// Invariant, on every return: the reply slot does not name this task, and no
+// notification that arrived while it was claimed is left pending. A pending
+// notification would be taken for the reply by the next call's wait, and a
+// slot left claimed would refuse every later call.
 int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source)
 {
     // Without the module application nothing can answer, so fail at once
@@ -495,13 +512,21 @@ int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source)
         printf(no_wifi_buf);
         return WIFI_RANDOM_BUSY;
     }
+    // A reply that was routed to this task while it waited for nothing, for
+    // instance because wifi_tx_packet ran here and left its slot pointing at
+    // it, would otherwise be taken for the answer below.
+    command_buf_t *stray;
+    if (xTaskNotifyWait(0, 0, (uint32_t *)&stray, 0) == pdTRUE) {
+        esp32.uart->FreeBuffer(stray);
+    }
     // One request at a time: a second caller fails rather than waits.
     const int thread = WIFI_RANDOM_WAITER;
+    TaskHandle_t self = xTaskGetCurrentTaskHandle();
     bool busy;
     ENTER_SAFE_SECTION;
     busy = (tasksWaitingForReply[thread] != NULL);
     if (!busy) {
-        tasksWaitingForReply[thread] = xTaskGetCurrentTaskHandle();
+        tasksWaitingForReply[thread] = self;
     }
     LEAVE_SAFE_SECTION;
     if (busy) {
@@ -517,56 +542,55 @@ int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source)
     packet->size = sizeof(rpc_get_random_req);
 
     if (esp32.uart->TransmitPacket(packet) == pdFALSE) {
-        tasksWaitingForReply[thread] = NULL;
+        tasksWaitingForReply[thread] = NULL; // nothing was sent, so nothing can arrive
         return WIFI_RANDOM_BUSY;
     }
-    // The reply takes about a millisecond on the wire. The module takes much
-    // longer only while its single dispatcher is busy, for instance with a scan,
-    // which is worth a retry rather than a wait here.
-    if (xTaskNotifyWait(0, 0, (uint32_t *)&packet, 40) == pdFALSE) { // 200 ms
-        // Stop the receive interrupt from routing the reply here, then take
-        // one that arrived in the meantime, so that a late reply cannot wake
-        // this task at its next wait.
-        ENTER_SAFE_SECTION;
-        if (tasksWaitingForReply[thread] == xTaskGetCurrentTaskHandle()) {
-            tasksWaitingForReply[thread] = NULL;
+    // The reply takes about a millisecond on the wire. It takes much longer
+    // only while the module's single dispatcher is blocked, for instance
+    // handing a scan or connect request to its connector task, which can take
+    // seconds; that is worth a retry rather than a wait here.
+    const TickType_t timeout = 40; // 200 ms, for all replies together
+    TickType_t start = xTaskGetTickCount();
+    int retval = WIFI_RANDOM_FOREIGN;
+    while (retval == WIFI_RANDOM_FOREIGN) {
+        TickType_t spent = xTaskGetTickCount() - start;
+        if ((spent >= timeout) ||
+                (xTaskNotifyWait(0, 0, (uint32_t *)&packet, timeout - spent) == pdFALSE)) {
+            retval = WIFI_RANDOM_BUSY;
+            break;
         }
-        LEAVE_SAFE_SECTION;
-        if (xTaskNotifyWait(0, 0, (uint32_t *)&packet, 0) == pdFALSE) {
-            printf("Get Random: no reply.\n");
-            return WIFI_RANDOM_BUSY;
+        retval = take_random_reply(packet, sequence, buf, len, source);
+        if (retval == WIFI_RANDOM_FOREIGN) {
+            // Not ours. If it came through our slot, the interrupt released it
+            // on delivery, so take it back to keep waiting for our own reply.
+            ENTER_SAFE_SECTION;
+            if (tasksWaitingForReply[thread] == NULL) {
+                tasksWaitingForReply[thread] = self;
+            }
+            LEAVE_SAFE_SECTION;
         }
     }
 
-    rpc_get_random_resp *result = (rpc_get_random_resp *)packet->data;
-    int with_error = offsetof(rpc_get_random_resp, source);
-    int header = offsetof(rpc_get_random_resp, data);
-    int retval;
-    if ((packet->size < (int)sizeof(rpc_header_t)) || (result->hdr.command != CMD_GET_RANDOM) ||
-            (result->hdr.sequence != sequence)) {
-        // Most likely the late answer to an earlier request that timed out.
-        retval = WIFI_RANDOM_BUSY;
-    } else if (packet->size < with_error) {
-        retval = WIFI_RANDOM_INVALID;
-    } else if (result->esp_err != 0) {
-        retval = WIFI_RANDOM_REFUSED;
-    } else if ((packet->size < header) || (result->length != len) || (packet->size < header + len)) {
-        retval = WIFI_RANDOM_INVALID;
-    } else {
-        memcpy(buf, result->data, len);
-        if (source) {
-            *source = result->source;
+    // Stop the receive interrupt from routing anything here, then take what
+    // arrived in the meantime. After a timeout that can still be our reply.
+    ENTER_SAFE_SECTION;
+    if (tasksWaitingForReply[thread] == self) {
+        tasksWaitingForReply[thread] = NULL;
+    }
+    LEAVE_SAFE_SECTION;
+    if (xTaskNotifyWait(0, 0, (uint32_t *)&packet, 0) == pdTRUE) {
+        if (retval == WIFI_RANDOM_BUSY) {
+            retval = take_random_reply(packet, sequence, buf, len, source);
+            if (retval == WIFI_RANDOM_FOREIGN) {
+                retval = WIFI_RANDOM_BUSY;
+            }
+        } else {
+            esp32.uart->FreeBuffer(packet);
         }
-        retval = 0;
     }
     if (retval) {
-        if (packet->size >= with_error) {
-            printf("Get Random failed (%d). Size: %d. Error: %d.\n", retval, packet->size, result->esp_err);
-        } else {
-            printf("Get Random failed (%d). Size: %d.\n", retval, packet->size);
-        }
+        printf("Get Random failed (%d).\n", retval);
     }
-    esp32.uart->FreeBuffer(packet);
     return retval;
 }
 #endif
