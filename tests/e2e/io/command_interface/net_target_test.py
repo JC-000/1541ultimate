@@ -96,6 +96,11 @@ STATUS_OUT_OF_RANGE = b"82,PARAMETER(S) OUT OF RANGE"
 # answered with no data, whatever the reason.
 STATUS_NO_ENTROPY = b"87,NO ENTROPY SOURCE"
 STATUS_NO_ENTROPY_PREFIX = b"87,"
+# GET_RANDOM's answer when the ESP32 is running but did not answer in time,
+# during a blocking Wi-Fi scan for one. It asks the client to try again later,
+# and like 87 it is only ever answered with no data.
+STATUS_ENTROPY_BUSY = b"88,ENTROPY SOURCE BUSY"
+STATUS_ENTROPY_BUSY_PREFIX = b"88,"
 # What the network target answers for an opcode it does not implement, which
 # is what GET_RANDOM is on firmware that predates it.
 STATUS_UNKNOWN_COMMAND = b"21,UNKNOWN COMMAND"
@@ -190,6 +195,11 @@ RANDOM_REPEAT_PERIOD_MAX = RANDOM_MAX_BYTES // 2
 # counts as the socket read buffer handed back. A chance match of eight bytes
 # is 1 in 2^56 per position.
 STALE_RUN_BYTES = 8
+# How often, and how far apart, a GET_RANDOM that answered 88 is asked again.
+# Five seconds in all covers a Wi-Fi scan, which blocks the ESP32 for a few; a
+# source still busy after that fails where bytes are owed.
+RANDOM_BUSY_RETRIES = 5
+RANDOM_BUSY_DELAY_SECONDS = 1.0
 
 # The two ways of reaching the registers, described at the top of this file.
 ROUTES = ["rest", "native"]
@@ -303,10 +313,13 @@ class Net:
 
     def __init__(self, uci: Uci) -> None:
         self.uci = uci
-        # Every GET_RANDOM reply on this driver, and how many of them said 87,
-        # so a route can say how often the fail-closed rule was exercised.
+        # Every GET_RANDOM reply on this driver, how many of them said 87 or
+        # 88, and how many were retries after an 88, so a route can say how
+        # often the fail-closed rule was exercised.
         self.random_replies = 0
         self.no_entropy_replies = 0
+        self.busy_replies = 0
+        self.busy_retries = 0
 
     def identify(self):
         return self.uci.transact(bytes([TARGET_NETWORK, NET_CMD_IDENTIFY]))
@@ -374,20 +387,40 @@ class Net:
         handed out when the ESP32 had no entropy source would look exactly as
         random as real ones, so the status is the only place a client can learn
         not to use them, and a reply that sends both has already lost.
+
+        An 88 is asked again, up to RANDOM_BUSY_RETRIES times, and each retried
+        reply passes the same rule. What an 88 that outlasts that means is up
+        to the caller: a failure where bytes are owed, a refusal elsewhere.
         """
         if command is None:
             command = self.random_command(length)
+        result = self._random_reply(command)
+        for attempt in range(1, RANDOM_BUSY_RETRIES + 1):
+            if not result.status_text.startswith(STATUS_ENTROPY_BUSY_PREFIX):
+                break
+            self.busy_retries += 1
+            detail(f"GET_RANDOM answered {result.status_text!r}; retry {attempt} of "
+                   f"{RANDOM_BUSY_RETRIES} in {RANDOM_BUSY_DELAY_SECONDS:.1f}s")
+            time.sleep(RANDOM_BUSY_DELAY_SECONDS)
+            result = self._random_reply(command)
+        return result
+
+    def _random_reply(self, command: bytes):
+        """One GET_RANDOM exchange, counted and held to the fail-closed rule."""
         result = self.uci.transact(command)
         self.random_replies += 1
-        if result.status_text.startswith(STATUS_NO_ENTROPY_PREFIX):
-            self.no_entropy_replies += 1
-            if result.data:
-                raise Failure(f"GET_RANDOM answered {result.status_text!r} and still handed out "
-                              f"{len(result.data)} bytes; with no entropy source it must hand "
-                              f"out none")
+        for prefix, what in ((STATUS_NO_ENTROPY_PREFIX, "with no entropy source"),
+                             (STATUS_ENTROPY_BUSY_PREFIX, "with the entropy source busy")):
+            if result.status_text.startswith(prefix) and result.data:
+                raise Failure(f"GET_RANDOM answered {result.status_text!r} and still handed "
+                              f"out {len(result.data)} bytes; {what} it must hand out none")
         if result.status_text != STATUS_OK and result.data:
             raise Failure(f"GET_RANDOM answered {result.status_text!r} with {len(result.data)} "
                           f"data bytes; a refusal carries no data")
+        if result.status_text.startswith(STATUS_NO_ENTROPY_PREFIX):
+            self.no_entropy_replies += 1
+        if result.status_text.startswith(STATUS_ENTROPY_BUSY_PREFIX):
+            self.busy_replies += 1
         return result
 
     def largest_accepted_length(self) -> int:
@@ -1164,6 +1197,11 @@ def require_random(result, length: int) -> bytes:
     if result.status_text == STATUS_UNKNOWN_COMMAND:
         raise Failure(f"GET_RANDOM answered {result.status_text!r}: this firmware does not "
                       f"implement NET_CMD_GET_RANDOM (${NET_CMD_GET_RANDOM:02X})")
+    if result.status_text.startswith(STATUS_ENTROPY_BUSY_PREFIX):
+        raise Failure(f"GET_RANDOM of {length} bytes answered {result.status_text!r}: the "
+                      f"entropy source was still busy when the suite stopped asking, which "
+                      f"is after {RANDOM_BUSY_RETRIES} retries "
+                      f"{RANDOM_BUSY_DELAY_SECONDS:.1f}s apart")
     if result.status_text != STATUS_OK:
         raise Failure(f"GET_RANDOM of {length} bytes answered {result.status_text!r}, "
                       f"expected {STATUS_OK!r}")
@@ -1186,22 +1224,25 @@ def random_expected(net: Net, owed: bool) -> bool:
     """Whether this device should hand out random bytes at all.
 
     `owed` is decided in main from the device's own report, never from this
-    answer. Where bytes are owed, 87 is a failure. Elsewhere 87 with no data
-    is the correct answer: that is checked here, and the checks that need
-    bytes skip. Anything else, the unknown-command answer of firmware without
-    GET_RANDOM included, goes on to fail those checks.
+    answer. Where bytes are owed, 87 is a failure, and so is an 88 that
+    outlasts its retries. Elsewhere either refusal with no data is a correct
+    answer: that is checked here, and the checks that need bytes skip.
+    Anything else, the unknown-command answer of firmware without GET_RANDOM
+    included, goes on to fail those checks.
     """
     if owed:
         return True
     probe = net.get_random(RANDOM_TYPICAL)
-    if not probe.status_text.startswith(STATUS_NO_ENTROPY_PREFIX):
+    refusals = (STATUS_NO_ENTROPY, STATUS_ENTROPY_BUSY)
+    if not probe.status_text.startswith((STATUS_NO_ENTROPY_PREFIX, STATUS_ENTROPY_BUSY_PREFIX)):
         return True
-    with check("where no bytes are owed, GET_RANDOM refuses with 87 and no data"):
-        if probe.status_text != STATUS_NO_ENTROPY:
-            raise Failure(f"expected {STATUS_NO_ENTROPY!r}, got {probe.status_text!r}")
+    with check("where no bytes are owed, GET_RANDOM refuses with 87 or 88 and no data"):
+        if probe.status_text not in refusals:
+            raise Failure(f"expected one of {refusals!r}, got {probe.status_text!r}")
     check_start("GET_RANDOM hands out random bytes")
-    check_skip("GET_RANDOM answered 87 on a device that owes no bytes: it is not an "
-               f"{' or '.join(U64_MK1_PRODUCTS)} reporting a wifi_mac in /v1/info")
+    check_skip(f"GET_RANDOM answered {probe.status_text[:2].decode()} on a device that owes "
+               f"no bytes: it is not an {' or '.join(U64_MK1_PRODUCTS)} reporting a wifi_mac "
+               f"in /v1/info")
     return False
 
 
@@ -1328,7 +1369,8 @@ def run_get_random_fails_closed(net: Net) -> None:
     check_skip("nothing can force the ESP32 into ENTROPY_NONE while its radio is on; "
                "that needs the radio-off mode planned for M5")
     detail(f"{net.random_replies} GET_RANDOM replies on this route so far, "
-           f"{net.no_entropy_replies} of them 87, each checked to carry no data")
+           f"{net.no_entropy_replies} of them 87 and {net.busy_replies} 88, each checked "
+           f"to carry no data; {net.busy_retries} retries after an 88")
     return None
 
 
