@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # E2E: Verifies UCI network target socket reads: length handling and datagram delivery.
 
-"""End-to-end check of the UCI network target's READ_SOCKET command.
+"""End-to-end check of the UCI network target's READ_SOCKET and GET_RANDOM commands.
 
 Regression guard for GideonZ/1541ultimate#802, reported as "a maxlen above 512
 silently returns no data". Everything here was measured on real hardware
@@ -40,6 +40,14 @@ drained one DMA cycle per byte, so the size of the payload is the cost of the
 suite, and every property under test is visible at 64 bytes as clearly as at
 894.
 
+GET_RANDOM hands a C64 program random bytes drawn on the ESP32. Its scenarios
+need no network peer except the one that interleaves it with a socket. What
+they can check about the bytes is that each reply has the length asked for and
+that replies are not stuck, zeroed or patterned; they cannot check that a real
+entropy source is behind them, since the output of a post-processed RNG looks
+the same either way. Whether bytes are owed at all is taken from the device's
+own report of a Wi-Fi module in /v1/info, not from GET_RANDOM's answer.
+
 Supported on any Ultimate whose FPGA provides the command interface. The suite
 enables the "Command Interface" setting and restores it on exit.
 """
@@ -76,9 +84,19 @@ NET_CMD_OPEN_UDP = 0x08
 NET_CMD_CLOSE_SOCKET = 0x09
 NET_CMD_READ_SOCKET = 0x10
 NET_CMD_WRITE_SOCKET = 0x11
+NET_CMD_GET_RANDOM = 0x20
 
 STATUS_OK = b"00,OK"
+STATUS_INVALID_PARAMS = b"81,INVALID PARAMS"
 STATUS_OUT_OF_RANGE = b"82,PARAMETER(S) OUT OF RANGE"
+# GET_RANDOM's answer when the ESP32 has nothing to draw bytes from: absent,
+# not running, timed out, or not yet started its radio. It is only ever
+# answered with no data, whatever the reason.
+STATUS_NO_ENTROPY = b"87,NO ENTROPY SOURCE"
+STATUS_NO_ENTROPY_PREFIX = b"87,"
+# What the network target answers for an opcode it does not implement, which
+# is what GET_RANDOM is on firmware that predates it.
+STATUS_UNKNOWN_COMMAND = b"21,UNKNOWN COMMAND"
 # Not in the network target document, but what the firmware answers when
 # lwip_recv returns -1. The number is the errno: 9 is EBADF for a handle that
 # was never opened, 11 is EAGAIN for an open socket with nothing pending.
@@ -148,6 +166,22 @@ PROBE_ATTEMPTS = 3
 SOCKETS_LEFT_OPEN_AT_RESET = 4
 RESET_CYCLES = 3
 
+# The most GET_RANDOM hands out in one command. 512 bytes fits one reply block,
+# so every GET_RANDOM reply arrives in one.
+RANDOM_MAX_BYTES = 512
+# The size a program asking for a key or a nonce would use.
+RANDOM_TYPICAL = 32
+# A length whose high byte is neither 0 nor that of RANDOM_MAX_BYTES, so a
+# handler that reads only the low byte answers with 44 bytes instead of 300.
+RANDOM_SPLIT_LENGTH = 300
+# The longest period the repeat check looks for. Half the reply, so every
+# period it tests is compared over at least 256 byte pairs.
+RANDOM_REPEAT_PERIOD_MAX = RANDOM_MAX_BYTES // 2
+# How long a run of pattern() bytes inside a random reply has to be before it
+# counts as the socket read buffer handed back. A chance match of eight bytes
+# is 1 in 2^56 per position.
+STALE_RUN_BYTES = 8
+
 # The two ways of reaching the registers, described at the top of this file.
 ROUTES = ["rest", "native"]
 
@@ -161,8 +195,16 @@ TESTS = [
     "tcp-read-is-lossless",
     "oversize-request-keeps-the-datagram",
     "multi-block-state-does-not-leak",
+    "get-random-lengths",
+    "get-random-bytes-vary",
+    "get-random-refusals",
+    "get-random-fails-closed",
+    "get-random-leaves-sockets-alone",
     "reset-closes-uci-sockets",
 ]
+# The scenarios that need no network peer, because they open no socket.
+PEERLESS_TESTS = ("read-length-limit", "get-random-lengths", "get-random-bytes-vary",
+                  "get-random-refusals", "get-random-fails-closed")
 
 
 def pattern(size: int, seed: int = 0) -> bytes:
@@ -252,6 +294,10 @@ class Net:
 
     def __init__(self, uci: Uci) -> None:
         self.uci = uci
+        # Every GET_RANDOM reply on this driver, and how many of them said 87,
+        # so a route can say how often the fail-closed rule was exercised.
+        self.random_replies = 0
+        self.no_entropy_replies = 0
 
     def identify(self):
         return self.uci.transact(bytes([TARGET_NETWORK, NET_CMD_IDENTIFY]))
@@ -306,6 +352,34 @@ class Net:
 
     def close(self, handle: int):
         return self.uci.transact(bytes([TARGET_NETWORK, NET_CMD_CLOSE_SOCKET, handle]))
+
+    def random_command(self, length: int) -> bytes:
+        return bytes([TARGET_NETWORK, NET_CMD_GET_RANDOM, length & 0xFF, (length >> 8) & 0xFF])
+
+    def get_random(self, length: int | None = None, command: bytes | None = None):
+        """One GET_RANDOM, of `length` bytes or as the raw `command` given.
+
+        Every reply passes the fail-closed rule here, so it holds for each one
+        the suite provokes rather than only where a scenario thinks to look: a
+        reply that is not 00,OK carries no data, and an 87 above all. Bytes
+        handed out when the ESP32 had no entropy source would look exactly as
+        random as real ones, so the status is the only place a client can learn
+        not to use them, and a reply that sends both has already lost.
+        """
+        if command is None:
+            command = self.random_command(length)
+        result = self.uci.transact(command)
+        self.random_replies += 1
+        if result.status_text.startswith(STATUS_NO_ENTROPY_PREFIX):
+            self.no_entropy_replies += 1
+            if result.data:
+                raise Failure(f"GET_RANDOM answered {result.status_text!r} and still handed out "
+                              f"{len(result.data)} bytes; with no entropy source it must hand "
+                              f"out none")
+        if result.status_text != STATUS_OK and result.data:
+            raise Failure(f"GET_RANDOM answered {result.status_text!r} with {len(result.data)} "
+                          f"data bytes; a refusal carries no data")
+        return result
 
     def largest_accepted_length(self) -> int:
         """The largest length READ_SOCKET accepts, found by bisection.
@@ -1076,6 +1150,244 @@ def run_oversize_request_keeps_datagram(net: Net, peer: Peer) -> bool:
     return ok
 
 
+def require_random(result, length: int) -> bytes:
+    """The bytes of a GET_RANDOM reply that has to have succeeded, or Failure."""
+    if result.status_text == STATUS_UNKNOWN_COMMAND:
+        raise Failure(f"GET_RANDOM answered {result.status_text!r}: this firmware does not "
+                      f"implement NET_CMD_GET_RANDOM (${NET_CMD_GET_RANDOM:02X})")
+    if result.status_text != STATUS_OK:
+        raise Failure(f"GET_RANDOM of {length} bytes answered {result.status_text!r}, "
+                      f"expected {STATUS_OK!r}")
+    if len(result.data) != length:
+        raise Failure(f"GET_RANDOM of {length} bytes handed out {len(result.data)}")
+    if len(result.blocks) != 1:
+        raise Failure(f"the reply arrived in {len(result.blocks)} blocks; "
+                      f"{RANDOM_MAX_BYTES} bytes fit one, so every reply must")
+    return result.data
+
+
+def random_expected(net: Net, wifi: bool) -> bool:
+    """Whether this device should hand out random bytes at all.
+
+    A device that reports a Wi-Fi module has an ESP32 that is running, and has
+    to answer. One that reports none may have no ESP32, and then the only
+    correct answer is 87 with no data: that is checked here, and the checks
+    that need bytes skip. Anything else, the unknown-command answer of firmware
+    without GET_RANDOM included, goes on to fail those checks.
+    """
+    if wifi:
+        return True
+    probe = net.get_random(RANDOM_TYPICAL)
+    if not probe.status_text.startswith(STATUS_NO_ENTROPY_PREFIX):
+        return True
+    with check("with no Wi-Fi module reported, GET_RANDOM refuses with 87 and no data"):
+        if probe.status_text != STATUS_NO_ENTROPY:
+            raise Failure(f"expected {STATUS_NO_ENTROPY!r}, got {probe.status_text!r}")
+    check_start("GET_RANDOM hands out random bytes")
+    check_skip("this device reports no Wi-Fi module in /v1/info, so there is no ESP32 "
+               "to draw bytes from")
+    return False
+
+
+def run_get_random_lengths(net: Net, wifi: bool) -> bool | None:
+    """GET_RANDOM hands out exactly the number of bytes asked for.
+
+    At the typical size, at both bounds, and at a length whose high byte is
+    neither 0 nor 2, so a handler that drops the high byte is caught on the
+    success path as well as on the refusals.
+    """
+    section("get-random-lengths")
+    if not random_expected(net, wifi):
+        return None
+    for length in (RANDOM_TYPICAL, 1, RANDOM_MAX_BYTES, RANDOM_SPLIT_LENGTH):
+        with check(f"GET_RANDOM of {length} bytes answers {STATUS_OK.decode()} with exactly "
+                   f"{length} bytes"):
+            require_random(net.get_random(length), length)
+    return True
+
+
+def repeat_period(data: bytes, longest: int) -> int | None:
+    """The shortest period up to `longest` that `data` repeats with, or None."""
+    for period in range(1, longest + 1):
+        if data[period:] == data[:-period]:
+            return period
+    return None
+
+
+def run_get_random_bytes_vary(net: Net, wifi: bool) -> bool | None:
+    """Replies differ from each other and have no structure of their own.
+
+    Sanity checks against a stuck or zeroed path, NOT a proof of entropy: the
+    bytes are the output of a post-processed RNG, which looks random whether or
+    not a physical source is feeding it, so no test on the bytes can say
+    whether one is. What they do catch is a handler that returns a buffer it
+    never filled, fills it once, or fills it with a counter or a short table.
+    """
+    section("get-random-bytes-vary")
+    if not random_expected(net, wifi):
+        return None
+    with check(f"two consecutive GET_RANDOM of {RANDOM_TYPICAL} bytes differ"):
+        # Sanity check, not an entropy proof: equal replies are 1 in 2^256.
+        small = [require_random(net.get_random(RANDOM_TYPICAL), RANDOM_TYPICAL)
+                 for _ in range(2)]
+        detail(f"{small[0].hex()}\n{small[1].hex()}")
+        if small[0] == small[1]:
+            raise Failure("both replies were the same bytes")
+
+    with check(f"two consecutive GET_RANDOM of {RANDOM_MAX_BYTES} bytes differ"):
+        # Sanity check, not an entropy proof.
+        wide = [require_random(net.get_random(RANDOM_MAX_BYTES), RANDOM_MAX_BYTES)
+                for _ in range(2)]
+        if wide[0] == wide[1]:
+            raise Failure("both replies were the same bytes")
+
+    for index, data in enumerate(wide, start=1):
+        with check(f"{RANDOM_MAX_BYTES}-byte reply {index} is not one byte repeated"):
+            # Sanity check against a zeroed or unfilled buffer, not an entropy proof.
+            if len(set(data)) == 1:
+                raise Failure(f"every byte was ${data[0]:02X}")
+        with check(f"{RANDOM_MAX_BYTES}-byte reply {index} is not a pattern with a period of "
+                   f"{RANDOM_REPEAT_PERIOD_MAX} or less"):
+            # Sanity check against a counter or a short table, not an entropy
+            # proof. A random reply repeats at period p by chance with a
+            # probability of 1 in 2^(8 * (512 - p)).
+            period = repeat_period(data, RANDOM_REPEAT_PERIOD_MAX)
+            if period is not None:
+                raise Failure(f"the reply repeats every {period} bytes: "
+                              f"{data[:min(period, 32)].hex(' ')}")
+        with check(f"{RANDOM_MAX_BYTES}-byte reply {index} does not contain an earlier reply"):
+            # Sanity check against a ring buffer handed out again, not an
+            # entropy proof.
+            if any(piece in data for piece in small):
+                raise Failure(f"a {RANDOM_TYPICAL}-byte reply from before it appears inside it")
+    return True
+
+
+def run_get_random_refusals(net: Net, wifi: bool) -> bool:
+    """Malformed and out-of-range requests are refused, with no data.
+
+    Refusals do not need an entropy source, so these run on every device.
+    The lengths above the limit include ones with the top bit set, which a
+    handler that holds the length in a signed 16-bit value reads as negative.
+    """
+    section("get-random-refusals")
+    missing = [
+        ("no length bytes", bytes([TARGET_NETWORK, NET_CMD_GET_RANDOM])),
+        ("only the low length byte",
+         bytes([TARGET_NETWORK, NET_CMD_GET_RANDOM, RANDOM_TYPICAL])),
+    ]
+    for what, command in missing:
+        with check(f"GET_RANDOM with {what} answers {STATUS_INVALID_PARAMS.decode()} "
+                   f"and no data"):
+            result = net.get_random(command=command)
+            if result.status_text != STATUS_INVALID_PARAMS:
+                raise Failure(f"expected {STATUS_INVALID_PARAMS!r}, got {result.status_text!r}")
+
+    for length in (0, RANDOM_MAX_BYTES + 1, 0x8000, 0xFFFF):
+        with check(f"GET_RANDOM of {length} bytes answers {STATUS_OUT_OF_RANGE.decode()} "
+                   f"and no data"):
+            result = net.get_random(length)
+            if result.status_text != STATUS_OUT_OF_RANGE:
+                raise Failure(f"expected {STATUS_OUT_OF_RANGE!r}, got {result.status_text!r}")
+
+    # Refusals must not leave the command unusable. Where there is no entropy
+    # source the answer is 87 either way, and random_expected says so.
+    if random_expected(net, wifi):
+        with check("GET_RANDOM still hands out bytes after the refusals"):
+            require_random(net.get_random(RANDOM_TYPICAL), RANDOM_TYPICAL)
+    return True
+
+
+def run_get_random_fails_closed(net: Net) -> None:
+    """With no entropy source, GET_RANDOM answers 87 and hands out nothing.
+
+    Nothing on a device with its radio on can put the ESP32 in that state on
+    demand, so the scenario itself is a placeholder until the radio-off mode
+    arrives. The rule it names is enforced meanwhile by Net.get_random on every
+    GET_RANDOM reply this suite provokes, and random_expected checks the 87
+    answer itself on a device that reports no Wi-Fi module.
+    """
+    section("get-random-fails-closed")
+    check_start("GET_RANDOM with the entropy source forced off answers 87 and no data")
+    check_skip("nothing can force the ESP32 into ENTROPY_NONE while its radio is on; "
+               "that needs the radio-off mode planned for M5")
+    detail(f"{net.random_replies} GET_RANDOM replies on this route so far, "
+           f"{net.no_entropy_replies} of them 87, each checked to carry no data")
+    return None
+
+
+def run_get_random_leaves_sockets_alone(net: Net, peer: Peer, wifi: bool) -> bool | None:
+    """GET_RANDOM does not disturb the network target's socket state.
+
+    It is answered by the same target that holds the socket table and the
+    buffer READ_SOCKET replies from, so it runs here between an open, a
+    pending datagram, the read of it, and the close, all of which have to
+    behave as they do without it.
+    """
+    section("get-random-leaves-sockets-alone")
+    if not random_expected(net, wifi):
+        return None
+    baseline = net.identify()
+    handle = net.open_udp(peer.ip, peer.udp_port)
+    try:
+        peer.learn_udp_peer(net, handle)
+        net.drain_socket(handle)
+        peer.send_udp(pattern(SAFE_READ))
+        time.sleep(DELIVERY_SETTLE_SECONDS)
+
+        with check("GET_RANDOM answers while a socket holds a pending datagram"):
+            require_random(net.get_random(RANDOM_MAX_BYTES), RANDOM_MAX_BYTES)
+            refused = net.get_random(0)
+            if refused.status_text != STATUS_OUT_OF_RANGE:
+                raise Failure(f"a length of 0 answered {refused.status_text!r}, expected "
+                              f"{STATUS_OUT_OF_RANGE!r}")
+
+        with check("the pending datagram is read back whole after GET_RANDOM"):
+            result = net.read(handle, SAFE_READ)
+            detail(result.describe())
+            if result.status_text != STATUS_OK or result.header != SAFE_READ:
+                raise Failure(f"expected {STATUS_OK!r} and a header of {SAFE_READ}, got "
+                              f"{result.status_text!r} and {result.header}")
+            if result.payload != pattern(SAFE_READ):
+                raise Failure(f"the datagram changed: "
+                              f"{describe_mismatch(result.payload, pattern(SAFE_READ))}")
+
+        with check("GET_RANDOM right after a socket read does not hand back the read's bytes"):
+            # The read just filled the target's buffer with pattern() bytes. A
+            # handler that answers from that buffer without filling all of it
+            # hands some of them out again, and they read as a run of pattern().
+            data = require_random(net.get_random(RANDOM_MAX_BYTES), RANDOM_MAX_BYTES)
+            stale = [offset for offset in range(len(data) - STALE_RUN_BYTES + 1)
+                     if run_offset(data[offset:offset + STALE_RUN_BYTES]) is not None]
+            if stale:
+                raise Failure(f"bytes from offset {stale[0]} are a run of the datagram just "
+                              f"read: {data[stale[0]:stale[0] + 16].hex(' ')}")
+
+        with check("the socket still sends after GET_RANDOM"):
+            # learn_udp_peer sends from the device and waits for it here, with
+            # the retry a lost datagram needs.
+            peer.learn_udp_peer(net, handle)
+
+        with check("the socket closes with 00,OK"):
+            closing, handle = handle, None
+            result = net.close(closing)
+            if result.status_text != STATUS_OK:
+                raise Failure(f"CLOSE_SOCKET answered {result.status_text!r}")
+
+        with check("IDENTIFY after GET_RANDOM answers exactly as before it"):
+            identity = net.identify()
+            if (identity.data, identity.status_text, len(identity.blocks)) != \
+                    (baseline.data, baseline.status_text, len(baseline.blocks)):
+                raise Failure(f"IDENTIFY answered {identity.data!r}, {identity.status_text!r} "
+                              f"in {len(identity.blocks)} block(s); before GET_RANDOM it was "
+                              f"{baseline.data!r}, {baseline.status_text!r} in "
+                              f"{len(baseline.blocks)}")
+    finally:
+        if handle is not None:
+            net.close(handle)
+    return True
+
+
 def close_quietly(net: Net, handles: list[int]) -> None:
     """Close every handle a scenario opened; an error means it was already gone."""
     for handle in handles:
@@ -1172,7 +1484,8 @@ def build_driver(route: str, computer, busy_timeout: float):
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Verify how the UCI network target's READ_SOCKET handles the requested "
-                    "length and datagrams larger than it (GideonZ/1541ultimate#802)."
+                    "length and datagrams larger than it (GideonZ/1541ultimate#802), and "
+                    "what GET_RANDOM hands out."
     )
     cli.add_device_arguments(parser, password=None, timeout=30.0, colour=False)
     parser.add_argument("-b", "--busy-timeout", type=float, default=15.0,
@@ -1252,8 +1565,19 @@ def main() -> int:
             suite_ok("net_target_test")
             return 0
 
+        # Whether GET_RANDOM has an ESP32 to draw from is decided by the
+        # device's own report rather than by its answer, so that a firmware
+        # which always answers 87 fails here instead of skipping.
+        wifi = False
+        if any(name.startswith("get-random-") for name in selected):
+            with check("read whether this device reports a Wi-Fi module"):
+                wifi_mac = device.info().extra.get("wifi_mac")
+                wifi = isinstance(wifi_mac, str) and bool(wifi_mac.strip())
+                detail(f"wifi_mac {wifi_mac!r}: GET_RANDOM "
+                       f"{'has to hand out bytes' if wifi else 'may answer 87'}")
+
         needs_peer = [name for name in TESTS
-                      if name != "read-length-limit" and name in selected]
+                      if name not in PEERLESS_TESTS and name in selected]
         if needs_peer:
             check_start("this host can act as the device's network peer")
             try:
@@ -1311,6 +1635,10 @@ def main() -> int:
                 detail(identity.data.decode("latin-1"))
 
             run(route, "read-length-limit", run_read_length_limit, net)
+            run(route, "get-random-lengths", run_get_random_lengths, net, wifi)
+            run(route, "get-random-bytes-vary", run_get_random_bytes_vary, net, wifi)
+            run(route, "get-random-refusals", run_get_random_refusals, net, wifi)
+            run(route, "get-random-fails-closed", run_get_random_fails_closed, net)
             if peer is None:
                 for name in needs_peer:
                     results.setdefault(f"{name} [{route}]", None)
@@ -1326,6 +1654,8 @@ def main() -> int:
                 run_oversize_request_keeps_datagram, net, peer)
             run(route, "multi-block-state-does-not-leak",
                 run_multi_block_state_does_not_leak, net, peer)
+            run(route, "get-random-leaves-sockets-alone",
+                run_get_random_leaves_sockets_alone, net, peer, wifi)
 
             def reset_and_reopen(route=route):
                 """Reset the C64 and hand back a driver that reaches the target."""
