@@ -122,6 +122,21 @@ typedef struct {
     esp_datetime_t datetime;
 } rpc_get_time_resp;
 
+#define RANDOM_MAX_BYTES 512
+
+typedef struct {
+    rpc_header_t hdr;
+    uint16_t length;
+} rpc_get_random_req;
+
+typedef struct {
+    rpc_header_t hdr;
+    int esp_err;
+    uint8_t source;
+    uint16_t length;
+    char data;
+} rpc_get_random_resp;
+
 //----------------------------------
 // send raw packet
 typedef struct {
@@ -166,6 +181,7 @@ typedef struct {
 #define CMD_GET_TIME          0x10
 #define CMD_CLEAR_APS         0x11
 #define CMD_WIFI_AUTOCONNECT  0x12
+#define CMD_GET_RANDOM        0x13
 
 /*
 #define CMD_SOCKET          0x11
