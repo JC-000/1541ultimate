@@ -12,6 +12,9 @@
 #include "netdb.h"
 #include <errno.h>
 #include <stdio.h>
+#if U64 == 1
+#include "wifi.h"
+#endif
 
 NetworkTarget net(3);
 
@@ -24,6 +27,7 @@ Message c_status_no_socket           = { 23, true, (uint8_t *)"85,ERROR OPENING 
 Message c_status_socket_closed       = { 28, true, (uint8_t *)"01,CONNECTION CLOSED BY HOST" };
 Message c_status_net_no_data         = { 26, true, (uint8_t *)"03,MORE DATA NOT SUPPORTED" };
 Message c_status_internal_error      = { 17, true, (uint8_t *)"86,INTERNAL ERROR" };
+Message c_status_no_entropy          = { 20, true, (uint8_t *)"87,NO ENTROPY SOURCE" };
 
 NetworkTarget::NetworkTarget(int id)
 {
@@ -175,6 +179,14 @@ void NetworkTarget :: parse_command(Message *command, Message **reply, Message *
         case NET_CMD_WRITE_SOCKET:
         	write_socket(command, reply, status);
         	break;
+        case NET_CMD_GET_RANDOM:
+            if (command->length != 4) { // 2 + 2
+                *reply = &c_message_empty;
+                *status = &c_status_invalid_params;
+                break;
+            }
+            get_random(command, reply, status);
+            break;
         default:
             *reply  = &c_message_empty;
             *status = &c_status_unknown_command;
@@ -405,6 +417,32 @@ void NetworkTarget :: close_socket(Message *command, Message **reply, Message **
     } else {
         *status = &c_status_ok;
     }
+}
+
+void NetworkTarget :: get_random(Message *command, Message **reply, Message **status)
+{
+    uint16_t length = uint16_t(command->message[2]) | (uint16_t(command->message[3]) << 8);
+
+    *reply = &c_message_empty;
+    if ((length == 0) || (length > NET_MAX_RANDOM)) {
+        *status = &c_status_param_out_of_range;
+        return;
+    }
+    // The bytes come from the WiFi module's hardware generator and from
+    // nowhere else, so without a module application to answer there are none.
+    // Asking only while it runs keeps the client from waiting on a timeout.
+    *status = &c_status_no_entropy;
+#if U64 == 1
+    if (wifi.getState() < eWifi_AppDetected) {
+        return;
+    }
+    if (wifi_get_random(data_message.message, length, NULL) == 0) {
+        data_message.length = length;
+        data_message.last_part = true;
+        *reply = &data_message;
+        *status = &c_status_ok;
+    }
+#endif
 }
 
 // A socket handed to the client without a table entry would survive a C64

@@ -60,6 +60,10 @@ int wifi_get_power_mode(uint8_t *mode, uint8_t *last_state);
 int wifi_set_wake_on_wifi(uint8_t enabled);
 int wifi_get_wake_on_wifi(uint8_t *enabled);
 
+// Fills buf with len bytes from the module's hardware random number generator
+// and returns 0, or returns nonzero and leaves buf untouched. U64 only.
+int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source);
+
 extern uint16_t sequence_nr;
 extern TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS];
 extern "C" { void print_uart_status(); }

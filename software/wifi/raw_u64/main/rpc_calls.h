@@ -122,6 +122,21 @@ typedef struct {
     esp_datetime_t datetime;
 } rpc_get_time_resp;
 
+#define RANDOM_MAX_BYTES 512
+
+typedef struct {
+    rpc_header_t hdr;
+    uint16_t length;
+} rpc_get_random_req;
+
+typedef struct {
+    rpc_header_t hdr;
+    int esp_err;
+    uint8_t source;
+    uint16_t length;
+    uint8_t data[];
+} rpc_get_random_resp;
+
 //----------------------------------
 // hardware random bytes
 #define RANDOM_MAX_BYTES 512

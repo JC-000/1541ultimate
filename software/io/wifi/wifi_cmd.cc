@@ -317,5 +317,65 @@ int wifi_modem_enable(bool enable)
     RETURN_ESP;
 }
 
+#if U64 == 1
+// A C64 program is waiting on the UCI for this one, so unlike the calls above
+// it neither waits for the module forever nor trusts what comes back. Bytes are
+// only handed out when the reply is the answer to this request and carries all
+// of them.
+int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source)
+{
+    command_buf_t *packet;
+    if (esp32.uart->GetBuffer(&packet, 100) == pdFALSE) {
+        printf(no_wifi_buf);
+        return -1;
+    }
+    int thread = packet->bufnr;
+    uint16_t sequence = sequence_nr++;
+    rpc_get_random_req *args = (rpc_get_random_req *)packet->data;
+    args->hdr.command = CMD_GET_RANDOM;
+    args->hdr.sequence = sequence;
+    args->hdr.thread = (uint8_t)thread;
+    args->length = len;
+    packet->size = sizeof(rpc_get_random_req);
+    tasksWaitingForReply[thread] = xTaskGetCurrentTaskHandle();
+
+    if (esp32.uart->TransmitPacket(packet) == pdFALSE) {
+        tasksWaitingForReply[thread] = NULL;
+        return -1;
+    }
+    if (xTaskNotifyWait(0, 0, (uint32_t *)&packet, 200) == pdFALSE) { // 1 second
+        // Stop the receive interrupt from routing the reply here, then take
+        // one that arrived in the meantime, so that a late reply cannot wake
+        // this task at its next wait.
+        ENTER_SAFE_SECTION;
+        if (tasksWaitingForReply[thread] == xTaskGetCurrentTaskHandle()) {
+            tasksWaitingForReply[thread] = NULL;
+        }
+        LEAVE_SAFE_SECTION;
+        if (xTaskNotifyWait(0, 0, (uint32_t *)&packet, 0) == pdFALSE) {
+            printf("Get Random: no reply.\n");
+            return -1;
+        }
+    }
+
+    rpc_get_random_resp *result = (rpc_get_random_resp *)packet->data;
+    int header = offsetof(rpc_get_random_resp, data);
+    int retval = -1;
+    if ((packet->size >= header) && (result->hdr.command == CMD_GET_RANDOM) &&
+            (result->hdr.sequence == sequence) && (result->esp_err == 0) &&
+            (result->length == len) && (packet->size >= header + len)) {
+        memcpy(buf, result->data, len);
+        if (source) {
+            *source = result->source;
+        }
+        retval = 0;
+    } else {
+        printf("Get Random failed. Size: %d. Error: %d.\n", packet->size, result->esp_err);
+    }
+    esp32.uart->FreeBuffer(packet);
+    return retval;
+}
+#endif
+
 const char *no_wifi_buf = "*** NO BUFFER TO TRANSMIT ANYTHING.\n";
 
