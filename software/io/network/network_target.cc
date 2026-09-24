@@ -13,7 +13,7 @@
 #include <errno.h>
 #include <stdio.h>
 #if U64 == 1
-#include "wifi.h"
+#include "wifi_random.h"
 #endif
 
 NetworkTarget net(3);
@@ -430,14 +430,10 @@ void NetworkTarget :: get_random(Message *command, Message **reply, Message **st
         return;
     }
     // The bytes come from the WiFi module's hardware generator and from
-    // nowhere else, so without a module application to answer there are none.
-    // Asking only while it runs keeps the client from waiting on a timeout.
+    // nowhere else, so without that module there are none.
     *status = &c_status_no_entropy;
 #if U64 == 1
-    if (wifi.getState() < eWifi_AppDetected) {
-        return;
-    }
-    // A refusal by the module keeps the 87 set above.
+    // No module application, or a refusal by it, keeps the 87 set above.
     switch (wifi_get_random(data_message.message, length, NULL)) {
         case 0:
             data_message.length = length;
