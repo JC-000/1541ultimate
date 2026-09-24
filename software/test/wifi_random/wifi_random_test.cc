@@ -14,11 +14,7 @@
 #include "rpc_calls.h"
 #include "wifi_random.h"
 
-// The layout both sides agree on (M1 interface spec, section 1).
-static_assert(offsetof(rpc_get_random_resp, esp_err) == 4, "esp_err moved");
-static_assert(offsetof(rpc_get_random_resp, source) == 8, "source moved");
-static_assert(offsetof(rpc_get_random_resp, length) == 10, "length moved");
-static_assert(offsetof(rpc_get_random_resp, data) == 12, "data moved");
+// The layout both sides agree on is asserted in wifi_random.cc itself.
 
 #define SEQUENCE 0x1234
 #define LEN      32
@@ -53,7 +49,7 @@ static int build(void)
     r->hdr.thread = 12;
     r->hdr.sequence = SEQUENCE;
     r->esp_err = 0;
-    r->source = 1; // ENTROPY_RADIO
+    r->source = ENTROPY_RADIO;
     r->length = LEN;
     for (int i = 0; i < LEN; i++) {
         r->data[i] = (uint8_t)(0xA0 + i);
@@ -101,6 +97,9 @@ int main(void)
     size = build();
     check(outcome(size + 100, LEN, 0), "ignores bytes the module sent beyond len");
     size = build();
+    answer()->source = ENTROPY_ADC;
+    check(outcome(size, LEN, 0), "hands out the source the module reported");
+    size = build();
     uint8_t buf[LEN];
     check(wifi_random_take_reply(reply.bytes, size, SEQUENCE, buf, LEN, NULL) == 0,
           "accepts a NULL source");
@@ -109,6 +108,9 @@ int main(void)
     size = build();
     answer()->hdr.sequence = SEQUENCE - 1;
     check(outcome(size, LEN, WIFI_RANDOM_FOREIGN), "wrong sequence is not ours");
+    size = build();
+    answer()->hdr.sequence = SEQUENCE ^ 0x0100;
+    check(outcome(size, LEN, WIFI_RANDOM_FOREIGN), "a sequence that differs only in its high byte is not ours");
     size = build();
     answer()->hdr.command = CMD_WIFI_GETMAC;
     check(outcome(size, LEN, WIFI_RANDOM_FOREIGN), "wrong command is not ours");
@@ -127,7 +129,7 @@ int main(void)
     answer()->esp_err = 0x106; // ESP_ERR_NOT_SUPPORTED, from firmware without the call
     check(outcome(8, LEN, WIFI_RANDOM_REFUSED), "the 8 byte answer of old module firmware");
     size = build();
-    answer()->source = 0; // ENTROPY_NONE
+    answer()->source = ENTROPY_NONE;
     check(outcome(size, LEN, WIFI_RANDOM_REFUSED), "OK without an entropy source");
 
     printf("A malformed answer\n");
@@ -146,6 +148,21 @@ int main(void)
     size = build();
     answer()->length = 0;
     check(outcome(HEADER, LEN, WIFI_RANDOM_INVALID), "OK with no bytes at all");
+
+    printf("The UCI status of a result\n");
+    check(wifi_random_status(0) == 0, "0 is OK");
+    check(wifi_random_status(WIFI_RANDOM_BUSY) == 88, "busy is 88");
+    check(wifi_random_status(WIFI_RANDOM_INVALID) == 86, "an invalid reply is 86");
+    check(wifi_random_status(WIFI_RANDOM_REFUSED) == 87, "a refusal is 87");
+    check(wifi_random_status(WIFI_RANDOM_NO_MODULE) == 87, "no module is 87");
+    check(wifi_random_status(WIFI_RANDOM_FOREIGN) == 87, "a foreign reply is 87");
+    bool only_zero = true;
+    for (int result = -1000; result <= 1000; result++) {
+        if ((wifi_random_status(result) == 0) != (result == 0)) {
+            only_zero = false;
+        }
+    }
+    check(only_zero, "no result but 0 maps to OK, from -1000 to 1000");
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -10,9 +10,15 @@
 #include "rpc_calls.h"
 #include "wifi_random.h"
 
-// ENTROPY_NONE of the module's entropy_source_t: bytes drawn while the
-// generator had no entropy source are refused even when esp_err says OK.
-#define SOURCE_NONE 0
+// The layout the module sends and this code reads. Checked here so that the
+// firmware build itself, not only the host test, fails if it ever changes.
+static_assert(sizeof(rpc_get_random_req) == 6, "rpc_get_random_req changed");
+static_assert(offsetof(rpc_get_random_req, length) == 4, "rpc_get_random_req changed");
+static_assert(sizeof(rpc_get_random_resp) == 12, "rpc_get_random_resp changed");
+static_assert(offsetof(rpc_get_random_resp, esp_err) == 4, "rpc_get_random_resp changed");
+static_assert(offsetof(rpc_get_random_resp, source) == 8, "rpc_get_random_resp changed");
+static_assert(offsetof(rpc_get_random_resp, length) == 10, "rpc_get_random_resp changed");
+static_assert(offsetof(rpc_get_random_resp, data) == 12, "rpc_get_random_resp changed");
 
 int wifi_random_take_reply(const uint8_t *reply, int size, uint16_t sequence,
                            uint8_t *buf, uint16_t len, uint8_t *source)
@@ -34,7 +40,9 @@ int wifi_random_take_reply(const uint8_t *reply, int size, uint16_t sequence,
     if (size < header) {
         return WIFI_RANDOM_INVALID;
     }
-    if (result->source == SOURCE_NONE) {
+    // Bytes drawn without an entropy source are refused even when esp_err
+    // says OK.
+    if (result->source == ENTROPY_NONE) {
         return WIFI_RANDOM_REFUSED;
     }
     if ((result->length != len) || (size < header + len)) {
@@ -45,4 +53,18 @@ int wifi_random_take_reply(const uint8_t *reply, int size, uint16_t sequence,
         *source = result->source;
     }
     return 0;
+}
+
+int wifi_random_status(int result)
+{
+    switch (result) {
+        case 0:
+            return 0;
+        case WIFI_RANDOM_BUSY:
+            return 88;
+        case WIFI_RANDOM_INVALID:
+            return 86;
+        default:
+            return 87;
+    }
 }
