@@ -211,6 +211,10 @@ STALE_RUN_BYTES = 8
 # fails where bytes are owed.
 RANDOM_BUSY_RETRIES = 15
 RANDOM_BUSY_DELAY_SECONDS = 1.0
+# How many GET_RANDOM calls in one route may need a retry where bytes are
+# owed. On an idle device an 88 is rare, so more than this says the source
+# is busy as a matter of course rather than now and then.
+RANDOM_BUSY_CALLS_MAX = 2
 
 # The two ways of reaching the registers, described at the top of this file.
 ROUTES = ["rest", "native"]
@@ -322,15 +326,19 @@ def describe_mismatch(actual: bytes, expected: bytes) -> str:
 class Net:
     """The network target's commands, over the command interface."""
 
-    def __init__(self, uci: Uci) -> None:
+    def __init__(self, uci: Uci, duty: "RandomDuty | None" = None) -> None:
         self.uci = uci
+        # What GET_RANDOM owes on this device, which decides what an 88 is.
+        # None for a driver that never sends it.
+        self.duty = duty
         # Every GET_RANDOM reply on this driver, how many of them said 87 or
-        # 88, and how many were retries after an 88, so a route can say how
-        # often the fail-closed rule was exercised.
+        # 88, how many were retries after an 88, and how many calls needed
+        # one, so a route can say how often the fail-closed rule was exercised.
         self.random_replies = 0
         self.no_entropy_replies = 0
         self.busy_replies = 0
         self.busy_retries = 0
+        self.busy_calls = 0
 
     def identify(self):
         return self.uci.transact(bytes([TARGET_NETWORK, NET_CMD_IDENTIFY]))
@@ -399,13 +407,30 @@ class Net:
         random as real ones, so the status is the only place a client can learn
         not to use them, and a reply that sends both has already lost.
 
-        An 88 is asked again, up to RANDOM_BUSY_RETRIES times, and each retried
-        reply passes the same rule. What an 88 that outlasts that means is up
-        to the caller: a failure where bytes are owed, a refusal elsewhere.
+        An 88 fails at once on a product that never asks the ESP32, where the
+        only refusal is an immediate 87. Elsewhere it is asked again, up to
+        RANDOM_BUSY_RETRIES times, and each retried reply passes the same rule.
+        Where bytes are owed, more than RANDOM_BUSY_CALLS_MAX calls needing a
+        retry fails. What an 88 that outlasts the retries means is up to the
+        caller: a failure where bytes are owed, a refusal elsewhere.
         """
         if command is None:
             command = self.random_command(length)
         result = self._random_reply(command)
+        busy = result.status_text.startswith(STATUS_ENTROPY_BUSY_PREFIX)
+        if busy and self.duty is not None and not self.duty.allowed:
+            raise Failure(f"GET_RANDOM answered {result.status_text!r} on this "
+                          f"{self.duty.product}, which never asks the ESP32 for bytes; "
+                          f"the only correct refusal there is an immediate "
+                          f"{STATUS_NO_ENTROPY!r}")
+        if busy:
+            self.busy_calls += 1
+            if self.duty is not None and self.duty.owed and \
+                    self.busy_calls > RANDOM_BUSY_CALLS_MAX:
+                raise Failure(f"{self.busy_calls} GET_RANDOM calls on this route answered "
+                              f"{result.status_text!r} and needed a retry; where bytes are "
+                              f"owed an idle device does that at most "
+                              f"{RANDOM_BUSY_CALLS_MAX} times")
         for attempt in range(1, RANDOM_BUSY_RETRIES + 1):
             if not result.status_text.startswith(STATUS_ENTROPY_BUSY_PREFIX):
                 break
@@ -1286,10 +1311,12 @@ def random_expected(net: Net, duty: RandomDuty) -> bool:
                           f"{' or '.join(U64_MK1_PRODUCTS)} does. The only correct answers "
                           f"here are {STATUS_NO_ENTROPY!r} or {STATUS_ENTROPY_BUSY!r}, with "
                           f"no data")
-    refusals = (STATUS_NO_ENTROPY, STATUS_ENTROPY_BUSY)
+    refusals = ((STATUS_NO_ENTROPY, STATUS_ENTROPY_BUSY) if duty.allowed
+                else (STATUS_NO_ENTROPY,))
     if not probe.status_text.startswith((STATUS_NO_ENTROPY_PREFIX, STATUS_ENTROPY_BUSY_PREFIX)):
         return True
-    with check("where no bytes are owed, GET_RANDOM refuses with 87 or 88 and no data"):
+    codes = " or ".join(r[:2].decode() for r in refusals)
+    with check(f"where no bytes are owed, GET_RANDOM refuses with {codes} and no data"):
         if probe.status_text not in refusals:
             raise Failure(f"expected one of {refusals!r}, got {probe.status_text!r}")
     check_start("GET_RANDOM hands out random bytes")
@@ -1427,7 +1454,8 @@ def run_get_random_fails_closed(net: Net) -> None:
                "that needs the radio-off mode planned for M5")
     detail(f"{net.random_replies} GET_RANDOM replies on this route so far, "
            f"{net.no_entropy_replies} of them 87 and {net.busy_replies} 88, each checked "
-           f"to carry no data; {net.busy_retries} retries after an 88")
+           f"to carry no data; {net.busy_calls} calls needed a retry, "
+           f"{net.busy_retries} retries in all")
     return None
 
 
@@ -1749,7 +1777,7 @@ def main() -> int:
                     computer.machine.reset(force=True)
                     native_started = True
                 driver = build_driver(route, computer, args.busy_timeout)
-                net = Net(driver)
+                net = Net(driver, duty)
                 identity = net.identify()
                 if identity.status_text != STATUS_OK or not identity.data:
                     raise Failure(f"NET_CMD_IDENTIFY answered {identity.status_text!r} "
