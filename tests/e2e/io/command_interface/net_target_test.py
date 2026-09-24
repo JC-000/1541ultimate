@@ -55,6 +55,8 @@ enables the "Command Interface" setting and restores it on exit.
 """
 
 import argparse
+import functools
+import math
 import socket
 import sys
 import time
@@ -206,9 +208,25 @@ RANDOM_REPEAT_PERIOD_MAX = RANDOM_MAX_BYTES // 2
 STALE_RUN_BYTES = 8
 # The run length at which bytes handed out again are caught. Every window of
 # this many bytes, at every offset of every GET_RANDOM reply in a route, has
-# to be new. A route holds about 2,900 windows, so honest random bytes repeat
-# one by chance with a probability of about 2,900^2 / 2 / 2^128, 1 in 10^31.
-RANDOM_WINDOW_BYTES = 16
+# to be new. A route holds about 4,000 windows, so honest random bytes repeat
+# one by chance with a probability of about 4,000^2 / 2 / 2^64, 1 in 10^12.
+RANDOM_WINDOW_BYTES = 8
+# Lengths that are not a multiple of 4 or of 16, so a handler that fills whole
+# words or blocks leaves a tail it did not draw in every one of them.
+RANDOM_ODD_LENGTHS = (3, 17, 31, 257, 511)
+# Two replies share a byte at the same offset with a probability of 1/256, so
+# the count over a pair of length m is Binomial(m, 1/256). A pair fails at the
+# smallest count whose chance is below this, and never above
+# RANDOM_PAIR_MATCHES_MAX. Where not even all m equal gets there, as for
+# m = 1 or 3, the pair is not judged. The cap is what 512-byte pairs meet, at
+# 4 in 10^10 each, and a route's 450 or so pairs stay below 1 in 10^8.
+RANDOM_PAIR_FALSE_ALARM = 1e-12
+RANDOM_PAIR_MATCHES_MAX = 16
+# A run of replies of one length, so a byte a handler never draws stays the
+# same through all of them. Honest bytes hold one offset through 16 replies
+# with a probability of 256^-15 per offset.
+RANDOM_SERIES_LENGTH = 17
+RANDOM_SERIES_COUNT = 16
 # How often, and how far apart, a GET_RANDOM that answered 88 is asked again.
 # The ESP32 answers commands one at a time, and one that queues a Wi-Fi scan
 # or connect waits up to 1000 ticks, 10 s at 100 Hz, when that queue is full.
@@ -345,8 +363,9 @@ class Net:
         self.busy_retries = 0
         self.busy_calls = 0
         # Every RANDOM_WINDOW_BYTES window of every GET_RANDOM reply so far,
-        # with the reply and offset it came from.
+        # with the reply and offset it came from, and every reply itself.
         self.random_windows: dict[bytes, tuple[int, int]] = {}
+        self.random_data: list[tuple[int, bytes]] = []
 
     def identify(self):
         return self.uci.transact(bytes([TARGET_NETWORK, NET_CMD_IDENTIFY]))
@@ -492,6 +511,21 @@ class Net:
                     f"not repeat {RANDOM_WINDOW_BYTES} at a time, so part of this reply "
                     f"was left over rather than drawn")
             self.random_windows[window] = (reply, offset)
+        # Bytes left over at the same offset rather than in a run: a handler
+        # that draws every other byte, or whole words and not the tail.
+        for earlier, before in self.random_data:
+            common = min(len(data), len(before))
+            limit = same_offset_limit(common)
+            if limit is None:
+                continue
+            matches = sum(1 for a, b in zip(data, before, strict=False) if a == b)
+            if matches >= limit:
+                raise Failure(
+                    f"GET_RANDOM reply {reply} ({len(data)} bytes) has the same byte as reply "
+                    f"{earlier} at {matches} of their {common} common offsets; honest bytes "
+                    f"match at about {common / 256:.1f}, and {limit} or more has a chance "
+                    f"below {RANDOM_PAIR_FALSE_ALARM:g}")
+        self.random_data.append((reply, data))
 
     def largest_accepted_length(self) -> int:
         """The largest length READ_SOCKET accepts, found by bisection.
@@ -1262,6 +1296,23 @@ def run_oversize_request_keeps_datagram(net: Net, peer: Peer) -> bool:
     return ok
 
 
+@functools.cache
+def same_offset_limit(common: int) -> int | None:
+    """How many same-offset matches fail a pair with `common` offsets in common.
+
+    The smallest k with P(Binomial(common, 1/256) >= k) below
+    RANDOM_PAIR_FALSE_ALARM, capped at RANDOM_PAIR_MATCHES_MAX, or None where
+    no k up to `common` gets there.
+    """
+    for k in range(1, min(common, RANDOM_PAIR_MATCHES_MAX) + 1):
+        # P(X >= k), summed directly rather than as 1 - P(X < k) for precision.
+        tail = sum(math.comb(common, j) * (1 / 256) ** j * (255 / 256) ** (common - j)
+                   for j in range(k, common + 1))
+        if tail < RANDOM_PAIR_FALSE_ALARM:
+            return k
+    return RANDOM_PAIR_MATCHES_MAX if common >= RANDOM_PAIR_MATCHES_MAX else None
+
+
 def require_random(result, length: int) -> bytes:
     """The bytes of a GET_RANDOM reply that has to have succeeded, or Failure."""
     if result.status_text == STATUS_UNKNOWN_COMMAND:
@@ -1365,12 +1416,14 @@ def run_get_random_lengths(net: Net, duty: RandomDuty) -> bool | None:
 
     At the typical size, at both bounds, and at a length whose high byte is
     neither 0 nor 2, so a handler that drops the high byte is caught on the
-    success path as well as on the refusals.
+    success path as well as on the refusals. Then at lengths that are not a
+    multiple of 4 or 16, whose tails Net checks against earlier replies.
     """
     section("get-random-lengths")
     if not random_expected(net, duty):
         return None
-    for length in (RANDOM_TYPICAL, 1, RANDOM_MAX_BYTES, RANDOM_SPLIT_LENGTH):
+    for length in (RANDOM_TYPICAL, 1, RANDOM_MAX_BYTES, RANDOM_SPLIT_LENGTH,
+                   *RANDOM_ODD_LENGTHS):
         with check(f"GET_RANDOM of {length} bytes answers {STATUS_OK.decode()} with exactly "
                    f"{length} bytes"):
             require_random(net.get_random(length), length)
@@ -1431,6 +1484,19 @@ def run_get_random_bytes_vary(net: Net, duty: RandomDuty) -> bool | None:
             # entropy proof.
             if any(piece in data for piece in small):
                 raise Failure(f"a {RANDOM_TYPICAL}-byte reply from before it appears inside it")
+
+    with check(f"no byte stays the same through {RANDOM_SERIES_COUNT} GET_RANDOM of "
+               f"{RANDOM_SERIES_LENGTH} bytes"):
+        # Sanity check against a byte the handler never draws, not an entropy
+        # proof: a tail of one to three bytes is too short for any check on a
+        # pair of replies, but it does not change from one reply to the next.
+        series = [require_random(net.get_random(RANDOM_SERIES_LENGTH), RANDOM_SERIES_LENGTH)
+                  for _ in range(RANDOM_SERIES_COUNT)]
+        stuck = [offset for offset in range(RANDOM_SERIES_LENGTH)
+                 if len({reply[offset] for reply in series}) == 1]
+        if stuck:
+            raise Failure(f"offsets {stuck} held the same byte in all {RANDOM_SERIES_COUNT} "
+                          f"replies: ${series[0][stuck[0]]:02X} at {stuck[0]}")
     return True
 
 
