@@ -18,8 +18,10 @@
 // The layout both sides agree on is asserted in wifi_random.cc itself.
 
 #define SEQUENCE 0x1234
-#define LEN      32
 #define HEADER   12
+
+// The length every case below asks for; main runs them for several.
+static uint16_t LEN;
 
 static int failures;
 static int checks;
@@ -38,7 +40,7 @@ static void check(int condition, const char *what)
 // Word aligned, as the data of a command_buf_t is.
 static union {
     uint32_t align;
-    uint8_t bytes[HEADER + 600];
+    uint8_t bytes[HEADER + 512 + 256];
 } reply;
 
 // A correct answer to request SEQUENCE for LEN bytes; returns its size.
@@ -53,7 +55,7 @@ static int build(void)
     r->source = ENTROPY_RADIO;
     r->length = LEN;
     for (int i = 0; i < LEN; i++) {
-        r->data[i] = (uint8_t)(0xA0 + i);
+        r->data[i] = (uint8_t)(0xA0 + (i * 7) + (i >> 8)); // no period of 256
     }
     return HEADER + LEN;
 }
@@ -88,7 +90,7 @@ static bool outcome(int size, uint16_t len, int expected)
     return source == 0x55;
 }
 
-int main(void)
+static void reply_cases(void)
 {
     int size;
 
@@ -101,7 +103,7 @@ int main(void)
     answer()->source = ENTROPY_ADC;
     check(outcome(size, LEN, 0), "hands out the source the module reported");
     size = build();
-    uint8_t buf[LEN];
+    uint8_t buf[512];
     check(wifi_random_take_reply(reply.bytes, size, SEQUENCE, buf, LEN, NULL) == 0,
           "accepts a NULL source");
 
@@ -121,7 +123,7 @@ int main(void)
     for (int command = 0; command < 256; command++) {
         size = build();
         answer()->hdr.command = (uint8_t)command;
-        uint8_t buf[LEN];
+        uint8_t buf[512];
         int expected = (command == CMD_GET_RANDOM) ? 0 : WIFI_RANDOM_FOREIGN;
         if (wifi_random_take_reply(reply.bytes, size, SEQUENCE, buf, LEN, NULL) != expected) {
             printf("        command 0x%02x\n", command);
@@ -159,16 +161,35 @@ int main(void)
     size = build();
     check(outcome(HEADER - 1, LEN, WIFI_RANDOM_INVALID), "OK but too short to hold the header");
     size = build();
+    answer()->source = ENTROPY_NONE; // a byte past the frame must not be read
+    check(outcome(HEADER - 2, LEN, WIFI_RANDOM_INVALID), "too short to hold the header, whatever lies beyond it");
+    size = build();
     answer()->length = LEN - 1;
     check(outcome(size, LEN, WIFI_RANDOM_INVALID), "fewer bytes announced than asked");
     size = build();
     answer()->length = LEN + 1;
     check(outcome(size + 1, LEN, WIFI_RANDOM_INVALID), "more bytes announced than asked");
     size = build();
+    answer()->length = LEN ^ 0x0100;
+    check(outcome(size + 256, LEN, WIFI_RANDOM_INVALID), "a length that differs only in its high byte");
+    size = build();
     check(outcome(size - 1, LEN, WIFI_RANDOM_INVALID), "fewer bytes received than announced");
     size = build();
     answer()->length = 0;
     check(outcome(HEADER, LEN, WIFI_RANDOM_INVALID), "OK with no bytes at all");
+
+}
+
+int main(void)
+{
+    // One byte, a byte count that fills a uint8_t, one past it, a length past
+    // 256, and the most the UCI asks for.
+    const uint16_t lengths[] = { 1, 255, 256, 300, 512 };
+    for (int i = 0; i < 5; i++) {
+        LEN = lengths[i];
+        printf("\n== len %d\n", LEN);
+        reply_cases();
+    }
 
     printf("The UCI status of a result\n");
     check(wifi_random_status(0) == 0, "0 is OK");
