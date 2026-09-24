@@ -3,7 +3,7 @@
 
 /// C like functions to 'talk' with the WiFi Module
 uint16_t sequence_nr = 0;
-TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS];
+TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS + 1];
 
 void hex(uint8_t h)
 {
@@ -17,7 +17,7 @@ BaseType_t wifi_rx_isr(command_buf_context_t *context, command_buf_t *buf, BaseT
     rpc_header_t *hdr = (rpc_header_t *)buf->data;
     BaseType_t res;
 
-    if ((hdr->thread < NUM_TX_BUFFERS) && (tasksWaitingForReply[hdr->thread])) {
+    if ((hdr->thread <= WIFI_RANDOM_WAITER) && (tasksWaitingForReply[hdr->thread])) {
         TaskHandle_t thread = tasksWaitingForReply[hdr->thread];
         tasksWaitingForReply[hdr->thread] = NULL;
         ioWrite8(UART_DATA, 'N');
@@ -329,7 +329,19 @@ int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source)
         printf(no_wifi_buf);
         return -1;
     }
-    int thread = packet->bufnr;
+    // One request at a time: a second caller fails rather than waits.
+    const int thread = WIFI_RANDOM_WAITER;
+    bool busy;
+    ENTER_SAFE_SECTION;
+    busy = (tasksWaitingForReply[thread] != NULL);
+    if (!busy) {
+        tasksWaitingForReply[thread] = xTaskGetCurrentTaskHandle();
+    }
+    LEAVE_SAFE_SECTION;
+    if (busy) {
+        esp32.uart->FreeBuffer(packet);
+        return -1;
+    }
     uint16_t sequence = sequence_nr++;
     rpc_get_random_req *args = (rpc_get_random_req *)packet->data;
     args->hdr.command = CMD_GET_RANDOM;
@@ -337,7 +349,6 @@ int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source)
     args->hdr.thread = (uint8_t)thread;
     args->length = len;
     packet->size = sizeof(rpc_get_random_req);
-    tasksWaitingForReply[thread] = xTaskGetCurrentTaskHandle();
 
     if (esp32.uart->TransmitPacket(packet) == pdFALSE) {
         tasksWaitingForReply[thread] = NULL;
