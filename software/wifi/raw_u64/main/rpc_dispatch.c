@@ -11,6 +11,7 @@
 #include "esp_wifi.h"
 #include "esp_log.h"
 #include "driver/uart.h"
+#include "esp_random.h"
 #include "rpc_calls.h"
 #include "rpc_dispatch.h"
 #include "my_uart.h"
@@ -229,6 +230,31 @@ void cmd_clear_aps(command_buf_t *buf)
     my_uart_transmit_packet(UART_CHAN, buf);
 }
 
+void cmd_get_random(command_buf_t *buf)
+{
+    rpc_get_random_req *req = (rpc_get_random_req *)buf->data;
+    rpc_get_random_resp *resp = (rpc_get_random_resp *)buf->data;
+
+    // The response overlays the request, so take what we need from it first
+    uint16_t length = (buf->size >= (int)sizeof(rpc_get_random_req)) ? req->length : 0;
+    entropy_source_t source = entropy_source();
+
+    // Clear the fixed part, padding included, so no stale buffer bytes go out
+    memset(&resp->esp_err, 0, sizeof(rpc_get_random_resp) - sizeof(rpc_header_t));
+    resp->source = source;
+    if ((length == 0) || (length > RANDOM_MAX_BYTES)) {
+        resp->esp_err = ESP_ERR_INVALID_ARG;
+    } else if (source == ENTROPY_NONE) {
+        resp->esp_err = ESP_ERR_INVALID_STATE;
+    } else {
+        esp_fill_random(resp->data, length);
+        resp->esp_err = ESP_OK;
+        resp->length = length;
+    }
+    buf->size = sizeof(rpc_get_random_resp) + resp->length;
+    my_uart_transmit_packet(UART_CHAN, buf);
+}
+
 void cmd_not_implemented(command_buf_t *buf)
 {
     rpc_espcmd_resp *resp = (rpc_espcmd_resp *)buf->data;
@@ -323,6 +349,9 @@ void dispatch(void *ct)
             break;
         case CMD_CLEAR_APS:
             cmd_clear_aps(pbuffer);
+            break;
+        case CMD_GET_RANDOM:
+            cmd_get_random(pbuffer);
             break;
         default:
             cmd_not_implemented(pbuffer);
