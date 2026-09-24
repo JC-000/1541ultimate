@@ -46,9 +46,9 @@ they can check about the bytes is that each reply has the length asked for and
 that replies are not stuck, zeroed or patterned; they cannot check that a real
 entropy source is behind them, since the output of a post-processed RNG looks
 the same either way. Whether bytes are owed at all is taken from the device's
-own report in /v1/info, not from GET_RANDOM's answer: an Ultimate 64 or
-Ultimate 64 Elite that reports a wifi_mac owes them, and any other device may
-answer 87 instead.
+own report, not from GET_RANDOM's answer: an Ultimate 64 or Ultimate 64
+Elite that reports a wifi_mac in /v1/info and has "WiFi Enabled" set owes
+them, and any other device may refuse instead.
 
 Supported on any Ultimate whose FPGA provides the command interface. The suite
 enables the "Command Interface" setting and restores it on exit.
@@ -179,6 +179,13 @@ RESET_CYCLES = 3
 # the Elite II, the C64 Ultimate and the Ultimate II+L included, the firmware
 # answers 87 even where it reports a wifi_mac, since its ESP32 runs other code.
 U64_MK1_PRODUCTS = ("Ultimate 64", "Ultimate 64 Elite")
+# The setting that starts the Wi-Fi module on those products. Requested by the
+# store's exact name, lower-case "settings" included: the firmware matches the
+# path without regard to case but keys its answer by the name as registered.
+# It is read, never written, because turning Wi-Fi off or on bounces a link
+# the other suites may be using.
+CFG_WIFI_CATEGORY = "WiFi settings"
+CFG_WIFI_ENABLED = "WiFi Enabled"
 
 # The most GET_RANDOM hands out in one command. 512 bytes fits one reply block,
 # so every GET_RANDOM reply arrives in one.
@@ -1213,11 +1220,32 @@ def require_random(result, length: int) -> bytes:
     return result.data
 
 
-def random_owed(info) -> bool:
-    """Whether a device with this /v1/info report has to hand out random bytes."""
+def read_wifi_setting(device, info) -> object:
+    """CFG_WIFI_ENABLED as the device reports it, or None where it has none.
+
+    Asked only of the products that can owe bytes: the others either have no
+    such store or, on an Elite II, one whose Wi-Fi items are actions.
+    """
+    if info.product not in U64_MK1_PRODUCTS:
+        return None
+    if CFG_WIFI_CATEGORY not in device.configs.category_names():
+        return None
+    return device.configs.get(CFG_WIFI_CATEGORY, CFG_WIFI_ENABLED)
+
+
+def random_owed(info, wifi_setting: object) -> bool:
+    """Whether a device has to hand out random bytes.
+
+    `info` is its /v1/info report, and `wifi_setting` the value of
+    CFG_WIFI_ENABLED, or None where it has no such setting. The setting only
+    ever starts the module, so one read as Disabled may still have it running
+    since boot; that costs the check its teeth on that device, but never
+    fails a device that is right.
+    """
     wifi_mac = info.extra.get("wifi_mac")
     return (info.product in U64_MK1_PRODUCTS
-            and isinstance(wifi_mac, str) and bool(wifi_mac.strip()))
+            and isinstance(wifi_mac, str) and bool(wifi_mac.strip())
+            and wifi_setting == "Enabled")
 
 
 def random_expected(net: Net, owed: bool) -> bool:
@@ -1242,7 +1270,7 @@ def random_expected(net: Net, owed: bool) -> bool:
     check_start("GET_RANDOM hands out random bytes")
     check_skip(f"GET_RANDOM answered {probe.status_text[:2].decode()} on a device that owes "
                f"no bytes: it is not an {' or '.join(U64_MK1_PRODUCTS)} reporting a wifi_mac "
-               f"in /v1/info")
+               f"in /v1/info with {CFG_WIFI_ENABLED!r} set")
     return False
 
 
@@ -1630,9 +1658,11 @@ def main() -> int:
         if any(name.startswith("get-random-") for name in selected):
             with check("read whether this device owes GET_RANDOM bytes"):
                 info = device.info()
-                owed = random_owed(info)
-                detail(f"product {info.product!r}, wifi_mac {info.extra.get('wifi_mac')!r}: "
-                       f"GET_RANDOM {'has to hand out bytes' if owed else 'may answer 87'}")
+                wifi_setting = read_wifi_setting(device, info)
+                owed = random_owed(info, wifi_setting)
+                detail(f"product {info.product!r}, wifi_mac {info.extra.get('wifi_mac')!r}, "
+                       f"{CFG_WIFI_ENABLED!r} {wifi_setting!r}: GET_RANDOM "
+                       f"{'has to hand out bytes' if owed else 'may refuse with 87 or 88'}")
 
         needs_peer = [name for name in TESTS
                       if name not in PEERLESS_TESTS and name in selected]
