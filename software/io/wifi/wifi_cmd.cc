@@ -364,7 +364,7 @@ int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source)
     if ((packet->size >= header) && (result->hdr.command == CMD_GET_RANDOM) &&
             (result->hdr.sequence == sequence) && (result->esp_err == 0) &&
             (result->length == len) && (packet->size >= header + len)) {
-        memcpy(buf, &result->data, len);
+        memcpy(buf, result->data, len);
         if (source) {
             *source = result->source;
         }

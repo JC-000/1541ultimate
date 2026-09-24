@@ -134,7 +134,7 @@ typedef struct {
     int esp_err;
     uint8_t source;
     uint16_t length;
-    char data;
+    uint8_t data[];
 } rpc_get_random_resp;
 
 //----------------------------------
