@@ -46,7 +46,9 @@ they can check about the bytes is that each reply has the length asked for and
 that replies are not stuck, zeroed or patterned; they cannot check that a real
 entropy source is behind them, since the output of a post-processed RNG looks
 the same either way. Whether bytes are owed at all is taken from the device's
-own report of a Wi-Fi module in /v1/info, not from GET_RANDOM's answer.
+own report in /v1/info, not from GET_RANDOM's answer: an Ultimate 64 or
+Ultimate 64 Elite that reports a wifi_mac owes them, and any other device may
+answer 87 instead.
 
 Supported on any Ultimate whose FPGA provides the command interface. The suite
 enables the "Command Interface" setting and restores it on exit.
@@ -165,6 +167,13 @@ PROBE_ATTEMPTS = 3
 # again after the reset says they were released rather than merely forgotten.
 SOCKETS_LEFT_OPEN_AT_RESET = 4
 RESET_CYCLES = 3
+
+# The products whose firmware draws GET_RANDOM bytes on the ESP32, as /v1/info
+# reports them: the two U64 == 1 names of software/system/product.cc. Matched
+# exactly, because "Ultimate 64-II" starts with "Ultimate 64". Everywhere else,
+# the Elite II, the C64 Ultimate and the Ultimate II+L included, the firmware
+# answers 87 even where it reports a wifi_mac, since its ESP32 runs other code.
+U64_MK1_PRODUCTS = ("Ultimate 64", "Ultimate 64 Elite")
 
 # The most GET_RANDOM hands out in one command. 512 bytes fits one reply block,
 # so every GET_RANDOM reply arrives in one.
@@ -1166,30 +1175,37 @@ def require_random(result, length: int) -> bytes:
     return result.data
 
 
-def random_expected(net: Net, wifi: bool) -> bool:
+def random_owed(info) -> bool:
+    """Whether a device with this /v1/info report has to hand out random bytes."""
+    wifi_mac = info.extra.get("wifi_mac")
+    return (info.product in U64_MK1_PRODUCTS
+            and isinstance(wifi_mac, str) and bool(wifi_mac.strip()))
+
+
+def random_expected(net: Net, owed: bool) -> bool:
     """Whether this device should hand out random bytes at all.
 
-    A device that reports a Wi-Fi module has an ESP32 that is running, and has
-    to answer. One that reports none may have no ESP32, and then the only
-    correct answer is 87 with no data: that is checked here, and the checks
-    that need bytes skip. Anything else, the unknown-command answer of firmware
-    without GET_RANDOM included, goes on to fail those checks.
+    `owed` is decided in main from the device's own report, never from this
+    answer. Where bytes are owed, 87 is a failure. Elsewhere 87 with no data
+    is the correct answer: that is checked here, and the checks that need
+    bytes skip. Anything else, the unknown-command answer of firmware without
+    GET_RANDOM included, goes on to fail those checks.
     """
-    if wifi:
+    if owed:
         return True
     probe = net.get_random(RANDOM_TYPICAL)
     if not probe.status_text.startswith(STATUS_NO_ENTROPY_PREFIX):
         return True
-    with check("with no Wi-Fi module reported, GET_RANDOM refuses with 87 and no data"):
+    with check("where no bytes are owed, GET_RANDOM refuses with 87 and no data"):
         if probe.status_text != STATUS_NO_ENTROPY:
             raise Failure(f"expected {STATUS_NO_ENTROPY!r}, got {probe.status_text!r}")
     check_start("GET_RANDOM hands out random bytes")
-    check_skip("this device reports no Wi-Fi module in /v1/info, so there is no ESP32 "
-               "to draw bytes from")
+    check_skip("GET_RANDOM answered 87 on a device that owes no bytes: it is not an "
+               f"{' or '.join(U64_MK1_PRODUCTS)} reporting a wifi_mac in /v1/info")
     return False
 
 
-def run_get_random_lengths(net: Net, wifi: bool) -> bool | None:
+def run_get_random_lengths(net: Net, owed: bool) -> bool | None:
     """GET_RANDOM hands out exactly the number of bytes asked for.
 
     At the typical size, at both bounds, and at a length whose high byte is
@@ -1197,7 +1213,7 @@ def run_get_random_lengths(net: Net, wifi: bool) -> bool | None:
     success path as well as on the refusals.
     """
     section("get-random-lengths")
-    if not random_expected(net, wifi):
+    if not random_expected(net, owed):
         return None
     for length in (RANDOM_TYPICAL, 1, RANDOM_MAX_BYTES, RANDOM_SPLIT_LENGTH):
         with check(f"GET_RANDOM of {length} bytes answers {STATUS_OK.decode()} with exactly "
@@ -1214,7 +1230,7 @@ def repeat_period(data: bytes, longest: int) -> int | None:
     return None
 
 
-def run_get_random_bytes_vary(net: Net, wifi: bool) -> bool | None:
+def run_get_random_bytes_vary(net: Net, owed: bool) -> bool | None:
     """Replies differ from each other and have no structure of their own.
 
     Sanity checks against a stuck or zeroed path, NOT a proof of entropy: the
@@ -1224,7 +1240,7 @@ def run_get_random_bytes_vary(net: Net, wifi: bool) -> bool | None:
     never filled, fills it once, or fills it with a counter or a short table.
     """
     section("get-random-bytes-vary")
-    if not random_expected(net, wifi):
+    if not random_expected(net, owed):
         return None
     with check(f"two consecutive GET_RANDOM of {RANDOM_TYPICAL} bytes differ"):
         # Sanity check, not an entropy proof: equal replies are 1 in 2^256.
@@ -1263,7 +1279,7 @@ def run_get_random_bytes_vary(net: Net, wifi: bool) -> bool | None:
     return True
 
 
-def run_get_random_refusals(net: Net, wifi: bool) -> bool:
+def run_get_random_refusals(net: Net, owed: bool) -> bool:
     """Malformed and out-of-range requests are refused, with no data.
 
     Refusals do not need an entropy source, so these run on every device.
@@ -1292,7 +1308,7 @@ def run_get_random_refusals(net: Net, wifi: bool) -> bool:
 
     # Refusals must not leave the command unusable. Where there is no entropy
     # source the answer is 87 either way, and random_expected says so.
-    if random_expected(net, wifi):
+    if random_expected(net, owed):
         with check("GET_RANDOM still hands out bytes after the refusals"):
             require_random(net.get_random(RANDOM_TYPICAL), RANDOM_TYPICAL)
     return True
@@ -1316,7 +1332,7 @@ def run_get_random_fails_closed(net: Net) -> None:
     return None
 
 
-def run_get_random_leaves_sockets_alone(net: Net, peer: Peer, wifi: bool) -> bool | None:
+def run_get_random_leaves_sockets_alone(net: Net, peer: Peer, owed: bool) -> bool | None:
     """GET_RANDOM does not disturb the network target's socket state.
 
     It is answered by the same target that holds the socket table and the
@@ -1325,7 +1341,7 @@ def run_get_random_leaves_sockets_alone(net: Net, peer: Peer, wifi: bool) -> boo
     behave as they do without it.
     """
     section("get-random-leaves-sockets-alone")
-    if not random_expected(net, wifi):
+    if not random_expected(net, owed):
         return None
     baseline = net.identify()
     handle = net.open_udp(peer.ip, peer.udp_port)
@@ -1565,16 +1581,16 @@ def main() -> int:
             suite_ok("net_target_test")
             return 0
 
-        # Whether GET_RANDOM has an ESP32 to draw from is decided by the
-        # device's own report rather than by its answer, so that a firmware
-        # which always answers 87 fails here instead of skipping.
-        wifi = False
+        # Whether GET_RANDOM owes bytes is decided by the device's own report
+        # rather than by its answer, so that a firmware which always answers
+        # 87 fails here instead of skipping.
+        owed = False
         if any(name.startswith("get-random-") for name in selected):
-            with check("read whether this device reports a Wi-Fi module"):
-                wifi_mac = device.info().extra.get("wifi_mac")
-                wifi = isinstance(wifi_mac, str) and bool(wifi_mac.strip())
-                detail(f"wifi_mac {wifi_mac!r}: GET_RANDOM "
-                       f"{'has to hand out bytes' if wifi else 'may answer 87'}")
+            with check("read whether this device owes GET_RANDOM bytes"):
+                info = device.info()
+                owed = random_owed(info)
+                detail(f"product {info.product!r}, wifi_mac {info.extra.get('wifi_mac')!r}: "
+                       f"GET_RANDOM {'has to hand out bytes' if owed else 'may answer 87'}")
 
         needs_peer = [name for name in TESTS
                       if name not in PEERLESS_TESTS and name in selected]
@@ -1635,9 +1651,9 @@ def main() -> int:
                 detail(identity.data.decode("latin-1"))
 
             run(route, "read-length-limit", run_read_length_limit, net)
-            run(route, "get-random-lengths", run_get_random_lengths, net, wifi)
-            run(route, "get-random-bytes-vary", run_get_random_bytes_vary, net, wifi)
-            run(route, "get-random-refusals", run_get_random_refusals, net, wifi)
+            run(route, "get-random-lengths", run_get_random_lengths, net, owed)
+            run(route, "get-random-bytes-vary", run_get_random_bytes_vary, net, owed)
+            run(route, "get-random-refusals", run_get_random_refusals, net, owed)
             run(route, "get-random-fails-closed", run_get_random_fails_closed, net)
             if peer is None:
                 for name in needs_peer:
@@ -1655,7 +1671,7 @@ def main() -> int:
             run(route, "multi-block-state-does-not-leak",
                 run_multi_block_state_does_not_leak, net, peer)
             run(route, "get-random-leaves-sockets-alone",
-                run_get_random_leaves_sockets_alone, net, peer, wifi)
+                run_get_random_leaves_sockets_alone, net, peer, owed)
 
             def reset_and_reopen(route=route):
                 """Reset the C64 and hand back a driver that reaches the target."""
