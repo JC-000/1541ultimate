@@ -5,8 +5,8 @@
 uint16_t sequence_nr = 0;
 TaskHandle_t tasksWaitingForReply[NUM_TX_BUFFERS];
 #if U64 == 1
-QueueHandle_t random_replies = xQueueCreate(4, sizeof(random_reply_t));
-volatile bool random_waiting = false;
+QueueHandle_t dedicated_replies = xQueueCreate(4, sizeof(dedicated_reply_t));
+volatile bool dedicated_waiting = false;
 #endif
 
 void hex(uint8_t h)
@@ -22,13 +22,13 @@ BaseType_t wifi_rx_isr(command_buf_context_t *context, command_buf_t *buf, BaseT
     BaseType_t res;
 
 #if U64 == 1
-    if (hdr->thread == WIFI_RANDOM_THREAD) {
+    if (hdr->thread == WIFI_DEDICATED_THREAD) {
         // pdFALSE makes the interrupt handler free the buffer.
-        if (!random_waiting) {
+        if (!dedicated_waiting) {
             return pdFALSE;
         }
-        random_reply_t reply = { buf, esp32.uart->generation };
-        return xQueueSendFromISR(random_replies, &reply, w);
+        dedicated_reply_t reply = { buf, esp32.uart->generation };
+        return xQueueSendFromISR(dedicated_replies, &reply, w);
     }
 #endif
     if ((hdr->thread < NUM_TX_BUFFERS) && (tasksWaitingForReply[hdr->thread])) {
