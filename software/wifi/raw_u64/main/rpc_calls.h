@@ -158,10 +158,10 @@ typedef struct {
 #define TLS_OPEN_CA_BUNDLE 0x02 // ...against the ESP-IDF certificate bundle
 #define TLS_OPEN_CA_TEST   0x04 // ...against the compiled-in test CA
 
-// rpc_tls_open_resp.reason, telling the two ESP_ERR_INVALID_STATE refusals apart
-#define TLS_OPEN_REASON_NONE       0
-#define TLS_OPEN_REASON_NO_ENTROPY 1 // the radio has not started: no RNG seed
-#define TLS_OPEN_REASON_NO_TIME    2 // verify asked for, but no trustworthy clock
+// CMD_TLS_OPEN esp_err: verify asked for, but no trustworthy clock (no unix_time, no SNTP).
+// ESP_ERR_INVALID_STATE stays "no entropy source". Same value as ESP_ERR_HTTP_MAX_REDIRECT,
+// which this app never uses.
+#define RPC_TLS_ERR_NO_TRUSTED_TIME 0x7001
 
 typedef enum {
     TLS_TIME_NONE = 0, // clock not later than the build date
@@ -189,7 +189,6 @@ typedef struct {
     rpc_header_t hdr;
     int esp_err; // ESP_OK, an esp_err_t, or a negative mbedTLS code
     uint8_t session; // TLS_SESSION_GLOBAL when esp_err != ESP_OK
-    uint8_t reason;  // TLS_OPEN_REASON_*
 } rpc_tls_open_resp;
 
 typedef struct {
@@ -235,7 +234,7 @@ typedef struct {
     uint8_t state;          // tls_state_t
     uint8_t sessions_open;
     uint32_t stack_free;    // dispatcher stack high-water mark, bytes
-    uint32_t esp_time;      // ESP32 clock at the session's OPEN (now, for TLS_SESSION_GLOBAL)
+    uint32_t esp_time;      // ESP32 clock at the session's OPEN (now, for TLS_SESSION_GLOBAL), 0 = no time
     uint8_t time_source;    // tls_time_source_t of that clock
     uint8_t reserved[3];
 } rpc_tls_stats_resp;

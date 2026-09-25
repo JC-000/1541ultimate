@@ -278,7 +278,6 @@ _Static_assert(offsetof(rpc_tls_open_req, sni) == 12, "rpc_tls_open_req.sni");
 _Static_assert(sizeof(rpc_tls_open_resp) == 12, "rpc_tls_open_resp size");
 _Static_assert(offsetof(rpc_tls_open_resp, esp_err) == 4, "rpc_tls_open_resp.esp_err");
 _Static_assert(offsetof(rpc_tls_open_resp, session) == 8, "rpc_tls_open_resp.session");
-_Static_assert(offsetof(rpc_tls_open_resp, reason) == 9, "rpc_tls_open_resp.reason");
 _Static_assert(sizeof(rpc_tls_step_req) == 10, "rpc_tls_step_req size");
 _Static_assert(offsetof(rpc_tls_step_req, session) == 4, "rpc_tls_step_req.session");
 _Static_assert(offsetof(rpc_tls_step_req, ct_in_len) == 6, "rpc_tls_step_req.ct_in_len");
@@ -329,15 +328,13 @@ void cmd_tls_open(command_buf_t *buf)
 
     // tls_open() copies the host name before the response overwrites it
     uint8_t session = TLS_SESSION_GLOBAL;
-    uint8_t reason = TLS_OPEN_REASON_NONE;
     int err = ESP_ERR_INVALID_ARG;
     if ((buf->size >= (int)sizeof(rpc_tls_open_req)) && (buf->size == (int)sizeof(rpc_tls_open_req) + req->sni_len)) {
-        err = tls_open(req->flags, req->sni, req->sni_len, req->unix_time, &session, &reason);
+        err = tls_open(req->flags, req->sni, req->sni_len, req->unix_time, &session);
     }
     memset(&resp->esp_err, 0, sizeof(rpc_tls_open_resp) - sizeof(rpc_header_t));
     resp->esp_err = err;
     resp->session = session;
-    resp->reason = reason;
     buf->size = sizeof(rpc_tls_open_resp);
     my_uart_transmit_packet(UART_CHAN, buf);
 }

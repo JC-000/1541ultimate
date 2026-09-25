@@ -179,14 +179,13 @@ int tls_sessions_open(void)
     return n;
 }
 
-int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, uint8_t *session, uint8_t *reason)
+int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, uint8_t *session)
 {
     char hostname[TLS_SNI_MAX_LEN + 1];
     int verify = flags & TLS_OPEN_VERIFY;
     int cas = flags & (TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST);
 
     *session = TLS_SESSION_GLOBAL;
-    *reason = TLS_OPEN_REASON_NONE;
     // Verifying without a host name would skip the name check, so it is refused
     if ((flags & ~(TLS_OPEN_VERIFY | TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST)) ||
         (verify && ((cas != TLS_OPEN_CA_BUNDLE) && (cas != TLS_OPEN_CA_TEST))) ||
@@ -195,15 +194,13 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
         return ESP_ERR_INVALID_ARG;
     }
     if (entropy_source() == ENTROPY_NONE) {
-        *reason = TLS_OPEN_REASON_NO_ENTROPY;
         return ESP_ERR_INVALID_STATE;
     }
     uint8_t time_source = tls_set_clock(unix_time);
     if (verify && (time_source == TLS_TIME_NONE)) {
         // Never verify against a 1970 clock: every validity check would be meaningless
         ESP_LOGW(TAG, "Open refused: verify needs a clock, and neither unix_time nor SNTP gave one");
-        *reason = TLS_OPEN_REASON_NO_TIME;
-        return ESP_ERR_INVALID_STATE;
+        return RPC_TLS_ERR_NO_TRUSTED_TIME;
     }
 #if !CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
     if (verify && (cas == TLS_OPEN_CA_BUNDLE)) {
@@ -256,7 +253,7 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
     generation = (generation + 1) % TLS_ID_GENERATIONS;
     s->stats.state = TLS_STATE_HANDSHAKING;
     s->stats.time_source = time_source;
-    s->stats.esp_time = (uint32_t)time(NULL);
+    s->stats.esp_time = (time_source == TLS_TIME_NONE) ? 0 : (uint32_t)time(NULL);
     s->last_used = ++use_count;
     mbedtls_ssl_init(&s->ssl);
     mbedtls_ssl_config_init(&s->conf);
@@ -449,9 +446,9 @@ int tls_get_stats(uint8_t session, tls_session_stats_t *stats)
     memset(stats, 0, sizeof(tls_session_stats_t));
     stats->state = TLS_STATE_CLOSED;
     if (session == TLS_SESSION_GLOBAL) {
-        stats->esp_time = (uint32_t)time(NULL);
-        stats->time_source = (stats->esp_time > tls_build_time()) ?
-                             (clock_set_by_nios ? TLS_TIME_NIOS : TLS_TIME_SNTP) : TLS_TIME_NONE;
+        time_t now = time(NULL);
+        stats->time_source = (now > tls_build_time()) ? (clock_set_by_nios ? TLS_TIME_NIOS : TLS_TIME_SNTP) : TLS_TIME_NONE;
+        stats->esp_time = (stats->time_source == TLS_TIME_NONE) ? 0 : (uint32_t)now;
         return ESP_OK;
     }
     tls_session_t *s = tls_find(session);
