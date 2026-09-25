@@ -187,7 +187,33 @@ static void test_take_step(void)
     size = step_reply(TLS_STATE_FAILED, -0x2700, 5, 3);
     fresh_step(&st, 1024);
     r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
-    check((r == WIFI_TLS_INVALID) && nothing_out(&st), "plaintext from a failed session is invalid, and none is handed out");
+    check((r == 0) && (st.state == WIFI_TLS_FAILED) && (st.ct_out_len == 5) && (st.pt_out_len == 0) && untouched(pt_out),
+          "plaintext read before a session failed is withheld; the failure and the alert come through");
+
+    size = step_reply(TLS_STATE_HANDSHAKING, 0x101, 9, 0);
+    fresh_step(&st, 1024);
+    r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
+    check((r == WIFI_TLS_AGAIN) && (st.esp_err == 0x101) && (st.ct_out_len == 9) && (ct_out[8] == 0xC8) &&
+          (st.state == WIFI_TLS_HANDSHAKING),
+          "ESP_ERR_NO_MEM: the input was not taken (AGAIN), and the output is handed over all the same");
+    size = step_reply(TLS_STATE_ESTABLISHED, 0x101, 4, 6);
+    fresh_step(&st, 1024);
+    r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
+    check((r == WIFI_TLS_AGAIN) && (st.ct_out_len == 4) && (st.pt_out_len == 6) && (pt_out[0] == 0x50),
+          "ESP_ERR_NO_MEM while established hands over plaintext too");
+    size = step_reply(TLS_STATE_HANDSHAKING, 0x101, 4, 6);
+    fresh_step(&st, 1024);
+    r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
+    check((r == WIFI_TLS_INVALID) && nothing_out(&st), "ESP_ERR_NO_MEM keeps the rule: no plaintext during the handshake");
+    size = step_reply(TLS_STATE_CLOSED, 0x101, 4, 0);
+    fresh_step(&st, 1024);
+    r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
+    check((r == WIFI_TLS_REFUSED) && nothing_out(&st) && (st.state == WIFI_TLS_CLOSED),
+          "ESP_ERR_NO_MEM from a session that is gone is refused");
+    size = step_reply(TLS_STATE_ESTABLISHED, 0x101, 20, 0);
+    fresh_step(&st, 19);
+    r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
+    check((r == WIFI_TLS_INVALID) && nothing_out(&st), "ESP_ERR_NO_MEM with more than there is room for is invalid");
     size = step_reply(TLS_STATE_CLOSED, 0, 0, 3);
     fresh_step(&st, 1024);
     r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
@@ -246,7 +272,7 @@ static void test_take_step(void)
             res->hdr.sequence = SEQUENCE;
         }
         if (world_rand(2)) {
-            res->esp_err = world_rand(2) ? 0 : -0x2700;
+            res->esp_err = world_rand(2) ? 0 : (world_rand(2) ? -0x2700 : 0x101);
         }
         if (world_rand(2)) {
             res->state = world_rand(5);
@@ -266,10 +292,25 @@ static void test_take_step(void)
         if (r == 0) {
             uint16_t ct = res->ct_out_len, pt = res->pt_out_len;
             bool good = (ct <= room) && (pt <= room) && (size >= (int)offsetof(rpc_tls_step_resp, data) + ct + pt) &&
-                        (st.ct_out_len == ct) && (st.pt_out_len == pt) && (res->state <= TLS_STATE_FAILED) &&
-                        ((pt == 0) || (res->state == TLS_STATE_ESTABLISHED) || (res->state == TLS_STATE_CLOSED)) &&
+                        (st.ct_out_len == ct) && ((st.pt_out_len == pt) || (res->state == TLS_STATE_FAILED)) &&
+                        (res->state <= TLS_STATE_FAILED) &&
+                        ((pt == 0) || (res->state != TLS_STATE_HANDSHAKING)) && // withheld when FAILED, below
                         ((res->esp_err == 0) || (res->state == TLS_STATE_FAILED)) &&
-                        (memcmp(ct_out, res->data, ct) == 0) && (memcmp(pt_out, res->data + ct, pt) == 0);
+                        (memcmp(ct_out, res->data, ct) == 0) &&
+                        ((res->state == TLS_STATE_FAILED) ? ((st.pt_out_len == 0) && untouched(pt_out))
+                                                          : (memcmp(pt_out, res->data + ct, pt) == 0));
+            if (res->state == TLS_STATE_FAILED) {
+                good = good && (ct <= room) && (size >= (int)offsetof(rpc_tls_step_resp, data) + ct + pt) &&
+                       (st.ct_out_len == ct);
+            }
+            broken += !good;
+        } else if (r == WIFI_TLS_AGAIN) {
+            uint16_t ct = res->ct_out_len, pt = res->pt_out_len;
+            bool good = (res->esp_err == 0x101) && ((res->state == TLS_STATE_HANDSHAKING) || (res->state == TLS_STATE_ESTABLISHED)) &&
+                        (ct <= room) && (pt <= room) && (size >= (int)offsetof(rpc_tls_step_resp, data) + ct + pt) &&
+                        ((pt == 0) || (res->state == TLS_STATE_ESTABLISHED)) && (st.ct_out_len == ct) &&
+                        (st.pt_out_len == pt) && (memcmp(ct_out, res->data, ct) == 0) &&
+                        (memcmp(pt_out, res->data + ct, pt) == 0);
             broken += !good;
         } else {
             broken += !nothing_out(&st);
@@ -283,26 +324,31 @@ static void test_take_others(void)
     printf("The checks on OPEN, CLOSE and STATS answers\n");
     uint8_t session = 0x77;
     int esp_err = 0;
+    uint8_t reason = 0x77;
 
     header(CMD_TLS_OPEN);
     ((rpc_tls_open_resp *)reply.bytes)->session = 1;
-    int r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, &session, &esp_err);
+    int r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, &session, &esp_err, &reason);
     check((r == 0) && (session == 1), "OPEN: the answer gives the session");
     session = 0x77;
-    r = wifi_tls_take_open(reply.bytes, 9, SEQUENCE, &session, &esp_err);
+    r = wifi_tls_take_open(reply.bytes, 9, SEQUENCE, &session, &esp_err, &reason);
     check((r == 0) && (session == 1), "OPEN: nine bytes are enough");
     session = 0x77;
-    r = wifi_tls_take_open(reply.bytes, 8, SEQUENCE, &session, &esp_err);
+    r = wifi_tls_take_open(reply.bytes, 8, SEQUENCE, &session, &esp_err, &reason);
     check((r == WIFI_TLS_INVALID) && (session == 0x77), "OPEN: without the session byte it is invalid");
     ((rpc_tls_open_resp *)reply.bytes)->session = TLS_SESSION_GLOBAL;
-    r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, &session, &esp_err);
+    r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, &session, &esp_err, &reason);
     check((r == WIFI_TLS_INVALID) && (session == 0x77), "OPEN: session 0xFF, which names the module, is invalid");
     ((rpc_tls_open_resp *)reply.bytes)->esp_err = 0x103;
-    r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, &session, &esp_err);
-    check((r == WIFI_TLS_REFUSED) && (esp_err == 0x103) && (session == 0x77),
-          "OPEN: refused with ESP_ERR_INVALID_STATE (no entropy source), no session");
+    ((rpc_tls_open_resp *)reply.bytes)->reason = TLS_OPEN_REASON_NO_TIME;
+    r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, &session, &esp_err, &reason);
+    check((r == WIFI_TLS_REFUSED) && (esp_err == 0x103) && (session == 0x77) && (reason == WIFI_TLS_REASON_NO_TIME),
+          "OPEN: refused with ESP_ERR_INVALID_STATE, and the reason (no time) that tells it from no entropy");
+    reason = 0x77;
+    r = wifi_tls_take_open(reply.bytes, 9, SEQUENCE, &session, &esp_err, &reason);
+    check((r == WIFI_TLS_REFUSED) && (reason == 0x77), "OPEN: a refusal too short for its reason leaves reason alone");
     ((rpc_header_t *)reply.bytes)->command = CMD_TLS_STEP;
-    r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, &session, &esp_err);
+    r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, &session, &esp_err, &reason);
     check(r == WIFI_TLS_FOREIGN, "OPEN: a STEP answer is foreign");
 
     header(CMD_TLS_CLOSE);
@@ -321,7 +367,7 @@ static void test_take_others(void)
     header(CMD_TLS_STATS);
     rpc_tls_stats_resp *s = (rpc_tls_stats_resp *)reply.bytes;
     s->heap_free = 100001;
-    s->heap_min_ever = 90002;
+    s->heap_min = 90002;
     s->largest_block = 50003;
     s->ct_in_bytes = 4;
     s->ct_out_bytes = 5;
@@ -331,13 +377,20 @@ static void test_take_others(void)
     s->tls_version = 0x0304;
     s->ciphersuite = 0x1301;
     s->group = 0x001D;
+    s->state = TLS_STATE_ESTABLISHED;
+    s->sessions_open = 2;
+    s->stack_free = 3333;
+    s->esp_time = 1790000000;
+    s->time_source = TLS_TIME_NIOS;
     wifi_tls_stats_t stats;
     memset(&stats, 0, sizeof(stats));
     r = wifi_tls_take_stats(reply.bytes, offsetof(rpc_tls_stats_resp, reserved), SEQUENCE, &stats, &esp_err);
     check((r == 0) && (stats.heap_free == 100001) && (stats.heap_min_ever == 90002) && (stats.largest_block == 50003) &&
           (stats.ct_in_bytes == 4) && (stats.ct_out_bytes == 5) && (stats.pt_in_bytes == 6) &&
           (stats.pt_out_bytes == 7) && (stats.handshake_us == 456789) && (stats.tls_version == 0x0304) &&
-          (stats.ciphersuite == 0x1301) && (stats.group == 0x001D),
+          (stats.ciphersuite == 0x1301) && (stats.group == 0x001D) && (stats.state == WIFI_TLS_ESTABLISHED) &&
+          (stats.sessions_open == 2) && (stats.stack_free == 3333) && (stats.esp_time == 1790000000) &&
+          (stats.time_source == WIFI_TLS_TIME_NIOS),
           "STATS: every field arrives, from an answer without the trailing padding");
     memset(&stats, 0, sizeof(stats));
     r = wifi_tls_take_stats(reply.bytes, offsetof(rpc_tls_stats_resp, reserved) - 1, SEQUENCE, &stats, &esp_err);
@@ -360,7 +413,8 @@ static void tls_maker(command_buf_t *rx, const uint8_t *req, int req_size, int k
     switch (request->command) {
         case CMD_TLS_OPEN:
             ((rpc_tls_open_resp *)rx->data)->esp_err = maker_err;
-            ((rpc_tls_open_resp *)rx->data)->session = maker_session;
+            ((rpc_tls_open_resp *)rx->data)->session = maker_err ? TLS_SESSION_GLOBAL : maker_session;
+            ((rpc_tls_open_resp *)rx->data)->reason = maker_err ? TLS_OPEN_REASON_NO_TIME : 0;
             rx->size = sizeof(rpc_tls_open_resp);
             break;
         case CMD_TLS_STEP: {
@@ -413,39 +467,45 @@ static void test_calls(void)
     printf("The TLS calls through the channel\n");
     uint8_t session = 0x77;
     int esp_err = 0x55;
+    uint8_t reason = 0x55;
 
     world_reset(1, tls_maker, true);
     uint16_t seq = sequence_nr;
-    int r = wifi_tls_open(WIFI_TLS_FLAG_VERIFY | WIFI_TLS_FLAG_TEST_CA, "test.local", &session, &esp_err);
-    uint8_t expect[] = { CMD_TLS_OPEN, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 0x05, 10,
-                         't', 'e', 's', 't', '.', 'l', 'o', 'c', 'a', 'l' };
-    check((r == 0) && (session == 1) && (esp_err == 0) && (sent() == "transmit 16:" + hex(expect, sizeof(expect))),
-          "OPEN sends header, flags, length and name, and gives the session");
+    int r = wifi_tls_open(WIFI_TLS_FLAG_VERIFY | WIFI_TLS_FLAG_TEST_CA, "test.local", 0x6789ABCD, &session, &esp_err,
+                          &reason);
+    uint8_t expect[] = { CMD_TLS_OPEN, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 0x05, 10, 0, 0,
+                         0xCD, 0xAB, 0x89, 0x67, 't', 'e', 's', 't', '.', 'l', 'o', 'c', 'a', 'l' };
+    check((r == 0) && (session == 1) && (esp_err == 0) && (reason == 0) &&
+          (sent() == "transmit 22:" + hex(expect, sizeof(expect))),
+          "OPEN sends header, flags, length, zero padding, unix_time and name, and gives the session");
 
     world_reset(2, tls_maker, true);
     seq = sequence_nr;
-    r = wifi_tls_open(0, NULL, &session, &esp_err);
-    uint8_t expect_nosni[] = { CMD_TLS_OPEN, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 0, 0 };
-    check((r == 0) && (sent() == "transmit 6:" + hex(expect_nosni, sizeof(expect_nosni))), "OPEN without a name");
+    r = wifi_tls_open(0, NULL, 0, &session, &esp_err, &reason);
+    uint8_t expect_nosni[] = { CMD_TLS_OPEN, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 0, 0, 0, 0,
+                               0, 0, 0, 0 };
+    check((r == 0) && (sent() == "transmit 12:" + hex(expect_nosni, sizeof(expect_nosni))),
+          "OPEN without a name or a time");
 
     char name[WIFI_TLS_MAX_SNI + 2];
     memset(name, 'a', sizeof(name));
     name[WIFI_TLS_MAX_SNI + 1] = 0;
     world_reset(3, tls_maker, true);
     esp_err = 0x55;
-    r = wifi_tls_open(0, name, &session, &esp_err);
+    r = wifi_tls_open(0, name, 0, &session, &esp_err, &reason);
     check((r == WIFI_TLS_TOO_LONG) && (world_trace.find("getbuffer") == std::string::npos) && (esp_err == 0),
-          "OPEN with a 256 byte name sends nothing");
+          "OPEN with a 254 byte name sends nothing");
     name[WIFI_TLS_MAX_SNI] = 0;
     world_reset(4, tls_maker, true);
-    r = wifi_tls_open(0, name, &session, &esp_err);
-    check((r == 0) && (world_transmits == 1), "OPEN with a 255 byte name goes out");
+    r = wifi_tls_open(0, name, 0, &session, &esp_err, &reason);
+    check((r == 0) && (world_transmits == 1) && (sent().compare(0, 14, "transmit 265: ") == 0),
+          "OPEN with a 253 byte name goes out");
 
     maker_err = 0x103;
     world_reset(5, tls_maker, true);
     session = 0x77;
-    r = wifi_tls_open(0, "x", &session, &esp_err);
-    check((r == WIFI_TLS_REFUSED) && (esp_err == 0x103) && (session == 0x77) &&
+    r = wifi_tls_open(0, "x", 0, &session, &esp_err, &reason);
+    check((r == WIFI_TLS_REFUSED) && (esp_err == 0x103) && (session == 0x77) && (reason == TLS_OPEN_REASON_NO_TIME) &&
           (world_trace.find("print: TLS Open failed (2). Size: 12. Error: 259.") != std::string::npos),
           "OPEN refused: the error comes back and is logged, no session");
     maker_err = 0;
@@ -473,17 +533,17 @@ static void test_calls(void)
     st.ct_in = big;
     st.ct_in_len = 1000;
     st.pt_in = big;
-    st.pt_in_len = 25;
+    st.pt_in_len = 537;
     world_reset(7, tls_maker, true);
     r = wifi_tls_step(7, &st);
     check((r == WIFI_TLS_TOO_LONG) && (world_trace.find("getbuffer") == std::string::npos) && (st.ct_out_len == 0) &&
           (st.pt_out_len == 0) && (st.state == WIFI_TLS_UNKNOWN) && untouched(ct_out),
-          "STEP with 1025 bytes in sends nothing and hands out nothing");
-    st.pt_in_len = 24;
+          "STEP with 1537 bytes in sends nothing and hands out nothing");
+    st.pt_in_len = 536;
     world_reset(8, tls_maker, true);
     r = wifi_tls_step(7, &st);
-    check((r == 0) && (world_transmits == 1) && (sent().compare(0, 15, "transmit 1034: ") == 0),
-          "STEP with exactly 1024 bytes in goes out in one request");
+    check((r == 0) && (world_transmits == 1) && (sent().compare(0, 15, "transmit 1546: ") == 0),
+          "STEP with exactly 1536 bytes in goes out in one request");
 
     world_reset(9, tls_maker, true);
     r = wifi_tls_close(7, &esp_err);
@@ -538,8 +598,8 @@ static void test_calls(void)
               (world_trace.find("print: TLS Step: no reply.") != std::string::npos) && !dedicated_waiting,
               "a step that gets no answer is busy after its own 5 s (1000 ticks), and frees the channel");
         world_reset(14, local::late, true);
-        r = wifi_tls_open(0, "x", &session, &esp_err);
-        check((r == WIFI_TLS_BUSY) && (world_trace.find("receive 400") != std::string::npos), "OPEN waits 2 s");
+        r = wifi_tls_open(0, "x", 0, &session, &esp_err, &reason);
+        check((r == WIFI_TLS_BUSY) && (world_trace.find("receive 1000") != std::string::npos), "OPEN waits 5 s");
         world_reset(15, local::late, true);
         r = wifi_tls_stats(0, &stats, &esp_err);
         check((r == WIFI_TLS_BUSY) && (world_trace.find("receive 200") != std::string::npos), "STATS waits 1 s");

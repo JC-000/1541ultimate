@@ -20,6 +20,8 @@
 #include "task.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
+#include "rtc.h"
+#include "sntp_time.h"
 #include "wifi_tls.h"
 
 static int failures;
@@ -45,7 +47,7 @@ static void check(bool condition, const char *what, ...)
 enum { K_MALLOC, K_SOCKET, K_IOCTL, K_CONNECT, K_SETSOCKOPT, K_OPEN, K_STEP, K_SEND, K_RECV, K_CLOSE, K_STATS, K_COUNT };
 static const char *kind_names[K_COUNT] = { "malloc", "socket", "ioctl", "connect", "setsockopt", "open", "step",
                                            "send", "recv", "close", "stats" };
-static const int variants[K_COUNT] = { 1, 1, 1, 2, 1, 5, 7, 2, 3, 3, 2 };
+static const int variants[K_COUNT] = { 1, 1, 1, 2, 1, 6, 8, 2, 3, 4, 2 };
 
 static int fail_at;      // the fallible call to fail, counted from 0; -1 for none
 static int fail_variant;
@@ -69,6 +71,9 @@ static uint32_t server_echo_owed; // plaintext the server echoes once the client
 static uint32_t echo_owed_next;
 static uint32_t echo_returned;
 static bool corrupt_echo;
+static bool module_ended;         // the module ended the session itself (FAILED or CLOSED)
+static bool refused_pending;      // the last step was refused for want of room
+static std::vector<uint8_t> refused_input;
 static uint32_t surplus_echo;     // bytes the server sends back beyond what it was sent
 static void *allocated;
 static int frees;
@@ -90,9 +95,35 @@ static bool fails(int kind)
     return now_fails;
 }
 
-static uint8_t pattern(int i)
+// The payload of M2 spec section 7, written out again here rather than taken
+// from the code under test.
+static uint32_t seed = 0x12345678;
+static uint8_t payload(uint32_t i)
 {
-    return (uint8_t)((i * 7) + (i >> 8) + 0x21); // as the spike's
+    uint32_t x = seed + i;
+    x *= 2654435761u;
+    return (uint8_t)(x >> 24);
+}
+
+// This side's clocks.
+static uint32_t sntp_now;
+static bool rtc_valid;
+static uint32_t opened_with_time;
+
+uint32_t sntp_utc_now(void)
+{
+    return sntp_now;
+}
+
+Rtc rtc;
+bool Rtc::is_valid(void)
+{
+    return rtc_valid;
+}
+
+void Rtc::get_time(int &y, int &M, int &D, int &wd, int &h, int &m, int &s)
+{
+    y = 2026 - 1980; M = 9; D = 25; wd = 5; h = 12; m = 0; s = 0; // local time, as the chip keeps it
 }
 
 TickType_t xTaskGetTickCount(void)
@@ -274,14 +305,17 @@ int lwip_close(int s)
     return 0;
 }
 
-int wifi_tls_open(uint8_t flags, const char *sni, uint8_t *session, int *esp_err)
+int wifi_tls_open(uint8_t flags, const char *sni, uint32_t unix_time, uint8_t *session, int *esp_err, uint8_t *reason)
 {
     calls.push_back("open");
     *esp_err = 0;
+    *reason = 0;
+    opened_with_time = unix_time;
     if (fails(K_OPEN)) {
         switch (fail_variant) {
             case 0: return WIFI_TLS_BUSY;
-            case 1: *esp_err = 0x103; return WIFI_TLS_REFUSED;
+            case 1: *esp_err = 0x103; *reason = WIFI_TLS_REASON_NO_ENTROPY; return WIFI_TLS_REFUSED;
+            case 5: *esp_err = 0x103; *reason = WIFI_TLS_REASON_NO_TIME; return WIFI_TLS_REFUSED;
             case 2: return WIFI_TLS_INVALID;
             case 3: persistent = true; persistent_kind = K_OPEN; return WIFI_TLS_UNSENT;
             default: return WIFI_TLS_UNSENT; // once: nothing was sent, so it goes again
@@ -298,6 +332,13 @@ int wifi_tls_step(uint8_t session, wifi_tls_step_t *st)
     if (!module_open || (session != 1)) {
         calls.push_back("STEP ON A CLOSED SESSION");
     }
+    std::vector<uint8_t> input(st->ct_in, st->ct_in + st->ct_in_len);
+    input.insert(input.end(), st->pt_in, st->pt_in + st->pt_in_len);
+    input.push_back((uint8_t)st->pt_in_len);
+    if (refused_pending && (input != refused_input)) {
+        calls.push_back("RESENT STEP DIFFERS");
+    }
+    refused_pending = false;
     st->ct_out_len = 0;
     st->pt_out_len = 0;
     st->state = WIFI_TLS_UNKNOWN;
@@ -312,16 +353,26 @@ int wifi_tls_step(uint8_t session, wifi_tls_step_t *st)
             case 1: st->esp_err = 0x102; st->state = WIFI_TLS_HANDSHAKING; return WIFI_TLS_REFUSED;
             case 2: return WIFI_TLS_INVALID;
             case 3: persistent = true; persistent_kind = K_STEP; return WIFI_TLS_UNSENT;
-            case 4: // a failed handshake, or an alert later on
+            case 4: // a failed handshake, or an alert later on; the module frees the session
                 st->state = WIFI_TLS_FAILED;
                 st->esp_err = -0x2700;
                 st->ct_out_len = 7;
+                module_open = false;
+                module_ended = true;
                 return 0;
             case 5:
                 st->state = WIFI_TLS_CLOSED;
+                module_open = false;
+                module_ended = true;
                 return 0;
-            default:
+            case 6:
                 return WIFI_TLS_UNSENT; // once
+            default: // no room: the input is refused, and must come again as it was
+                st->state = module_established ? WIFI_TLS_ESTABLISHED : WIFI_TLS_HANDSHAKING;
+                st->esp_err = 0x101;
+                refused_pending = true;
+                refused_input = input;
+                return WIFI_TLS_AGAIN;
         }
     }
     module_steps++;
@@ -350,7 +401,7 @@ int wifi_tls_step(uint8_t session, wifi_tls_step_t *st)
         pt = st->pt_out_room;
     }
     for (int i = 0; i < pt; i++) {
-        st->pt_out[i] = pattern(echo_returned + i) ^ ((corrupt_echo && (echo_returned + i == 1000)) ? 1 : 0);
+        st->pt_out[i] = payload(echo_returned + i) ^ ((corrupt_echo && (echo_returned + i == 1000)) ? 1 : 0);
     }
     echo_returned += pt;
     st->pt_out_len = pt;
@@ -367,6 +418,11 @@ int wifi_tls_close(uint8_t session, int *esp_err)
     if (fails(K_CLOSE)) {
         if (fail_variant == 0) {
             return WIFI_TLS_BUSY;
+        }
+        if (fail_variant == 3) {
+            *esp_err = 0x105; // ESP_ERR_NOT_FOUND: evicted, say, by another OPEN
+            module_open = false;
+            return WIFI_TLS_REFUSED;
         }
         if (fail_variant == 1) {
             persistent = true;
@@ -409,6 +465,12 @@ static void reset_world(int at, int variant)
     server_to_send = server_echo_owed = echo_owed_next = echo_returned = 0;
     corrupt_echo = false;
     surplus_echo = 0;
+    module_ended = false;
+    refused_pending = false;
+    refused_input.clear();
+    sntp_now = 1790000000;
+    rtc_valid = false;
+    opened_with_time = 0;
     allocated = NULL;
     frees = 0;
 }
@@ -433,7 +495,16 @@ static std::string broken(const wifi_tls_spike_result_t &r, bool fatal)
     if (socket_made != (socket_closes == 1)) why += "socket closed " + std::to_string(socket_closes) + " times; ";
     if (!socket_made && socket_closes) why += "closed a socket never made; ";
     if (last_io > first_cleanup) why += "socket used after close; ";
-    if (opens_ok && !tls_closes) why += "session left open; ";
+    if (opens_ok && !tls_closes && !module_ended) why += "session left open; ";
+    if (module_ended && tls_closes) why += "closed a session the module had freed; ";
+    if (refused_pending && (r.stage && strcmp(r.stage, "done") == 0)) why += "a refused step never went again; ";
+    static const char *const stages[] = { "connect", "open", "handshake", "echo", "close", "done" };
+    bool known = false;
+    for (unsigned i = 0; r.stage && (i < sizeof(stages) / sizeof(stages[0])); i++) {
+        known = known || (strcmp(r.stage, stages[i]) == 0);
+    }
+    if (!known) why += "stage outside section 7's list; ";
+    if (r.ok != (r.error[0] == 0)) why += "error text and ok disagree; ";
     if (!opens_ok && tls_closes) why += "closed a session never opened; ";
     if (tls_closes > 11) why += "close retried without bound; ";
     if (last_session_use > first_tlsclose) why += "session used after close; ";
@@ -455,7 +526,9 @@ static std::string broken(const wifi_tls_spike_result_t &r, bool fatal)
 static bool fatal(int kind, int variant)
 {
     bool transient_unsent = ((kind == K_OPEN) && (variant == 4)) || ((kind == K_STEP) && (variant == 6)) ||
-                            ((kind == K_CLOSE) && (variant == 2)) || ((kind == K_STATS) && (variant == 1));
+                            ((kind == K_CLOSE) && (variant == 2)) || ((kind == K_STATS) && (variant == 1)) ||
+                            ((kind == K_STEP) && (variant == 7)) ||  // AGAIN, then sent again
+                            ((kind == K_CLOSE) && (variant == 3));   // NOT_FOUND: already gone
     return (kind >= 0) && (kind != K_STATS) && !transient_unsent;
 }
 
@@ -463,16 +536,18 @@ int main(void)
 {
     printf("The exits of the TLS spike\n");
     wifi_tls_spike_result_t r;
-    const int echo = 3000;
+    const int echo = WIFI_TLS_SPIKE_MAX_ECHO;
 
     reset_world(-1, 0);
-    wifi_tls_spike("10.0.0.2", 4433, "test.local", WIFI_TLS_FLAG_VERIFY | WIFI_TLS_FLAG_TEST_CA, echo, &r);
+    wifi_tls_spike("10.0.0.2", 4433, "test.local", WIFI_TLS_FLAG_VERIFY | WIFI_TLS_FLAG_TEST_CA, echo, seed, &r);
     int fallible = event;
     std::string why = broken(r, false);
     check(r.ok && r.echo_ok && (r.echo_received == echo) && (r.echo_sent == echo) && !strcmp(r.stage, "done") &&
           r.session_opened && (r.close_result == 0) && r.have_before && r.have_peak && r.have_after && why.empty(),
           "a clean run completes the handshake, echoes %d bytes and closes everything (%d steps, %d fallible calls) %s",
           echo, r.steps, fallible, why.c_str());
+    check((opened_with_time == 1790000000) && !strcmp(r.nios_clock, "sntp") && !strcmp(r.error, ""),
+          "OPEN carries SNTP's time when SNTP has answered");
 
     std::map<std::string, int> stages;
     int runs = 0, bad = 0;
@@ -481,7 +556,7 @@ int main(void)
             reset_world(at, v);
             // Which kind the call at this index is decides how many variants it has;
             // that is only known once it has been reached.
-            wifi_tls_spike("10.0.0.2", 4433, "test.local", WIFI_TLS_FLAG_VERIFY | WIFI_TLS_FLAG_TEST_CA, echo, &r);
+            wifi_tls_spike("10.0.0.2", 4433, "test.local", WIFI_TLS_FLAG_VERIFY | WIFI_TLS_FLAG_TEST_CA, echo, seed, &r);
             if (failed_kind < 0) {
                 break; // past the last fallible call of this run
             }
@@ -494,7 +569,8 @@ int main(void)
                 w += "not ok after a fault it should survive; ";
             }
             char key[80];
-            snprintf(key, sizeof(key), "%-10s v%d -> %s", kind_names[failed_kind], v, r.stage ? r.stage : "(none)");
+            snprintf(key, sizeof(key), "%-10s v%d -> %s (%s)", kind_names[failed_kind], v, r.stage ? r.stage : "(none)",
+                     r.detail ? r.detail : "");
             stages[key]++;
             if (!w.empty()) {
                 if (bad++ < 10) {
@@ -510,30 +586,65 @@ int main(void)
         printf("          %s: %d\n", it->first.c_str(), it->second);
     }
 
+    uint32_t vectors_ok = 0;
+    for (uint32_t k = 0; k < 5000; k++) {
+        uint32_t sd = k * 2654435761u + 7;
+        uint32_t i = k % 4096;
+        vectors_ok += wifi_tls_spike_payload(sd, i) == (uint8_t)((uint32_t)((sd + i) * 2654435761u) >> 24);
+    }
+    check((wifi_tls_spike_payload(0, 0) == 0) && (wifi_tls_spike_payload(1, 0) == 0x9E) &&
+          (wifi_tls_spike_payload(0, 1) == 0x9E) && (wifi_tls_spike_payload(0xFFFFFFFF, 1) == 0) &&
+          (vectors_ok == 5000), "the payload is section 7's: ((seed + i) * 2654435761) >> 24, in 32 bits");
+
+    setenv("TZ", "UTC", 1); // the chip's local time is then UTC
+    tzset();
     reset_world(-1, 0);
-    wifi_tls_spike("not an address", 4433, "", 0, 10, &r);
+    sntp_now = 0;
+    rtc_valid = true;
+    wifi_tls_spike("10.0.0.2", 4433, "test.local", WIFI_TLS_FLAG_VERIFY | WIFI_TLS_FLAG_TEST_CA, 10, seed, &r);
+    check(r.ok && !strcmp(r.nios_clock, "rtc") && (opened_with_time == 1790337600u),
+          "without SNTP, OPEN carries the RTC's time, 2026-09-25 12:00 read as local time (%u)", opened_with_time);
+    reset_world(-1, 0);
+    sntp_now = 0;
+    wifi_tls_spike("10.0.0.2", 4433, "test.local", 0, 10, seed, &r);
+    check(r.ok && !strcmp(r.nios_clock, "none") && (opened_with_time == 0), "with no clock, OPEN carries 0");
+
+    reset_world(K_OPEN, 5); // find the OPEN by trying each call in turn
+    for (int at = 0; at < 20; at++) {
+        reset_world(at, 5);
+        wifi_tls_spike("10.0.0.2", 4433, "test.local", WIFI_TLS_FLAG_VERIFY | WIFI_TLS_FLAG_TEST_CA, 10, seed, &r);
+        if (failed_kind == K_OPEN) {
+            break;
+        }
+    }
+    check(!r.ok && !strcmp(r.stage, "open") && strstr(r.error, "trustworthy time") && strstr(r.error, "INVALID_STATE)"),
+          "verify without time: stage open, and says so (%s)", r.error);
+
+    reset_world(-1, 0);
+    wifi_tls_spike("not an address", 4433, "", 0, 10, seed, &r);
     std::string all;
     for (size_t i = 0; i < calls.size(); i++) {
         all += calls[i] + " ";
     }
-    check(!r.ok && !strcmp(r.stage, "host") && !r.socket_opened && !r.session_opened && broken(r, true).empty() &&
+    check(!r.ok && !strcmp(r.stage, "connect") && !strcmp(r.detail, "host") && !r.socket_opened && !r.session_opened && broken(r, true).empty() &&
           (all == "stats free stats "),
           "a host that is not an IPv4 address opens nothing (%s)", all.c_str());
 
     reset_world(-1, 0);
     corrupt_echo = true;
-    wifi_tls_spike("10.0.0.2", 4433, "test.local", 0, echo, &r);
-    check(!r.ok && !strcmp(r.stage, "echo_compare") && !r.echo_ok && broken(r, true).empty(),
-          "one wrong byte of echo fails the run, which still closes everything");
+    wifi_tls_spike("10.0.0.2", 4433, "test.local", 0, echo, seed, &r);
+    check(!r.ok && !strcmp(r.stage, "echo") && !strcmp(r.detail, "echo_compare") && !r.echo_ok &&
+          broken(r, true).empty() && (r.echo_received == 1000),
+          "one wrong byte of echo fails the run at that byte, which still closes everything (%s)", r.error);
 
     reset_world(-1, 0);
     surplus_echo = 5;
-    wifi_tls_spike("10.0.0.2", 4433, "test.local", 0, echo, &r);
-    check(!r.ok && !strcmp(r.stage, "echo_compare") && !r.echo_ok && broken(r, true).empty(),
+    wifi_tls_spike("10.0.0.2", 4433, "test.local", 0, echo, seed, &r);
+    check(!r.ok && !strcmp(r.detail, "echo_compare") && !r.echo_ok && broken(r, true).empty(),
           "more echo than was sent fails the run");
 
     reset_world(-1, 0);
-    wifi_tls_spike("10.0.0.2", 4433, NULL, 0, 0, &r);
+    wifi_tls_spike("10.0.0.2", 4433, NULL, 0, 0, seed, &r);
     check(r.ok && r.echo_ok && (r.echo_sent == 0) && broken(r, false).empty(), "a run without echo");
 
     printf("\n%d checks, %d failures\n", checks, failures);
