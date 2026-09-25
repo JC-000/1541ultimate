@@ -53,6 +53,8 @@ STEP_DELAY = 0.03
 MODES = {
     "correct": ("a spec-correct device", None),
     "stock": ("stock firmware: no route, HTTP 404 with an empty body", {"f"}),
+    "stale-image": ("run with --expect-spike against an image that answers 404 like stock",
+                    {"f"}),
     "verify-ignored": ("verify=1 is accepted and never applied",
                        {"d-mismatch", "d-untrusted", "d-expired"}),
     "fallback-retry": ("on a verification failure, silently reconnects with verification "
@@ -102,6 +104,8 @@ MODES = {
 # Modes whose failures must carry this text, where the set of failed scenarios
 # alone cannot tell two fakes apart.
 MUST_SAY = {
+    "stock": "this firmware has no TLS spike route",
+    "stale-image": "a stale or wrong image",
     "correct": "P2a OUTSIDE",
     "high-load": "P2a INCONCLUSIVE (host load)",
     "nios-below-esp": "the Nios clock (handshake_ms=",
@@ -313,7 +317,7 @@ def fake_device(mode: str) -> ThreadingHTTPServer:
         def do_PUT(self) -> None:
             parsed = urllib.parse.urlsplit(self.path)
             query = dict(urllib.parse.parse_qsl(parsed.query))
-            if mode == "stock" or parsed.path != ROUTE:
+            if mode in ("stock", "stale-image") or parsed.path != ROUTE:
                 self.wfile.write(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n")
                 return
             try:
@@ -356,6 +360,8 @@ def run_mode(mode: str, repeat: int, work: Path) -> dict:
                "--server-ip", "127.0.0.1", "--repeat", str(repeat), "--color", "never",
                "--results", str(work / f"{mode}-results.json"),
                "--log-dir", str(work / mode)]
+    if mode == "stale-image":
+        command.append("--expect-spike")
     started = time.monotonic()
     completed = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
     device.shutdown()

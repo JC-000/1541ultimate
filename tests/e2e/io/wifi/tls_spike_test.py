@@ -133,10 +133,30 @@ def expected_payload(seed: int, n: int) -> bytes:
 
 DEFAULT_ECHO_BYTES = 3000   # more than one 1024-byte step each way (spec section 2)
 DEFAULT_REPEAT = 5
-SPIKE_TIMEOUT = 60.0        # one REST call: connect, handshake, echo and close
+# One REST call has to outlast the firmware's own worst case, so that a slow run
+# comes back as the device's timeout result rather than as "no answer". The
+# Nios limits, from the Nios lane's report (scratchpad/esp-tls/reports/m2-nios.md;
+# this lane does not read the implementation):
+#    1  STATS before                      (:27, wifi_tls.cc timeouts, STATS 1 s)
+#    5  TCP connect                       (:112, exit 4)
+#    5  OPEN                              (:27, OPEN 5 s)
+#   15  handshake deadline                (:118-119, exits 10-11)
+#    5  + the STEP in flight at it        (:27, STEP 5 s; the deadline is checked after a step)
+#    5  + the send after that step        (:116, exit 8)
+#   15  echo deadline                     (:120, exit 12, "as 10, 11")
+#    5  + the STEP in flight              (:120 via :27)
+#    5  + the send after it               (:120 via :116)
+#    5  CLOSE                             (:27, CLOSE 5 s)
+#    1  STATS after                       (:27)
+#   --
+#   67  s, summed as in code review S10 (m2-codereview.md:70-74). 90 s leaves room
+#       for the REST round trip and the httpd queue. retries=1 on this PUT means
+#       one attempt only (rest.py RestClient.request: max(1, retries) attempts),
+#       so a timeout never starts a second spike run behind the first.
+SPIKE_TIMEOUT = 90.0
 RECORD_WAIT = 10.0          # after the reply, for the server's connection record
 STRAY_WAIT = 2.0            # after that, for a second connection nobody asked for
-SERVER_IDLE_TIMEOUT = 90.0  # longer than one REST call, so an open socket shows
+SERVER_IDLE_TIMEOUT = 120.0  # longer than one REST call, so an open socket shows
 TIMING_SLACK_MS = 5
 CLOCK_CROSSCHECK_SLACK_US = 2000
 # Test hook for tls_spike_sim.py only: a load average to report instead of the
@@ -766,6 +786,12 @@ def run(args) -> tuple[bool, str]:
             outcome = run_scenario(rest, args, server, scenario)
         except RouteAbsent as exc:
             check_start(f"f: PUT {args.route} is served (the spike route exists)")
+            if args.expect_spike:
+                # A spike build made without a clean after toggling TLS_SPIKE
+                # answers exactly like stock, so on a GREEN attempt the empty
+                # 404 means the wrong image, not missing work.
+                exc = Failure(f"the image was expected to carry the spike route (TLS_SPIKE=1 "
+                              f"clean build) but answers 404: a stale or wrong image ({exc})")
             check_fail(str(exc))
             not_run = ", ".join(s.key for s in selected)
             return False, f"{exc}. Not run: {not_run}"
@@ -890,6 +916,9 @@ def main() -> int:
                         help="the results file, opened before the first device call")
     parser.add_argument("--p1-sizes", help="JSON from the budget lane: base_bin_bytes, "
                                            "tls_bin_bytes, full_bin_bytes, app_partition_bytes")
+    parser.add_argument("--expect-spike", action="store_true",
+                        help="the image under test was built with TLS_SPIKE=1 (GREEN runs): "
+                             "an empty 404 then means a stale or wrong image, not stock")
     parser.add_argument("--only", action="append",
                         help="run only scenarios whose key starts with this (repeatable)")
     args = parser.parse_args()
