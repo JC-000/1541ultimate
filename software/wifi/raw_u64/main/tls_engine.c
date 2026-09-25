@@ -179,13 +179,14 @@ int tls_sessions_open(void)
     return n;
 }
 
-int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, uint8_t *session)
+int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, uint8_t *session, uint8_t *reason)
 {
     char hostname[TLS_SNI_MAX_LEN + 1];
     int verify = flags & TLS_OPEN_VERIFY;
     int cas = flags & (TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST);
 
     *session = TLS_SESSION_GLOBAL;
+    *reason = TLS_OPEN_REASON_NONE;
     // Verifying without a host name would skip the name check, so it is refused
     if ((flags & ~(TLS_OPEN_VERIFY | TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST)) ||
         (verify && ((cas != TLS_OPEN_CA_BUNDLE) && (cas != TLS_OPEN_CA_TEST))) ||
@@ -194,13 +195,15 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
         return ESP_ERR_INVALID_ARG;
     }
     if (entropy_source() == ENTROPY_NONE) {
+        *reason = TLS_OPEN_REASON_NO_ENTROPY;
         return ESP_ERR_INVALID_STATE;
     }
     uint8_t time_source = tls_set_clock(unix_time);
     if (verify && (time_source == TLS_TIME_NONE)) {
         // Never verify against a 1970 clock: every validity check would be meaningless
         ESP_LOGW(TAG, "Open refused: verify needs a clock, and neither unix_time nor SNTP gave one");
-        return RPC_TLS_ERR_NO_TRUSTED_TIME;
+        *reason = TLS_OPEN_REASON_NO_TIME;
+        return ESP_ERR_INVALID_STATE;
     }
 #if !CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
     if (verify && (cas == TLS_OPEN_CA_BUNDLE)) {
