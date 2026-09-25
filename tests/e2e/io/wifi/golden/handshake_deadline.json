@@ -8,24 +8,28 @@
   "stage" : "handshake",
   "error" : "handshake_timeout: Operation timed out (errno 60)",
   "handshake_ms" : 0,
+  "open_ms" : 25,
   "handshake_us" : 0,
   "stats_before" : { 
   "heap_free" : 100000,
   "heap_min_ever" : 100000,
   "largest_block" : 45000,
-  "stack_free" : 2345
+  "stack_free" : 2345,
+  "sessions_open" : 0
 },
   "stats_peak" : { 
   "heap_free" : 0,
   "heap_min_ever" : 0,
   "largest_block" : 0,
-  "stack_free" : 0
+  "stack_free" : 0,
+  "sessions_open" : 0
 },
   "stats_after" : { 
   "heap_free" : 100000,
   "heap_min_ever" : 100000,
   "largest_block" : 45000,
-  "stack_free" : 2345
+  "stack_free" : 2345,
+  "sessions_open" : 0
 },
   "tls_version" : 0,
   "ciphersuite" : 0,
@@ -33,7 +37,7 @@
   "echo_sent" : 0,
   "echo_received" : 0,
   "echo_ok" : false,
-  "steps" : 500,
+  "steps" : 499,
   "time_source" : "nios",
   "esp_time" : 1790000000,
   "step_max_ms" : 15,
@@ -43,7 +47,7 @@
   "code" : 60,
   "esp_err" : 0,
   "state" : 0,
-  "handshake_steps" : 500,
+  "handshake_steps" : 499,
   "resends" : 0,
   "have_before" : true,
   "have_opened" : true,
@@ -52,7 +56,7 @@
   "stats_error" : 0,
   "unix_time_sent" : 1790000000,
   "nios_clock" : "sntp",
-  "tcp_out" : 5000,
+  "tcp_out" : 4990,
   "tcp_in" : 180,
   "early_plaintext" : 0,
   "session_opened" : true,
