@@ -12,6 +12,14 @@ outside it is reported as OUTSIDE.
 The verdict is `verdict(judge(measurements))`: a function of the judgement,
 not text written beside it.
 
+Host load (amendment 7, M2-SPEC.md section 13): P2 is judged only when this
+host's 1-minute load average was below 4 at both the start and the end of the
+run. Otherwise, or when either reading is missing, every P2 entry that has a
+value is "INCONCLUSIVE (host load)": never INSIDE or OUTSIDE. The rule is
+conservative for P2a and P2b, which come from the ESP32's own clock, and it is
+applied to them anyway, as the amendment says. This rule is why the first
+registration (f45d04dc...) is superseded.
+
 Units: 1 KB = 1024 bytes; times are milliseconds. Medians are taken over the
 repeated runs of one scenario, and a median of an even count is the mean of
 the middle two.
@@ -35,6 +43,10 @@ STOCK_APP_PARTITION_BYTES = 0x100000
 INSIDE = "INSIDE"
 OUTSIDE = "OUTSIDE"
 NOT_MEASURED = "NOT_MEASURED"
+INCONCLUSIVE_LOAD = "INCONCLUSIVE (host load)"
+
+LOAD_LIMIT = 4.0
+HOST_LOAD_KEYS = ("P2a", "P2b", "P2c")
 
 # id -> (statement, unit, low, high). None is an open end. For the boolean
 # predictions low == high == the predicted value.
@@ -94,6 +106,8 @@ def judge(measurements: dict) -> dict:
           chain, handshake_us, handshake_ms, heap_free_before, heap_free_peak,
           echo_ok (device), echo_intact_server (server log).
       concurrent: {min_heap_free_two_sessions} if two sessions were measured.
+      host_load: {start, end}, this host's 1-minute load average at both ends
+          of the run.
     """
     p1 = measurements.get("p1") or {}
     runs = measurements.get("runs") or []
@@ -139,11 +153,19 @@ def judge(measurements: dict) -> dict:
         intact = [r for r in runs if r.get("echo_ok") is True and r.get("echo_intact_server")]
         values["P4a"] = 100.0 * len(intact) / len(runs)
 
+    load = measurements.get("host_load") or {}
+    quiet = all(isinstance(load.get(end), int | float) and load[end] < LOAD_LIMIT
+                for end in ("start", "end"))
     judgement = {}
     for key, (statement, unit, low, high) in BANDS.items():
+        status = _status(key, values[key])
+        if key in HOST_LOAD_KEYS and status != NOT_MEASURED and not quiet:
+            status = INCONCLUSIVE_LOAD
         judgement[key] = {"statement": statement, "unit": unit, "band": [low, high],
-                          "value": values[key], "status": _status(key, values[key])}
+                          "value": values[key], "status": status}
     judgement["_informational"] = {
+        "host_load": {"start": load.get("start"), "end": load.get("end"),
+                      "limit": LOAD_LIMIT, "p2_judged": quiet},
         "ecdsa_handshake_us": ecdsa_us,
         "rsa_handshake_us": rsa_us,
         "p1_free_in_partition_kb": (partition - base) / KB if base is not None else None,
@@ -158,7 +180,8 @@ def judge(measurements: dict) -> dict:
 
 def verdict(judgement: dict) -> str:
     """One line, computed from the judgement alone."""
-    groups: dict[str, list[str]] = {INSIDE: [], OUTSIDE: [], NOT_MEASURED: []}
+    groups: dict[str, list[str]] = {INSIDE: [], OUTSIDE: [], INCONCLUSIVE_LOAD: [],
+                                    NOT_MEASURED: []}
     for key in BANDS:
         groups[judgement[key]["status"]].append(key)
     parts = [f"{status} {len(keys)}" + (f" ({', '.join(keys)})" if keys and status != INSIDE
@@ -213,10 +236,11 @@ def integrity(registry: dict) -> list[str]:
     return problems
 
 
-def open_results(path: Path) -> dict:
+def open_results(path: Path, host_load_start: float | None = None) -> dict:
     """Write the results file before the first device call: bands, code and hashes."""
     registry = load_registry()
     results = {
+        "host_load_start": host_load_start,
         "registry": registry,
         "judge_sha256_at_start": file_sha256(),
         "integrity_at_start": integrity(registry),
@@ -233,6 +257,7 @@ def close_results(path: Path, measurements: dict) -> dict:
     problems = integrity(results["registry"])
     judgement = judge(measurements)
     results.update({
+        "host_load_end": (measurements.get("host_load") or {}).get("end"),
         "measurements": measurements,
         "judge_sha256_at_end": file_sha256(),
         "integrity_at_end": problems,

@@ -35,6 +35,7 @@ import argparse
 import calendar
 import hashlib
 import json
+import os
 import re
 import secrets
 import socket
@@ -137,6 +138,11 @@ RECORD_WAIT = 10.0          # after the reply, for the server's connection recor
 STRAY_WAIT = 2.0            # after that, for a second connection nobody asked for
 SERVER_IDLE_TIMEOUT = 90.0  # longer than one REST call, so an open socket shows
 TIMING_SLACK_MS = 5
+CLOCK_CROSSCHECK_SLACK_US = 2000
+# Test hook for tls_spike_sim.py only: a load average to report instead of the
+# host's, so the sim can show P2 judged and P2 held back. A run that uses it
+# says so in its output and in the results file.
+FAKE_LOAD_ENV = "TLS_SPIKE_FAKE_LOADAVG"
 
 
 MANGLED = {"flip-last": "flipped", "drop-last": "withheld"}
@@ -400,9 +406,12 @@ def judge_timing(device: dict, record: dict) -> list[str]:
         problems.append(f"handshake_us={handshake_us!r} is not positive")
     if problems:
         return problems
-    if handshake_us / 1000 > handshake_ms * 1.05 + 5:
-        problems.append(f"ESP32 handshake_us={handshake_us} exceeds the Nios wall clock "
-                        f"handshake_ms={handshake_ms}")
+    # The device's two clocks are independent, and the Nios wall clock spans
+    # the ESP32's compute, so it can never show less (amendment 7). This is the
+    # load-proof guard on P2; the comparison with the server is only a WARN.
+    if handshake_ms * 1000 < handshake_us - CLOCK_CROSSCHECK_SLACK_US:
+        problems.append(f"the Nios clock (handshake_ms={handshake_ms}) is below the ESP32 "
+                        f"clock (handshake_us={handshake_us}): one of them is wrong")
     # A TLS 1.3 client cannot finish in fewer than two exchanges: the
     # ClientHello out, the server's flight in, then its own Finished out.
     if steps < 2:
@@ -594,6 +603,15 @@ def host_control(server: Server, sni: str, verify: bool, curve: str | None,
         return False, str(exc), b""
 
 
+def host_load() -> float:
+    """This host's 1-minute load average, the input to amendment 7's P2 rule."""
+    fake = os.environ.get(FAKE_LOAD_ENV)
+    if fake is not None:
+        detail(f"host load average FAKED as {fake} via ${FAKE_LOAD_ENV} (simulation only)")
+        return float(fake)
+    return os.getloadavg()[0]
+
+
 def check_fixtures(args, pki_dir: Path, log_dir: Path) -> dict:
     """Prove the certificates, the server and its policies before trusting them."""
     with check("fixtures: the PKI holds the five chains it claims to"):
@@ -722,11 +740,13 @@ def run(args) -> tuple[bool, str]:
     failures: list[str] = []
 
     with check("predictions: the judge matches its registration"):
-        opened = predictions.open_results(results_path)
+        load_start = host_load()
+        opened = predictions.open_results(results_path, load_start)
         if opened["integrity_at_start"]:
             raise Failure("; ".join(opened["integrity_at_start"]))
         detail(f"results file {results_path} opened before the first device call, judge "
-               f"sha256 {opened['judge_sha256_at_start']}")
+               f"sha256 {opened['judge_sha256_at_start']}; host load {load_start:.2f} "
+               f"(P2 is judged only below {predictions.LOAD_LIMIT})")
 
     manifest = check_fixtures(args, pki_dir, log_dir)
     detail(f"server logs in {log_dir}")
@@ -806,8 +826,12 @@ def run(args) -> tuple[bool, str]:
     leak_check(measured)
     p1 = json.loads(Path(args.p1_sizes).read_text()) if args.p1_sizes else None
     with check("predictions: judged by the registered code"):
+        load = {"start": load_start, "end": host_load(),
+                "faked": os.environ.get(FAKE_LOAD_ENV) is not None}
         results = predictions.close_results(results_path,
-                                            {"p1": p1, "runs": measured, "concurrent": None})
+                                            {"p1": p1, "runs": measured, "concurrent": None,
+                                             "host_load": load})
+        detail(f"host load {load['start']:.2f} at start, {load['end']:.2f} at end")
         detail(f"verdict: {results['verdict']}")
         for key in predictions.BANDS:
             entry = results["judgement"][key]

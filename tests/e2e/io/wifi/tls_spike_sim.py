@@ -87,6 +87,10 @@ MODES = {
     "no-time-verifies": ("reports time_source none, but verifies and runs anyway",
                          {"a", "b", "c-x25519", "c-p256", "echo-flip", "echo-short",
                           "d-mismatch", "d-untrusted", "d-expired"}),
+    "nios-below-esp": ("reports an ESP32 handshake_us 10 ms longer than the Nios wall clock",
+                       {"a", "b", "c-x25519", "c-p256", "e-verify-off"}),
+    "high-load": ("a correct device, on a host whose load average is 9 (faked): P2 must be "
+                  "held back as INCONCLUSIVE", None),
     "fast-clock": ("reports handshake_ms of 1 while the server watched tens of ms; this is "
                    "a WARN by design, because a busy host inflates the server's window",
                    set()),
@@ -98,6 +102,9 @@ MODES = {
 # Modes whose failures must carry this text, where the set of failed scenarios
 # alone cannot tell two fakes apart.
 MUST_SAY = {
+    "correct": "P2a OUTSIDE",
+    "high-load": "P2a INCONCLUSIVE (host load)",
+    "nios-below-esp": "the Nios clock (handshake_ms=",
     "no-time-correct": "precondition: the device has no trusted time",
     "no-time-verifies": "fail-closed rule broken",
     "wrong-payload": "not the payload for seed",
@@ -294,6 +301,8 @@ def fill_success(result: dict, session: FakeSession, n: int, echo_ok: bool,
     })
     if session.mode == "fast-clock":
         result["handshake_ms"] = result["handshake_us"] = 1
+    if session.mode == "nios-below-esp":
+        result["handshake_us"] = result["handshake_ms"] * 1000 + 10000
 
 
 def fake_device(mode: str) -> ThreadingHTTPServer:
@@ -339,7 +348,10 @@ def scenario_key(label: str) -> str | None:
 
 def run_mode(mode: str, repeat: int, work: Path) -> dict:
     device = fake_device(mode)
-    env = dict(os.environ, U64_REST_PORT=str(device.server_address[1]))
+    # The host running the sim is rarely quiet, so the load is faked: 9 for the
+    # high-load fake, 0.5 for every other, which lets P2 be judged.
+    env = dict(os.environ, U64_REST_PORT=str(device.server_address[1]),
+               TLS_SPIKE_FAKE_LOADAVG="9" if mode == "high-load" else "0.5")
     command = [sys.executable, str(HERE / "tls_spike_test.py"), "-H", "127.0.0.1",
                "--server-ip", "127.0.0.1", "--repeat", str(repeat), "--color", "never",
                "--results", str(work / f"{mode}-results.json"),
@@ -367,17 +379,17 @@ def expected_ok(mode: str, result: dict) -> tuple[bool, str]:
     failed = {k for k, v in result["verdicts"].items() if any(x.startswith("FAIL") for x in v)}
     if result["fixture_fails"]:
         return False, f"fixture failures: {result['fixture_fails']}"
+    said = MUST_SAY.get(mode, "") in result["stdout"]
+    unsaid = "" if said else f", never said {MUST_SAY[mode]!r}"
     if must_fail is None:
-        return (result["exit"] == 0 and not failed,
-                f"exit {result['exit']}, failed {sorted(failed)}")
+        return (result["exit"] == 0 and not failed and said,
+                f"exit {result['exit']}, failed {sorted(failed)}{unsaid}")
     ok = result["exit"] != 0 if must_fail else result["exit"] == 0
     warned = {k for k, v in result["verdicts"].items() if any(x.startswith("WARN") for x in v)}
     missing = MUST_WARN.get(mode, set()) - warned
-    said = MUST_SAY.get(mode, "") in result["stdout"]
     return (ok and failed == must_fail and not missing and said,
             f"exit {result['exit']}, failed {sorted(failed)}, expected {sorted(must_fail)}"
-            + (f", no WARN on {sorted(missing)}" if missing else "")
-            + ("" if said else f", never said {MUST_SAY[mode]!r}"))
+            + (f", no WARN on {sorted(missing)}" if missing else "") + unsaid)
 
 
 def main() -> int:
