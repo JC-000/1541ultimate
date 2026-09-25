@@ -215,15 +215,20 @@ def tree_ca_fingerprint() -> str | None:
     """The tree CA's DER SHA-256, or None while it is a placeholder or absent.
 
     A placeholder is anything that is not a certificate: before the firmware
-    carried a test root, and on branches without the ESP lane's work.
+    carried a test root, and on branches without the ESP lane's work. A
+    certificate that openssl cannot read raises WrongRoot: the guard fails
+    closed.
     """
     path = tree_ca()
     if not path.exists() or "BEGIN CERTIFICATE" not in path.read_text():
         return None
     try:
         return fingerprint(path)
-    except subprocess.CalledProcessError:
-        return None
+    except (subprocess.CalledProcessError, OSError) as exc:
+        # Amendment 12 F7: a certificate the guard cannot read must not turn
+        # the guard off.
+        raise WrongRoot(f"cannot read the firmware's root {TREE_CA} with openssl ({exc}); "
+                        "the PKI root cannot be checked, so the run stops here") from exc
 
 
 def generate(pki: Path, reissue: bool = False) -> dict:

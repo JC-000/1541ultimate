@@ -181,13 +181,19 @@ CLOCK_CROSSCHECK_SLACK_US = 10000
 # host's, so the sim can show P2 judged and P2 held back. A run that uses it
 # says so in its output and in the results file.
 FAKE_LOAD_ENV = "TLS_SPIKE_FAKE_LOADAVG"
+# The faked load is honoured only against a loopback target, which is where
+# tls_spike_sim.py runs its fake devices and a rig never is.
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
 # Amendment 11 I: run-tests passes a suite only -H, -p and -t, so the rig's
 # settings reach the suite through the environment as well as through flags.
 EXPECT_SPIKE_ENV = "TLS_SPIKE_EXPECT_SPIKE"
 P1_SIZES_ENV = "TLS_SPIKE_P1_SIZES"
 RESULTS_DIR_ENV = "TLS_SPIKE_RESULTS_DIR"
 WITNESS_ENV = "TLS_SPIKE_WITNESS"
-WITNESS_LOG_NAME = "entropy_witness.jsonl"
+EXPECT_PRIOR_ENV = "TLS_SPIKE_EXPECT_PRIOR"
+# Amendment 12 F3: one path, whatever PKI directory or checkout a run uses, so
+# the cross-run half of the witness always sees the earlier runs.
+WITNESS_LOG = "~/.cache/1541u-build/tls-spike-witness.jsonl"
 
 
 MANGLED = {"flip-last": "flipped", "drop-last": "withheld"}
@@ -763,7 +769,7 @@ def host_control(server: Server, sni: str, verify: bool, curve: str | None,
         return False, str(exc), b""
 
 
-def host_load(quiet: bool = False) -> float:
+def host_load(host: str, quiet: bool = False) -> float:
     """This host's 1-minute load average, the input to amendment 7's P2 rule.
 
     Sampled at the start, after every scenario and at the end, so "below 4
@@ -771,10 +777,29 @@ def host_load(quiet: bool = False) -> float:
     """
     fake = os.environ.get(FAKE_LOAD_ENV)
     if fake is not None:
+        if targets.device_of(host) not in LOOPBACK:
+            raise Failure(f"${FAKE_LOAD_ENV} is set, but this run is aimed at a real device: "
+                          "a faked load average would let P2 be judged on a busy host "
+                          "(amendment 12 F7). Unset it.")
         if not quiet:
             detail(f"host load average FAKED as {fake} via ${FAKE_LOAD_ENV} (simulation only)")
         return float(fake)
     return os.getloadavg()[0]
+
+
+def provenance() -> dict:
+    """The commit and the files that feed the judge (amendment 12 F6)."""
+    head = subprocess.run(["git", "-C", str(HERE), "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=False).stdout.strip()
+    dirty = subprocess.run(["git", "-C", str(HERE), "status", "--porcelain", "--", "."],
+                           capture_output=True, text=True, check=False).stdout.strip()
+    return {
+        "git_head": head or None,
+        "suite_dir_dirty": bool(dirty),
+        "sha256": {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
+                   for name in ("tls_spike_test.py", "tls_spike_server.py",
+                                "tls_spike_pki.py", "tls_spike_predictions.py")},
+    }
 
 
 def check_fixtures(args, pki_dir: Path, log_dir: Path) -> dict:
@@ -968,13 +993,13 @@ def run(args) -> tuple[bool, str]:
     log_dir = Path(args.log_dir or tempfile.mkdtemp(prefix="tls-spike-"))
     log_dir.mkdir(parents=True, exist_ok=True)
     results_path = Path(args.results or Path(os.environ.get(RESULTS_DIR_ENV, "."))
-                        / f"tls_spike_results-{run_id}.json")
+                        / f"tls_spike_results-{run_id}-{os.getpid()}.json")
     failures: list[str] = []
 
     with check("predictions: the judge matches its registration"):
-        load_start = host_load()
+        load_start = host_load(args.host)
         load_samples = [load_start]
-        opened = predictions.open_results(results_path, load_start)
+        opened = predictions.open_results(results_path, load_start, provenance())
         if opened["integrity_at_start"]:
             raise Failure("; ".join(opened["integrity_at_start"]))
         detail(f"results file {results_path} opened before the first device call, judge "
@@ -984,8 +1009,20 @@ def run(args) -> tuple[bool, str]:
     manifest = check_fixtures(args, pki_dir, log_dir)
     detail(f"server logs in {log_dir}")
 
-    witness = EntropyWitness(Path(args.witness_log or pki_dir / WITNESS_LOG_NAME), run_id)
-    detail(f"entropy witness: {witness.prior} values from earlier runs in {witness.path}")
+    witness = EntropyWitness(Path(args.witness_log).expanduser().resolve(), run_id)
+    verdicts: list[dict] = []
+    check_start(f"entropy witness: history in {witness.path}")
+    if args.expect_prior_hellos and not witness.prior:
+        # Amendment 12 F3: the run after a power cycle is the only one that can
+        # catch a constant seed, and only with history. The scenarios still
+        # run, and their hellos are logged; the suite fails.
+        reason = (f"--expect-prior-hellos: the witness log {witness.path} holds no earlier "
+                  "ClientHellos, so a repeat across the ESP32's reboot cannot be seen; the "
+                  "log path changed or was never written")
+        check_fail(reason)
+        failures.append(f"witness: {reason}")
+    else:
+        check_ok(f"{witness.prior} values from earlier runs")
     rest = RestClient(args.host, args.password or None, args.timeout)
     measured: list[dict] = []
     positives_ok = False
@@ -1011,9 +1048,15 @@ def run(args) -> tuple[bool, str]:
             not_run = ", ".join(s.key for s in selected)
             return False, f"{exc}. Not run: {not_run}"
         except Failure as exc:
+            # Amendment 12 F4: whatever the device sent before the answer was
+            # lost still goes past the entropy witness.
+            reasons = [str(exc), *witness.check(scenario.key, server.new_records(RECORD_WAIT))]
             check_start(label)
-            check_fail(str(exc), elapsed=time.monotonic() - started)
+            for reason in reasons[1:]:
+                detail(reason)
+            check_fail(reasons[0], elapsed=time.monotonic() - started)
             failures.append(f"{scenario.key}: {exc}")
+            verdicts.append({"scenario": scenario.key, "verdict": "FAIL", "reason": str(exc)})
             continue
         finally:
             server.stop()
@@ -1021,7 +1064,7 @@ def run(args) -> tuple[bool, str]:
             check_start(f"f: PUT {args.route} is served (the spike route exists)")
             check_ok(f"HTTP {outcome.code}", elapsed=time.monotonic() - started)
 
-        load_samples.append(host_load(quiet=True))
+        load_samples.append(host_load(args.host, quiet=True))
         problems, warning = judge_outcome(args, outcome, manifest, positives_ok)
         problems += witness.check(scenario.key, outcome.server)
         elapsed = time.monotonic() - started
@@ -1042,28 +1085,35 @@ def run(args) -> tuple[bool, str]:
         if (scenario.verify and scenario.expect == "established" and len(outcome.server) == 1
                 and outcome.server[0]["handshake_ok"]):
             positives_ok = True
-        # Amendment 11 G: a run whose scenario FAILED does not feed the
-        # predictions; a WARN still does.
-        if (scenario.measured and not problems and len(outcome.server) == 1
+        verdicts.append({"scenario": scenario.key,
+                         "verdict": "FAIL" if problems else "WARN" if warning else "OK",
+                         "reason": problems[0] if problems else warning or ""})
+        # Amendment 12 F1: every established a/b run reaches the judge, with
+        # scenario_ok. The judge takes P2 and P3 from the passing runs only,
+        # and P4a from all of them, so a broken echo can pull P4a below 100.
+        if (scenario.measured and len(outcome.server) == 1
                 and outcome.server[0]["handshake_ok"]):
-            measured.append(measurement(args, outcome))
+            measured.append(dict(measurement(args, outcome), scenario_ok=not problems,
+                                 failure=problems[0] if problems else ""))
 
-    leak_check(measured)
+    leak_check([m for m in measured if m["scenario_ok"]])
     p1 = json.loads(Path(args.p1_sizes).read_text()) if args.p1_sizes else None
     with check("predictions: judged by the registered code"):
-        load_end = host_load()
+        load_end = host_load(args.host)
         load = {"start": load_start, "end": load_end, "samples": [*load_samples, load_end],
                 "faked": os.environ.get(FAKE_LOAD_ENV) is not None}
-        results = predictions.close_results(results_path,
-                                            {"p1": p1, "runs": measured, "concurrent": None,
-                                             "host_load": load})
+        results = predictions.close_results(
+            results_path, {"p1": p1, "runs": measured, "concurrent": None, "host_load": load,
+                           "scenarios": verdicts,
+                           "witness": {"path": str(witness.path), "prior": witness.prior,
+                                       "expect_prior": args.expect_prior_hellos}})
         detail(f"host load {load['start']:.2f} at start, {load['end']:.2f} at end, "
                f"{max(load['samples']):.2f} at most over {len(load['samples'])} samples")
         detail(f"verdict: {results['verdict']}")
         for key in predictions.BANDS:
             entry = results["judgement"][key]
             detail(f"{key} {entry['status']}: value {entry['value']!r} {entry['unit']}, "
-                   f"band {entry['band']}")
+                   f"band {entry['band']}, runs {entry['runs_used']}")
         if results["integrity_at_end"]:
             raise Failure(results["verdict"])
     if failures:
@@ -1126,10 +1176,14 @@ def main() -> int:
     parser.add_argument("--p1-sizes", default=os.environ.get(P1_SIZES_ENV),
                         help=f"JSON from the budget lane: base_bin_bytes, tls_bin_bytes, "
                              f"full_bin_bytes, app_partition_bytes (default ${P1_SIZES_ENV})")
-    parser.add_argument("--witness-log", default=os.environ.get(WITNESS_ENV),
-                        help=f"the append-only entropy witness log (default ${WITNESS_ENV}, "
-                             f"else {WITNESS_LOG_NAME} in the PKI directory, which follows "
-                             "the rig across checkouts)")
+    parser.add_argument("--witness-log", default=os.environ.get(WITNESS_ENV) or WITNESS_LOG,
+                        help=f"the append-only entropy witness log: ONE absolute path "
+                             f"outside every PKI directory (default ${WITNESS_ENV}, else "
+                             f"{WITNESS_LOG})")
+    parser.add_argument("--expect-prior-hellos", action="store_true",
+                        default=os.environ.get(EXPECT_PRIOR_ENV, "") not in ("", "0"),
+                        help=f"FAIL when the witness log holds no earlier run: the second run "
+                             f"after a power cycle (default ${EXPECT_PRIOR_ENV}=1)")
     parser.add_argument("--spike-timeout", type=float, default=SPIKE_TIMEOUT,
                         help=f"seconds to wait for one spike PUT (default {SPIKE_TIMEOUT:.0f}, "
                              "above the firmware's own worst case); the sim lowers it")
