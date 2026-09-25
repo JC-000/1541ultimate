@@ -12,7 +12,10 @@ certificate: a root made afresh on every run would be one the device has never
 seen, and every verify-on case would fail for the wrong reason. Leaves and
 intermediates are cheap and are re-issued with `--reissue`. The root's SHA-256
 fingerprint is in `manifest.json` and in the C snippet, so a run can say which
-root a firmware was built with.
+root a firmware was built with. Once the tree's
+software/wifi/raw_u64/main/tls_test_ca.pem holds a real certificate, no root is
+ever minted again: the PKI's root must be that certificate, or generate()
+raises WrongRoot (amendment 11 D).
 
     .pki/test-ca.pem            the root certificate, verbatim, for the firmware
     .pki/test_ca_pem.h          the same bytes as a NUL-terminated C string
@@ -52,6 +55,11 @@ from pathlib import Path
 OPENSSL_ENV = "OPENSSL"
 PKI_ENV = "TLS_SPIKE_PKI"
 DEFAULT_PKI = Path(__file__).resolve().parent / ".pki"
+
+# The root the ESP32 firmware compiles in, relative to the repository root, and
+# where the supervisor keeps a backup of the PKI that holds its key.
+TREE_CA = Path("software/wifi/raw_u64/main/tls_test_ca.pem")
+CANONICAL_PKI = "~/.cache/1541u-build/tls-spike-pki-c3d5f61f"
 
 SNI = "tls-spike.test"
 WRONG_HOST = "wrong-host.test"
@@ -193,7 +201,53 @@ def c_snippet(pem: str, digest: str) -> str:
     return "\n".join(lines + body) + "\n"
 
 
+class WrongRoot(Exception):
+    """The PKI's root is not the one the firmware in this tree embeds."""
+
+
+def tree_ca() -> Path:
+    """The test CA the ESP32 firmware of this checkout compiles in."""
+    return next(p for p in Path(__file__).resolve().parents
+                if (p / "software").is_dir()) / TREE_CA
+
+
+def tree_ca_fingerprint() -> str | None:
+    """The tree CA's DER SHA-256, or None while it is a placeholder or absent.
+
+    A placeholder is anything that is not a certificate: before the firmware
+    carried a test root, and on branches without the ESP lane's work.
+    """
+    path = tree_ca()
+    if not path.exists() or "BEGIN CERTIFICATE" not in path.read_text():
+        return None
+    try:
+        return fingerprint(path)
+    except subprocess.CalledProcessError:
+        return None
+
+
 def generate(pki: Path, reissue: bool = False) -> dict:
+    """Make whatever of the PKI is missing, and check its root against the tree.
+
+    Amendment 11 D: a root is minted only while the tree's CA is a placeholder.
+    Once the firmware embeds a root, a PKI without that root's key is useless
+    (every verify-on case fails with UNKNOWN_CA and looks like a device bug), so
+    a missing root is refused, and a different one raises WrongRoot.
+    """
+    expected = tree_ca_fingerprint()
+    if expected and not (pki / "root" / "root.key").exists():
+        raise WrongRoot(f"wrong PKI root: the firmware trusts {expected[:8].upper()}, and "
+                        f"{pki} has no root at all. Point ${PKI_ENV} (or --pki-dir) at the "
+                        f"PKI that holds it; the canonical one is backed up at {CANONICAL_PKI}")
+    if expected:
+        # Checked before anything is written, so a wrong PKI is left as it was.
+        have = fingerprint(pki / "root" / "root.pem")
+        if have != expected:
+            raise WrongRoot(f"wrong PKI root: the firmware trusts {expected[:8].upper()} "
+                            f"({TREE_CA}), this checkout's PKI ({pki}) has "
+                            f"{have[:8].upper()}. Point ${PKI_ENV} (or --pki-dir) at the PKI "
+                            f"that holds the firmware's root; the canonical one is backed up "
+                            f"at {CANONICAL_PKI}")
     pki.mkdir(parents=True, exist_ok=True)
     make_root(pki / "root", "TLS spike test root")
     make_root(pki / "untrusted-root", "TLS spike UNTRUSTED root")
@@ -264,7 +318,11 @@ def main() -> int:
                         help="re-issue every chain; the two roots are always kept")
     args = parser.parse_args()
     pki = pki_dir(args.pki_dir)
-    manifest = generate(pki, args.reissue)
+    try:
+        manifest = generate(pki, args.reissue)
+    except WrongRoot as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     problems = verify_fixtures(pki)
     for problem in problems:
         print(f"FIXTURE WRONG: {problem}", file=sys.stderr)

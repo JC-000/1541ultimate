@@ -19,19 +19,21 @@ entry that has a value is "INCONCLUSIVE (host load)": never INSIDE or OUTSIDE.
 The rule is conservative for P2a and P2b, which come from the ESP32's own
 clock, and it is applied to them anyway, as the amendment says.
 
-OPEN (amendment 9 H): handshake_ms starts before OPEN, and the reply has no
-separate OPEN round trip, so P2c and P4b cannot exclude OPEN's work (CA parse,
-DRBG seed, ssl_setup, psa_crypto_init on the first run). Their values are upper
-bounds on the link overhead. Inside the band, the prediction holds a fortiori.
-Outside it, the bound cannot decide, and the status is "INCONCLUSIVE (includes
-OPEN)", never OUTSIDE.
+OPEN (amendment 11 C, superseding amendment 9 H): handshake_ms starts before
+OPEN, and the route now reports the OPEN round trip itself as open_ms. So P2c
+and P4b are judged on the handshake after OPEN, handshake_ms - open_ms, and can
+be OUTSIDE like any other prediction. A run without open_ms does not count
+towards them.
+
+Runs (amendment 11 G): only runs whose scenario passed are measured; the suite
+drops a run with any problem before it gets here.
 
 P3a (amendment 9 F) is heap_free before minus stats_peak.heap_min_ever, the
 low-water mark since this OPEN, so the handshake's transient peak is counted.
 
 Registrations: f45d04dc (no host-load rule) was superseded by 4a60a005
-(amendment 7), which amendment 9 (F, H, and the load samples) supersedes in
-turn. Neither was used on a rig.
+(amendment 7), then by f53c1a75 (amendment 9: F, H, the load samples), then by
+this one (amendment 11 C). None was used on a rig.
 
 Units: 1 KB = 1024 bytes; times are milliseconds. Medians are taken over the
 repeated runs of one scenario, and a median of an even count is the mean of
@@ -57,8 +59,6 @@ INSIDE = "INSIDE"
 OUTSIDE = "OUTSIDE"
 NOT_MEASURED = "NOT_MEASURED"
 INCONCLUSIVE_LOAD = "INCONCLUSIVE (host load)"
-INCONCLUSIVE_OPEN = "INCONCLUSIVE (includes OPEN)"
-INCLUDES_OPEN_KEYS = ("P2c", "P4b")
 
 LOAD_LIMIT = 4.0
 HOST_LOAD_KEYS = ("P2a", "P2b", "P2c")
@@ -78,8 +78,7 @@ BANDS = {
     "P2b": ("the RSA-2048 chain adds 50-300 ms (median rsa - median ecdsa handshake_us)",
             "ms", 50, 300),
     "P2c": ("serial-link and LAN overhead add under 50 ms (median over the ecdsa runs of "
-            "handshake_ms - handshake_us/1000; an upper bound, because it includes OPEN)",
-            "ms", None, 50),
+            "(handshake_ms - open_ms) - handshake_us/1000)", "ms", None, 50),
     "P3a": ("peak heap per session is 35-60 KB (the largest heap_free before - "
             "stats_peak.heap_min_ever over all established runs)", "KB", 35, 60),
     "P3b": ("two concurrent sessions leave at least 40 KB free with Wi-Fi running",
@@ -87,8 +86,8 @@ BANDS = {
     "P4a": ("100% of echo bytes intact (share of established runs whose echo the device "
             "and the server both show intact)", "%", 100, 100),
     "P4b": ("the handshake completes over the serial link within 2x the ESP32 compute "
-            "time (median over the ecdsa runs of handshake_ms / (handshake_us/1000); an "
-            "upper bound, because it includes OPEN)", "ratio", None, 2.0),
+            "time (median over the ecdsa runs of (handshake_ms - open_ms) / "
+            "(handshake_us/1000))", "ratio", None, 2.0),
 }
 
 
@@ -119,7 +118,7 @@ def judge(measurements: dict) -> dict:
       p1: {base_bin_bytes, tls_bin_bytes, full_bin_bytes, app_partition_bytes}
           from the budget lane's builds; any may be missing.
       runs: one entry per established positive run (scenarios a and b), with
-          chain, handshake_us, handshake_ms, heap_free_before, heap_min_ever_peak,
+          chain, handshake_us, handshake_ms, open_ms, heap_free_before, heap_min_ever_peak,
           echo_ok (device), echo_intact_server (server log).
       concurrent: {min_heap_free_two_sessions} if two sessions were measured.
       host_load: {start, end, samples}, this host's 1-minute load average, sampled
@@ -151,9 +150,9 @@ def judge(measurements: dict) -> dict:
         values["P2a"] = _median(ecdsa_us) / 1000
     if ecdsa_us and rsa_us:
         values["P2b"] = (_median(rsa_us) - _median(ecdsa_us)) / 1000
-    paired = [(r["handshake_ms"], r["handshake_us"] / 1000) for r in runs
+    paired = [(r["handshake_ms"] - r["open_ms"], r["handshake_us"] / 1000) for r in runs
               if r.get("chain") == "ecdsa" and r.get("handshake_ms") is not None
-              and r.get("handshake_us")]
+              and r.get("open_ms") is not None and r.get("handshake_us")]
     if paired:
         values["P2c"] = _median([wall - esp for wall, esp in paired])
         values["P4b"] = _median([wall / esp for wall, esp in paired])
@@ -177,8 +176,6 @@ def judge(measurements: dict) -> dict:
     judgement = {}
     for key, (statement, unit, low, high) in BANDS.items():
         status = _status(key, values[key])
-        if key in INCLUDES_OPEN_KEYS and status == OUTSIDE:
-            status = INCONCLUSIVE_OPEN
         if key in HOST_LOAD_KEYS and status != NOT_MEASURED and not quiet:
             status = INCONCLUSIVE_LOAD
         judgement[key] = {"statement": statement, "unit": unit, "band": [low, high],
@@ -202,7 +199,7 @@ def judge(measurements: dict) -> dict:
 def verdict(judgement: dict) -> str:
     """One line, computed from the judgement alone."""
     groups: dict[str, list[str]] = {INSIDE: [], OUTSIDE: [], INCONCLUSIVE_LOAD: [],
-                                    INCONCLUSIVE_OPEN: [], NOT_MEASURED: []}
+                                    NOT_MEASURED: []}
     for key in BANDS:
         groups[judgement[key]["status"]].append(key)
     parts = [f"{status} {len(keys)}" + (f" ({', '.join(keys)})" if keys and status != INSIDE
@@ -258,7 +255,12 @@ def integrity(registry: dict) -> list[str]:
 
 
 def open_results(path: Path, host_load_start: float | None = None) -> dict:
-    """Write the results file before the first device call: bands, code and hashes."""
+    """Write the results file before the first device call: bands, code and hashes.
+
+    The file is created, never overwritten (amendment 11 I): a rerun must not
+    destroy an earlier run's registered evidence, so an existing path raises
+    FileExistsError.
+    """
     registry = load_registry()
     results = {
         "host_load_start": host_load_start,
@@ -268,7 +270,8 @@ def open_results(path: Path, host_load_start: float | None = None) -> dict:
         "run_started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "status": "run in progress; nothing judged yet",
     }
-    path.write_text(json.dumps(results, indent=2) + "\n")
+    with open(path, "x", encoding="utf-8") as stream:
+        stream.write(json.dumps(results, indent=2) + "\n")
     return results
 
 

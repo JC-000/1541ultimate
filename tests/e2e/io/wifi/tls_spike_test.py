@@ -94,14 +94,16 @@ FIELDS = {
     "stack_free_after": "stats_after.stack_free",
     "stack_free_peak": "stats_peak.stack_free",
     "step_max_ms": "step_max_ms",
+    "open_ms": "open_ms",
+    "sessions_open_before": "stats_before.sessions_open",
     "sessions_open_after": "sessions_open_after",
 }
 TYPES = {"ok": bool, "stage": str, "error": str, "handshake_ms": int, "handshake_us": int,
          "tls_version": int, "ciphersuite": int, "group": int, "echo_sent": int,
          "echo_received": int, "echo_ok": bool, "steps": int, "time_source": str,
-         "esp_time": int, "step_max_ms": int, "sessions_open_after": int}
+         "esp_time": int, "step_max_ms": int, "sessions_open_after": int, "open_ms": int}
 STATS_BLOCKS = ("stats_before", "stats_after", "stats_peak")
-STATS_KEYS = ("heap_free", "heap_min_ever", "largest_block", "stack_free")
+STATS_KEYS = ("heap_free", "heap_min_ever", "largest_block", "stack_free", "sessions_open")
 STAGES = ("connect", "open", "handshake", "echo", "close", "done")
 TIME_SOURCES = ("nios", "sntp", "none")
 # Where a successful OPEN lies behind the run, so the STATS after it exists
@@ -179,6 +181,13 @@ CLOCK_CROSSCHECK_SLACK_US = 10000
 # host's, so the sim can show P2 judged and P2 held back. A run that uses it
 # says so in its output and in the results file.
 FAKE_LOAD_ENV = "TLS_SPIKE_FAKE_LOADAVG"
+# Amendment 11 I: run-tests passes a suite only -H, -p and -t, so the rig's
+# settings reach the suite through the environment as well as through flags.
+EXPECT_SPIKE_ENV = "TLS_SPIKE_EXPECT_SPIKE"
+P1_SIZES_ENV = "TLS_SPIKE_P1_SIZES"
+RESULTS_DIR_ENV = "TLS_SPIKE_RESULTS_DIR"
+WITNESS_ENV = "TLS_SPIKE_WITNESS"
+WITNESS_LOG_NAME = "entropy_witness.jsonl"
 
 
 MANGLED = {"flip-last": "flipped", "drop-last": "withheld"}
@@ -555,8 +564,11 @@ def judge_failed(args, outcome: Outcome, manifest: dict) -> tuple[list[str], str
                         "the certificate and says nothing about verification")
     alert = record["alert_from_client"]
     if alert is None:
-        warning = (f"no alert reached the server (connection ended {record['close']!r}); "
-                   f"expected {expected_alert}")
+        # Amendment 11 F: the firmware always forwards the alert now, and it is
+        # the only evidence independent of the device about which check fired.
+        problems.append(f"no alert reached the server (connection ended "
+                        f"{record['close']!r}); expected {expected_alert}, the only witness "
+                        "to the cause that is not the device's own claim")
     elif alert != expected_alert:
         problems.append(f"the device rejected the certificate with {alert}, expected "
                         f"{expected_alert}: it failed, but for another reason")
@@ -643,10 +655,17 @@ def judge_outcome(args, outcome: Outcome, manifest: dict,
             # Amendment 9 A: the time fields come from a STATS right after a
             # successful OPEN, so "none" past OPEN means either the device went
             # on to verify with no trusted time, or that STATS was not taken.
-            problems = [f"time_source 'none' past OPEN (stage {device.get('stage')!r}): "
-                        "either the device verified without trusted time (the section 9 "
-                        "fail-closed rule) or its STATS after OPEN was not taken "
-                        "(amendment 9 A)"]
+            opened = (device.get("detail") or {}).get("have_opened")
+            if opened is True:
+                problems = [f"time_source 'none' past OPEN (stage {device.get('stage')!r}), "
+                            "though the route says OPEN succeeded (detail.have_opened): the "
+                            "STATS after OPEN was lost (amendment 9 A), not a verification "
+                            "without time"]
+            else:
+                problems = [f"time_source 'none' past OPEN (stage {device.get('stage')!r}): "
+                            "either the device verified without trusted time (the section 9 "
+                            "fail-closed rule) or its STATS after OPEN was not taken "
+                            f"(amendment 9 A); detail.have_opened is {opened!r}"]
         elif scenario.expect == "established":
             problems = judge_established(args, outcome)
             warning = None if problems else (timing_warning(outcome)
@@ -665,9 +684,17 @@ def judge_outcome(args, outcome: Outcome, manifest: dict,
     # Amendment 9 D: every exit path closes its ESP32 session. A firmware that
     # never CLOSEs would otherwise pass, the heap drift being only a WARN.
     left = device.get("sessions_open_after")
+    before = (device.get("stats_before") or {}).get("sessions_open")
     if isinstance(left, int) and not isinstance(left, bool) and left != 0:
-        problems.append(f"sessions_open_after={left}: the run left an ESP32 session open "
-                        "(amendment 9 D)")
+        if isinstance(before, int) and before >= left:
+            # Amendment 11 B: the session was already there before this run
+            # began, so the blame belongs to an earlier run's orphan.
+            problems.append(f"sessions_open_after={left}, but stats_before.sessions_open "
+                            f"was already {before}: an earlier run left an ESP32 session "
+                            "open (amendment 9 D)")
+        else:
+            problems.append(f"sessions_open_after={left}: the run left an ESP32 session open "
+                            "(amendment 9 D)")
     return problems, warning
 
 
@@ -752,13 +779,18 @@ def host_load(quiet: bool = False) -> float:
 
 def check_fixtures(args, pki_dir: Path, log_dir: Path) -> dict:
     """Prove the certificates, the server and its policies before trusting them."""
-    with check("fixtures: the PKI holds the five chains it claims to"):
-        manifest = pki.generate(pki_dir)
+    with check("fixtures: the PKI's root is the firmware's, and it holds the five chains"):
+        try:
+            manifest = pki.generate(pki_dir)
+        except pki.WrongRoot as exc:
+            raise Failure(str(exc)) from None
         problems = pki.verify_fixtures(pki_dir)
         if problems:
             raise Failure("; ".join(problems))
-        detail(f"test root sha256 {manifest['root_sha256']} ({pki_dir / 'test-ca.pem'}): "
-               "the firmware under test must carry exactly this root")
+        tree = pki.tree_ca_fingerprint()
+        detail(f"test root sha256 {manifest['root_sha256']} ({pki_dir / 'test-ca.pem'}); "
+               + (f"equal to the tree's {pki.TREE_CA}" if tree else
+                  f"{pki.TREE_CA} is a placeholder here, so nothing pins the root"))
     payload = bytes(range(256)) * (args.echo_bytes // 256 + 1)
     payload = payload[:args.echo_bytes]
     cases = [
@@ -853,6 +885,8 @@ def measurement(args, outcome: Outcome) -> dict:
         "chain": outcome.scenario.server.chain,
         "handshake_us": field_of(device, "handshake_us", False),
         "handshake_ms": field_of(device, "handshake_ms", False),
+        "open_ms": field_of(device, "open_ms", False),
+        "sessions_open_before": field_of(device, "sessions_open_before", False),
         "heap_free_before": field_of(device, "heap_free_before", False),
         "heap_free_after": field_of(device, "heap_free_after", False),
         "heap_free_peak": field_of(device, "heap_free_peak", False),
@@ -874,11 +908,67 @@ def measurement(args, outcome: Outcome) -> dict:
     }
 
 
+class EntropyWitness:
+    """Every ClientHello random and key_share the device sent, and any repeat.
+
+    Amendment 11 H. A PSA or DRBG seeded with a constant (what amendment 2
+    exists to prevent) passes every other check here, because its bytes look
+    random. What it cannot do is produce a new ClientHello random and a new
+    ephemeral key on every connection: those repeat. The server hashes both
+    per connection. This fails a scenario on any value seen before, in this
+    run or in any earlier run recorded in an append-only log, so a repeat
+    across an ESP32 reboot is caught too. Within one connection the random
+    legitimately appears twice (the second ClientHello after a
+    HelloRetryRequest keeps it), so values are counted once per connection.
+    """
+
+    def __init__(self, path: Path, run_id: str) -> None:
+        self.path = path
+        self.run_id = run_id
+        self.seen: dict[str, str] = {}
+        if path.exists():
+            for line in path.read_text().splitlines():
+                if line.strip():
+                    entry = json.loads(line)
+                    self.seen.setdefault(entry["sha256"],
+                                         f"run {entry['run']} {entry['scenario']}")
+        self.prior = len(self.seen)
+
+    def check(self, scenario: str, records: list[dict]) -> list[str]:
+        problems = []
+        fresh = []
+        for record in records:
+            values = set()
+            for hello in record["wire"]["client_hellos"]:
+                values.add(("ClientHello random", hello.get("random_sha256")))
+                values.update(("key_share", v) for v in hello.get("key_share_sha256", []))
+            for kind, value in sorted(values, key=lambda v: (v[0], v[1] or "")):
+                if not value:
+                    continue
+                where = f"run {self.run_id} {scenario} conn {record['conn']}"
+                if value in self.seen:
+                    problems.append(f"entropy witness: this {kind} (sha256 {value[:16]}...) "
+                                    f"was already sent in {self.seen[value]}; a fresh RNG "
+                                    "never repeats it (amendment 11 H)")
+                else:
+                    self.seen[value] = where
+                    fresh.append({"run": self.run_id, "scenario": scenario,
+                                  "conn": record["conn"], "kind": kind, "sha256": value,
+                                  "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        if fresh:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.path, "a", encoding="utf-8") as log:
+                log.writelines(json.dumps(entry) + "\n" for entry in fresh)
+        return problems
+
+
 def run(args) -> tuple[bool, str]:
     pki_dir = pki.pki_dir(args.pki_dir)
+    run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     log_dir = Path(args.log_dir or tempfile.mkdtemp(prefix="tls-spike-"))
     log_dir.mkdir(parents=True, exist_ok=True)
-    results_path = Path(args.results)
+    results_path = Path(args.results or Path(os.environ.get(RESULTS_DIR_ENV, "."))
+                        / f"tls_spike_results-{run_id}.json")
     failures: list[str] = []
 
     with check("predictions: the judge matches its registration"):
@@ -894,6 +984,8 @@ def run(args) -> tuple[bool, str]:
     manifest = check_fixtures(args, pki_dir, log_dir)
     detail(f"server logs in {log_dir}")
 
+    witness = EntropyWitness(Path(args.witness_log or pki_dir / WITNESS_LOG_NAME), run_id)
+    detail(f"entropy witness: {witness.prior} values from earlier runs in {witness.path}")
     rest = RestClient(args.host, args.password or None, args.timeout)
     measured: list[dict] = []
     positives_ok = False
@@ -931,6 +1023,7 @@ def run(args) -> tuple[bool, str]:
 
         load_samples.append(host_load(quiet=True))
         problems, warning = judge_outcome(args, outcome, manifest, positives_ok)
+        problems += witness.check(scenario.key, outcome.server)
         elapsed = time.monotonic() - started
         check_start(label + (" [SPIKE-ONLY: verification off]" if scenario.spike_only else ""))
         if problems:
@@ -949,7 +1042,9 @@ def run(args) -> tuple[bool, str]:
         if (scenario.verify and scenario.expect == "established" and len(outcome.server) == 1
                 and outcome.server[0]["handshake_ok"]):
             positives_ok = True
-        if (scenario.measured and len(outcome.server) == 1
+        # Amendment 11 G: a run whose scenario FAILED does not feed the
+        # predictions; a WARN still does.
+        if (scenario.measured and not problems and len(outcome.server) == 1
                 and outcome.server[0]["handshake_ok"]):
             measured.append(measurement(args, outcome))
 
@@ -1024,16 +1119,25 @@ def main() -> int:
                         help="runs of scenarios a and b, for the P2-P4 medians")
     parser.add_argument("--pki-dir", help="default $TLS_SPIKE_PKI, else .pki beside this file")
     parser.add_argument("--log-dir", help="where the server logs go (default: a new temp dir)")
-    parser.add_argument("--results", default="tls_spike_results.json",
-                        help="the results file, opened before the first device call")
-    parser.add_argument("--p1-sizes", help="JSON from the budget lane: base_bin_bytes, "
-                                           "tls_bin_bytes, full_bin_bytes, app_partition_bytes")
+    parser.add_argument("--results",
+                        help=f"the results file, created before the first device call and "
+                             f"never overwritten (default: tls_spike_results-<UTC time>.json "
+                             f"in ${RESULTS_DIR_ENV}, else here)")
+    parser.add_argument("--p1-sizes", default=os.environ.get(P1_SIZES_ENV),
+                        help=f"JSON from the budget lane: base_bin_bytes, tls_bin_bytes, "
+                             f"full_bin_bytes, app_partition_bytes (default ${P1_SIZES_ENV})")
+    parser.add_argument("--witness-log", default=os.environ.get(WITNESS_ENV),
+                        help=f"the append-only entropy witness log (default ${WITNESS_ENV}, "
+                             f"else {WITNESS_LOG_NAME} in the PKI directory, which follows "
+                             "the rig across checkouts)")
     parser.add_argument("--spike-timeout", type=float, default=SPIKE_TIMEOUT,
                         help=f"seconds to wait for one spike PUT (default {SPIKE_TIMEOUT:.0f}, "
                              "above the firmware's own worst case); the sim lowers it")
     parser.add_argument("--expect-spike", action="store_true",
-                        help="the image under test was built with TLS_SPIKE=1 (GREEN runs): "
-                             "an empty 404 then means a stale or wrong image, not stock")
+                        default=os.environ.get(EXPECT_SPIKE_ENV, "") not in ("", "0"),
+                        help=f"the image under test was built with TLS_SPIKE=1 (GREEN runs): "
+                             f"an empty 404 then means a stale or wrong image, not stock "
+                             f"(default ${EXPECT_SPIKE_ENV}=1)")
     parser.add_argument("--only", action="append",
                         help="run only scenarios whose key starts with this (repeatable)")
     args = parser.parse_args()

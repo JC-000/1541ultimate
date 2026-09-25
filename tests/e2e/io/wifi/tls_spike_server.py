@@ -81,6 +81,7 @@ def _extensions(body: bytes, offset: int) -> dict[int, bytes]:
 
 
 def parse_client_hello(body: bytes) -> dict:
+    random = body[2:34]
     offset = 2 + 32
     offset += 1 + body[offset]
     suites = _u16s(body[offset + 2:offset + 2 + int.from_bytes(body[offset:offset + 2], "big")])
@@ -92,16 +93,23 @@ def parse_client_hello(body: bytes) -> dict:
         name_len = int.from_bytes(ext[0x0000][3:5], "big")
         sni = ext[0x0000][5:5 + name_len].decode("ascii", "replace")
     shares = []
+    share_hashes = []
     if 0x0033 in ext:
         data, pos = ext[0x0033][2:], 0
         while pos + 4 <= len(data):
             shares.append(int.from_bytes(data[pos:pos + 2], "big"))
-            pos += 4 + int.from_bytes(data[pos + 2:pos + 4], "big")
+            length = int.from_bytes(data[pos + 2:pos + 4], "big")
+            share_hashes.append(hashlib.sha256(data[pos + 4:pos + 4 + length]).hexdigest())
+            pos += 4 + length
     return {
         "sni": sni,
         "versions": _u16s(ext[0x002B][1:]) if 0x002B in ext else [],
         "groups": _u16s(ext[0x000A][2:]) if 0x000A in ext else [],
         "key_share_groups": shares,
+        # The entropy witness (amendment 11 H): a client whose RNG repeats
+        # shows it here first. Hashes, not the bytes, are enough to compare.
+        "random_sha256": hashlib.sha256(random).hexdigest(),
+        "key_share_sha256": share_hashes,
         "cipher_suites": suites,
         "signature_algorithms": _u16s(ext[0x000D][2:]) if 0x000D in ext else [],
         "early_data": 0x002A in ext,
