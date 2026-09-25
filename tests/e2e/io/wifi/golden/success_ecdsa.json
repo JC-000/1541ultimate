@@ -1,0 +1,64 @@
+{
+  "stem": "success_ecdsa",
+  "exit_path": "15 done",
+  "request": { "host": "10.0.0.2", "port": 4433, "sni": "tls-spike.test", "verify": 1, "ca": "test", "echo": 1024, "seed": 1 },
+  "http_status": 200,
+  "response": { 
+  "ok" : true,
+  "stage" : "done",
+  "error" : "",
+  "handshake_ms" : 365,
+  "handshake_us" : 431250,
+  "stats_before" : { 
+  "heap_free" : 100000,
+  "heap_min_ever" : 100000,
+  "largest_block" : 45000,
+  "stack_free" : 2345
+},
+  "stats_peak" : { 
+  "heap_free" : 61000,
+  "heap_min_ever" : 52000,
+  "largest_block" : 30000,
+  "stack_free" : 2345
+},
+  "stats_after" : { 
+  "heap_free" : 100000,
+  "heap_min_ever" : 52000,
+  "largest_block" : 45000,
+  "stack_free" : 2345
+},
+  "tls_version" : 772,
+  "ciphersuite" : 4865,
+  "group" : 0,
+  "echo_sent" : 1024,
+  "echo_received" : 1024,
+  "echo_ok" : true,
+  "steps" : 5,
+  "time_source" : "nios",
+  "esp_time" : 1790000000,
+  "step_max_ms" : 315,
+  "sessions_open_after" : 0,
+  "detail" : { 
+  "where" : "done",
+  "code" : 0,
+  "esp_err" : 0,
+  "state" : 1,
+  "handshake_steps" : 2,
+  "resends" : 0,
+  "have_before" : true,
+  "have_opened" : true,
+  "have_peak" : true,
+  "have_after" : true,
+  "stats_error" : 0,
+  "unix_time_sent" : 1790000000,
+  "nios_clock" : "sntp",
+  "tcp_out" : 1218,
+  "tcp_in" : 1204,
+  "early_plaintext" : 0,
+  "session_opened" : true,
+  "close_result" : 0,
+  "socket_opened" : true
+},
+  "errors" : [  ]
+}
+}

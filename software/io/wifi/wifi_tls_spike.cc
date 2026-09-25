@@ -250,7 +250,12 @@ static int step(spike_t *s, wifi_tls_step_t *st, wifi_tls_spike_result_t *r)
 {
     int result;
     for (int i = 0; ; i++) {
+        TickType_t sent = xTaskGetTickCount();
         result = wifi_tls_step(s->session, st);
+        uint32_t ms = (xTaskGetTickCount() - sent) * portTICK_PERIOD_MS;
+        if (ms > r->step_max_ms) {
+            r->step_max_ms = ms;
+        }
         if ((result != WIFI_TLS_UNSENT) || (i == UNSENT_RETRIES)) {
             break;
         }
@@ -444,6 +449,12 @@ static bool spike_run(spike_t *s, const char *host, uint16_t port, const char *s
     s->session_open = true;
     r->session_opened = true;
     r->state = WIFI_TLS_HANDSHAKING;
+    // The module's clock and its source, from the session itself, while it
+    // is sure to exist: a handshake that fails frees it. Not part of the
+    // handshake time.
+    TickType_t asked = xTaskGetTickCount();
+    stats(s->session, &r->opened, &r->have_opened, r);
+    start += xTaskGetTickCount() - asked;
 
     wifi_tls_step_t st;
     memset(&st, 0, sizeof(st));

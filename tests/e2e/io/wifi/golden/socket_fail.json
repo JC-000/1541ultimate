@@ -1,0 +1,64 @@
+{
+  "stem": "socket_fail",
+  "exit_path": "3 socket",
+  "request": { "host": "10.0.0.2", "port": 4433, "sni": "tls-spike.test", "verify": 1, "ca": "test", "echo": 1024, "seed": 1 },
+  "http_status": 200,
+  "response": { 
+  "ok" : false,
+  "stage" : "connect",
+  "error" : "socket: Too many open files (errno 24)",
+  "handshake_ms" : 0,
+  "handshake_us" : 0,
+  "stats_before" : { 
+  "heap_free" : 100000,
+  "heap_min_ever" : 100000,
+  "largest_block" : 45000,
+  "stack_free" : 2345
+},
+  "stats_peak" : { 
+  "heap_free" : 0,
+  "heap_min_ever" : 0,
+  "largest_block" : 0,
+  "stack_free" : 0
+},
+  "stats_after" : { 
+  "heap_free" : 100000,
+  "heap_min_ever" : 100000,
+  "largest_block" : 45000,
+  "stack_free" : 2345
+},
+  "tls_version" : 0,
+  "ciphersuite" : 0,
+  "group" : 0,
+  "echo_sent" : 0,
+  "echo_received" : 0,
+  "echo_ok" : false,
+  "steps" : 0,
+  "time_source" : "none",
+  "esp_time" : 0,
+  "step_max_ms" : 0,
+  "sessions_open_after" : 0,
+  "detail" : { 
+  "where" : "socket",
+  "code" : 24,
+  "esp_err" : 0,
+  "state" : -1,
+  "handshake_steps" : 0,
+  "resends" : 0,
+  "have_before" : true,
+  "have_opened" : false,
+  "have_peak" : false,
+  "have_after" : true,
+  "stats_error" : 0,
+  "unix_time_sent" : 0,
+  "nios_clock" : "none",
+  "tcp_out" : 0,
+  "tcp_in" : 0,
+  "early_plaintext" : 0,
+  "session_opened" : false,
+  "close_result" : 0,
+  "socket_opened" : false
+},
+  "errors" : [  ]
+}
+}

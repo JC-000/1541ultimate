@@ -1,0 +1,9 @@
+{
+  "stem": "bad_param_host",
+  "exit_path": "1 host (now HTTP 400 in parse)",
+  "request": { "host": "10.0.0", "port": 4433, "sni": "tls-spike.test", "verify": 1, "ca": "test", "echo": 1024, "seed": 1 },
+  "http_status": 400,
+  "response": { 
+  "errors" : [ "Invalid host" ]
+}
+}

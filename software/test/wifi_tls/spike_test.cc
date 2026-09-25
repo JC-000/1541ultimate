@@ -23,6 +23,8 @@
 #include "rtc.h"
 #include "sntp_time.h"
 #include "wifi_tls.h"
+#include "json.h"
+#include "wifi_tls_json.h"
 
 static int failures;
 static int checks;
@@ -54,6 +56,7 @@ static int fail_variant;
 static bool persistent;  // the failure repeats on every later call of the same kind
 static int persistent_kind;
 static int event;        // fallible calls so far
+static std::vector<int> event_kinds; // the kind of each
 static int failed_kind;
 
 static std::vector<std::string> calls;
@@ -71,6 +74,14 @@ static uint32_t server_echo_owed; // plaintext the server echoes once the client
 static uint32_t echo_owed_next;
 static uint32_t echo_returned;
 static bool corrupt_echo;
+// Scenarios for the golden files.
+static int handshake_fail_err;    // nonzero: the module fails the handshake with it on the server's flight
+static int open_refuse_reason;    // nonzero: OPEN is refused with ESP_ERR_INVALID_STATE and this reason
+static int connect_error;         // nonzero: connect fails with this errno
+static bool server_silent;        // the server never answers
+static int step_busy_at;          // nonzero: the n-th STEP gets no answer in time
+static bool module_chatty;        // the module keeps sending handshake records and never finishes
+static int crypto_ticks = 60;     // what the step with the key exchange and the chain costs the module
 static bool module_ended;         // the module ended the session itself (FAILED or CLOSED)
 static bool refused_pending;      // the last step was refused for want of room
 static std::vector<uint8_t> refused_input;
@@ -84,6 +95,7 @@ static bool fails(int kind)
     if (persistent && (persistent_kind == kind)) {
         return true;
     }
+    event_kinds.push_back(kind);
     bool now_fails = (event++ == fail_at);
     if (now_fails) {
         failed_kind = kind;
@@ -206,6 +218,10 @@ int lwip_connect(int s, const struct sockaddr *name, socklen_t_stub namelen)
 {
     used_after_close(s);
     calls.push_back("connect");
+    if (connect_error) {
+        errno = connect_error;
+        return -1;
+    }
     if (fails(K_CONNECT)) {
         if (fail_variant == 0) {
             errno = ECONNREFUSED;
@@ -279,7 +295,7 @@ ssize_t lwip_recv(int s, void *mem, size_t len, int flags)
         persistent = true; // the server goes silent
         persistent_kind = K_RECV;
     }
-    if (!(persistent && (persistent_kind == K_RECV)) && server_to_send) {
+    if (!server_silent && !(persistent && (persistent_kind == K_RECV)) && server_to_send) {
         size_t n = (server_to_send < len) ? server_to_send : len;
         if (n > 700) {
             n = 700;
@@ -320,6 +336,11 @@ int wifi_tls_open(uint8_t flags, const char *sni, uint32_t unix_time, uint8_t *s
             case 3: persistent = true; persistent_kind = K_OPEN; return WIFI_TLS_UNSENT;
             default: return WIFI_TLS_UNSENT; // once: nothing was sent, so it goes again
         }
+    }
+    if (open_refuse_reason) {
+        *esp_err = 0x103;
+        *reason = open_refuse_reason;
+        return WIFI_TLS_REFUSED;
     }
     module_open = true;
     *session = 1;
@@ -376,13 +397,31 @@ int wifi_tls_step(uint8_t session, wifi_tls_step_t *st)
         }
     }
     module_steps++;
+    now += 2; // a round trip over the link
+    if (step_busy_at && (module_steps == step_busy_at)) {
+        now += 1000; // the 5 s the call waits
+        return WIFI_TLS_BUSY;
+    }
     if (!module_established) {
         st->state = WIFI_TLS_HANDSHAKING;
+        if (module_chatty) {
+            st->ct_out_len = 10;
+            return 0;
+        }
         if (module_steps == 1) {
             st->ct_out_len = 100; // ClientHello
         } else {
             module_ct_seen += st->ct_in_len;
             if (module_ct_seen >= 180) {
+                now += crypto_ticks; // the key exchange and the chain, on the module's dispatcher
+                if (handshake_fail_err) {
+                    st->state = WIFI_TLS_FAILED; // the module frees the session
+                    st->esp_err = handshake_fail_err;
+                    st->ct_out_len = 7; // the alert
+                    module_open = false;
+                    module_ended = true;
+                    return 0;
+                }
                 module_established = true;
                 st->state = WIFI_TLS_ESTABLISHED;
                 st->ct_out_len = 50; // Finished
@@ -438,12 +477,27 @@ int wifi_tls_stats(uint8_t session, wifi_tls_stats_t *stats, int *esp_err)
 {
     calls.push_back(session == WIFI_TLS_SESSION_GLOBAL ? "stats" : "sessionstats");
     *esp_err = 0;
+    now += 3; // a round trip over the link, which handshake_ms must leave out
     if (fails(K_STATS)) {
         return (fail_variant == 0) ? WIFI_TLS_BUSY : WIFI_TLS_UNSENT;
     }
     memset(stats, 0, sizeof(*stats));
-    stats->heap_free = 100000;
-    stats->tls_version = 0x0304;
+    stats->heap_free = module_open ? 61000 : 100000;
+    stats->heap_min_ever = module_established ? 52000 : (module_open ? 90000 : 100000);
+    stats->largest_block = module_open ? 30000 : 45000;
+    stats->stack_free = 2345;
+    stats->sessions_open = module_open ? 1 : 0;
+    if (session != WIFI_TLS_SESSION_GLOBAL) {
+        stats->state = module_established ? WIFI_TLS_ESTABLISHED : WIFI_TLS_HANDSHAKING;
+        stats->time_source = opened_with_time ? WIFI_TLS_TIME_NIOS : WIFI_TLS_TIME_NONE;
+        stats->esp_time = opened_with_time;
+        if (module_established) {
+            stats->tls_version = 0x0304;
+            stats->ciphersuite = 0x1301;
+            stats->group = 0; // mbedTLS 3.6 does not say
+            stats->handshake_us = 431250;
+        }
+    }
     return 0;
 }
 
@@ -454,6 +508,7 @@ static void reset_world(int at, int variant)
     persistent = false;
     persistent_kind = -1;
     event = 0;
+    event_kinds.clear();
     failed_kind = -1;
     calls.clear();
     now = 1000;
@@ -465,6 +520,13 @@ static void reset_world(int at, int variant)
     server_to_send = server_echo_owed = echo_owed_next = echo_returned = 0;
     corrupt_echo = false;
     surplus_echo = 0;
+    handshake_fail_err = 0;
+    open_refuse_reason = 0;
+    connect_error = 0;
+    server_silent = false;
+    step_busy_at = 0;
+    module_chatty = false;
+    crypto_ticks = 60;
     module_ended = false;
     refused_pending = false;
     refused_input.clear();
@@ -532,7 +594,284 @@ static bool fatal(int kind, int variant)
     return (kind >= 0) && (kind != K_STATS) && !transient_unsent;
 }
 
-int main(void)
+// The firmware's formatter prints through this, and the JSON classes can
+// url-encode; neither is used by what is rendered here.
+extern "C" void outbyte(int c)
+{
+    putchar(c);
+}
+
+void url_encode(const char *src, mstring &dest)
+{
+    dest = src;
+}
+
+// The body PUT /v1/machine:tlsspike sends: the route's object, and the empty
+// "errors" list ResponseWrapper::json_response adds, rendered by the
+// firmware's own classes.
+static std::string render(JSON_Object *json, const char *error)
+{
+    JSON_List *errors = JSON::List();
+    if (error) {
+        errors->add(error);
+    }
+    json->add("errors", errors);
+    StreamRamFile *file = new StreamRamFile(512);
+    json->render(file);
+    std::string out;
+    char block[256];
+    int n;
+    while ((n = file->read(block, sizeof(block))) > 0) {
+        out.append(block, n);
+    }
+    delete file;
+    delete json;
+    return out + "\n";
+}
+
+static std::string render_run(const wifi_tls_spike_result_t &r)
+{
+    JSON_Object *json = JSON::Obj();
+    wifi_tls_spike_json(&r, json);
+    return render(json, NULL);
+}
+
+static std::string read_file(const std::string &path)
+{
+    std::string out;
+    FILE *f = fopen(path.c_str(), "rb");
+    if (!f) {
+        return "(missing)";
+    }
+    char block[256];
+    size_t n;
+    while ((n = fread(block, 1, sizeof(block), f)) > 0) {
+        out.append(block, n);
+    }
+    fclose(f);
+    return out;
+}
+
+// A request as the route gets it: the query parameters, NULL when absent.
+typedef struct {
+    const char *host, *port, *sni, *verify, *ca, *echo, *seed;
+} request_t;
+
+// What PUT /v1/machine:tlsspike does with it (route_machine.cc): the same
+// parse, the same run and the same JSON, and the same 400 body for a
+// parameter that is not valid. Only ResponseWrapper is left out, and render()
+// adds what its json_response adds.
+static int route(const request_t &q, std::string &body, wifi_tls_spike_result_t &r)
+{
+    wifi_tls_spike_args_t a;
+    const char *invalid = wifi_tls_spike_parse(q.host, q.port, q.sni, q.verify, q.ca, q.echo, q.seed, &a);
+    if (invalid) {
+        char message[200];
+        snprintf(message, sizeof(message), "Invalid %s", invalid);
+        body = render(JSON::Obj(), message);
+        return 400;
+    }
+    seed = a.seed; // the fake server echoes the payload of the same seed
+    wifi_tls_spike(a.host, a.port, a.sni, a.flags, a.echo, a.seed, &r);
+    body = render_run(r);
+    return 200;
+}
+
+// A query parameter as JSON: null when absent, a number when it is all
+// digits, a string otherwise.
+static std::string value(const char *text)
+{
+    if (!text) {
+        return "null";
+    }
+    bool digits = *text != 0;
+    for (const char *p = text; *p; p++) {
+        digits = digits && (*p >= '0') && (*p <= '9');
+    }
+    return digits ? std::string(text) : "\"" + std::string(text) + "\"";
+}
+
+// Writes stem.json into out, in the shape of M2 spec section 19, and checks it
+// against the one in golden.
+static void golden_file(const char *out, const char *golden, const char *stem, const char *exit_path,
+                        const request_t &q, int status, const std::string &body)
+{
+    std::string wrapped = "{\n  \"stem\": \"" + std::string(stem) + "\",\n  \"exit_path\": \"" + exit_path +
+        "\",\n  \"request\": { \"host\": " + value(q.host) + ", \"port\": " + value(q.port) + ", \"sni\": " +
+        value(q.sni) + ", \"verify\": " + value(q.verify) + ", \"ca\": " + value(q.ca) + ", \"echo\": " +
+        value(q.echo) + ", \"seed\": " + value(q.seed) + " },\n  \"http_status\": " + std::to_string(status) +
+        ",\n  \"response\": " + (body.empty() ? std::string("null") : body) + "}\n";
+    std::string name = std::string(stem) + ".json";
+    std::string path = std::string(out) + "/" + name;
+    FILE *f = fopen(path.c_str(), "wb");
+    if (f) {
+        fwrite(wrapped.data(), 1, wrapped.size(), f);
+        fclose(f);
+    }
+    std::string kept = read_file(std::string(golden) + "/" + name);
+    check(f && (kept == wrapped), "golden %s (%s, HTTP %d) matches what the route renders", name.c_str(), exit_path,
+          status);
+}
+
+// Runs q with the occurrence-th call of kind failing in variant, trying each
+// occurrence until the run ends at detail. Returns whether one did.
+static bool route_failing(const request_t &q, int kind, int variant, const char *detail, std::string &body,
+                          wifi_tls_spike_result_t &r, int &status)
+{
+    for (int occurrence = 0; occurrence < 40; occurrence++) {
+        reset_world(-1, 0);
+        status = route(q, body, r);
+        int at = -1, seen = 0;
+        for (size_t i = 0; i < event_kinds.size(); i++) {
+            if ((event_kinds[i] == kind) && (seen++ == occurrence)) {
+                at = (int)i;
+                break;
+            }
+        }
+        if (at < 0) {
+            return false;
+        }
+        reset_world(at, variant);
+        status = route(q, body, r);
+        if (r.detail && !strcmp(r.detail, detail)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// One golden file per exit path (M2 spec sections 17 E and 19). The E2E
+// oracle must give each the verdict its path deserves. exit_path names the
+// row of the exit-path table in reports/m2-nios.md section 5.
+static void goldens(const char *out, const char *golden)
+{
+    printf("The route's JSON for each exit path, against %s\n", golden);
+    const request_t good = { "10.0.0.2", "4433", "tls-spike.test", "1", "test", "1024", "1" };
+    wifi_tls_spike_result_t r;
+    std::string body;
+    int status;
+
+    reset_world(-1, 0);
+    status = route(good, body, r);
+    check(r.ok && r.have_opened && (r.after.sessions_open == 0), "success_ecdsa runs clean");
+    golden_file(out, golden, "success_ecdsa", "15 done", good, status, body);
+
+    reset_world(-1, 0);
+    crypto_ticks = 80; // an RSA-2048 chain costs the module more
+    status = route(good, body, r);
+    check(r.ok && (r.step_max_ms >= 400), "success_rsa runs clean, its longest step %u ms", r.step_max_ms);
+    golden_file(out, golden, "success_rsa", "15 done", good, status, body);
+
+    const request_t off = { "10.0.0.2", "4433", "tls-spike.test", "0", "none", "1024", "1" };
+    reset_world(-1, 0);
+    status = route(off, body, r);
+    check(r.ok, "verify_off runs clean");
+    golden_file(out, golden, "verify_off", "15 done", off, status, body);
+
+    const char *must_fail[] = { "mismatch", "untrusted", "expired" };
+    for (int i = 0; i < 3; i++) {
+        reset_world(-1, 0);
+        handshake_fail_err = -0x2700; // MBEDTLS_ERR_X509_CERT_VERIFY_FAILED, the same for all three
+        status = route(good, body, r);
+        check(!r.ok && !strcmp(r.stage, "handshake") && (r.echo_sent == 0) && r.have_opened &&
+              (r.opened.time_source == WIFI_TLS_TIME_NIOS) && (r.after.sessions_open == 0),
+              "%s: FAILED in the handshake, no plaintext, and still time_source nios", must_fail[i]);
+        golden_file(out, golden, must_fail[i], "9 handshake_state", good, status, body);
+    }
+
+    reset_world(-1, 0);
+    sntp_now = 0;
+    open_refuse_reason = WIFI_TLS_REASON_NO_TIME;
+    status = route(good, body, r);
+    golden_file(out, golden, "no_time", "6 open (REFUSED, reason NO_TIME)", good, status, body);
+
+    reset_world(-1, 0);
+    open_refuse_reason = WIFI_TLS_REASON_NO_ENTROPY;
+    status = route(good, body, r);
+    golden_file(out, golden, "no_entropy", "6 open (REFUSED, reason NO_ENTROPY)", good, status, body);
+
+    const request_t bad = { "10.0.0.2", "4433", "tls-spike.test", "2", "test", "1024", "1" };
+    reset_world(-1, 0);
+    status = route(bad, body, r);
+    check(status == 400, "bad_param: verify=2 is HTTP 400");
+    golden_file(out, golden, "bad_param", "parse (HTTP 400: verify out of range)", bad, status, body);
+
+    const request_t no_sni = { "10.0.0.2", "4433", NULL, NULL, NULL, "1024", "1" };
+    reset_world(-1, 0);
+    status = route(no_sni, body, r);
+    golden_file(out, golden, "verify_without_sni", "parse (HTTP 400: verify=1 without sni)", no_sni, status, body);
+
+    const request_t bad_host = { "10.0.0", "4433", "tls-spike.test", "1", "test", "1024", "1" };
+    reset_world(-1, 0);
+    status = route(bad_host, body, r);
+    golden_file(out, golden, "bad_param_host", "1 host (now HTTP 400 in parse)", bad_host, status, body);
+
+    reset_world(-1, 0);
+    connect_error = ECONNREFUSED;
+    status = route(good, body, r);
+    golden_file(out, golden, "connect_fail", "4 connect (ECONNREFUSED)", good, status, body);
+
+    struct {
+        const char *stem, *exit_path;
+        int kind, variant;
+        const char *detail;
+    } faults[] = {
+        { "memory_fail", "2 memory", K_MALLOC, 0, "memory" },
+        { "socket_fail", "3 socket", K_SOCKET, 0, "socket" },
+        { "connect_timeout", "4 connect (ETIMEDOUT)", K_CONNECT, 1, "connect" },
+        { "socket_options_fail", "5 socket_options", K_SETSOCKOPT, 0, "socket_options" },
+        { "open_timeout", "6 open (BUSY: no answer)", K_OPEN, 0, "open" },
+        { "open_invalid", "6 open (INVALID answer)", K_OPEN, 2, "open" },
+        { "step_timeout", "7 handshake_step (BUSY: no answer)", K_STEP, 0, "handshake_step" },
+        { "handshake_send_fail", "8 handshake_send", K_SEND, 0, "handshake_send" },
+        { "handshake_closed", "9 handshake_state (CLOSED)", K_STEP, 5, "handshake_state" },
+        { "handshake_eof", "10 handshake_recv (server closed)", K_RECV, 1, "handshake_recv" },
+        { "echo_recv_fail", "12 echo_recv (ECONNRESET)", K_RECV, 0, "echo_recv" },
+        { "echo_silent", "12 echo_recv (ETIMEDOUT: server stops echoing)", K_RECV, 2, "echo_recv" },
+        { "echo_step_fail", "12 echo_step (BUSY: no answer)", K_STEP, 0, "echo_step" },
+        { "echo_send_fail", "12 echo_send", K_SEND, 0, "echo_send" },
+        { "echo_closed", "14 echo_state (CLOSED)", K_STEP, 5, "echo_state" },
+        { "close_fail", "16 close (BUSY)", K_CLOSE, 0, "close" },
+    };
+    for (unsigned i = 0; i < sizeof(faults) / sizeof(faults[0]); i++) {
+        bool found = route_failing(good, faults[i].kind, faults[i].variant, faults[i].detail, body, r, status);
+        check(found, "%s ends at %s", faults[i].stem, faults[i].detail);
+        golden_file(out, golden, faults[i].stem, faults[i].exit_path, good, status, body);
+    }
+
+    reset_world(-1, 0);
+    server_silent = true;
+    status = route(good, body, r);
+    golden_file(out, golden, "handshake_timeout", "10 handshake_recv (ETIMEDOUT: server silent)", good, status, body);
+
+    reset_world(-1, 0);
+    module_chatty = true;
+    status = route(good, body, r);
+    check(r.detail && !strcmp(r.detail, "handshake_timeout"), "handshake_deadline ends at handshake_timeout");
+    golden_file(out, golden, "handshake_deadline", "11 handshake_timeout (15 s, the module never finishes)", good,
+                status, body);
+
+    reset_world(-1, 0);
+    corrupt_echo = true;
+    status = route(good, body, r);
+    golden_file(out, golden, "echo_mismatch", "13 echo_compare", good, status, body);
+
+    // The last STATS failing: the sessions left open are unknown, not none.
+    reset_world(-1, 0);
+    route(good, body, r);
+    int last = event - 1;
+    reset_world(last, 0);
+    route(good, body, r);
+    check((failed_kind == K_STATS) && !r.have_after && (body.find("\"sessions_open_after\" : -1,") != std::string::npos),
+          "when the final STATS fails, sessions_open_after is -1, which the oracle fails");
+
+    // handshake_ms leaves out the STATS after OPEN: the fake takes 3 ticks for it.
+    reset_world(-1, 0);
+    route(good, body, r);
+    check((r.handshake_ms % 5 == 0) && r.ok, "handshake_ms is %u ms on the 5 ms tick", r.handshake_ms);
+}
+
+int main(int argc, char **argv)
 {
     printf("The exits of the TLS spike\n");
     wifi_tls_spike_result_t r;
@@ -737,6 +1076,10 @@ int main(void)
     reset_world(-1, 0);
     wifi_tls_spike("10.0.0.2", 4433, NULL, 0, 0, seed, &r);
     check(r.ok && r.echo_ok && (r.echo_sent == 0) && broken(r, false).empty(), "a run without echo");
+
+    if (argc == 3) {
+        goldens(argv[1], argv[2]);
+    }
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

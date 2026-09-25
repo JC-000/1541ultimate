@@ -13,6 +13,8 @@ PATH_SW = ../../../../software
 TEST    = $(PATH_SW)/test/wifi_tls
 
 VPATH   = $(TEST)/stub $(TEST) $(PATH_SW)/io/wifi $(PATH_SW)/io/uart $(PATH_SW)/wifi/raw_u64/main
+# The route's JSON, rendered by the firmware's own classes for the golden files.
+JSON_PATH = $(PATH_SW)/api $(PATH_SW)/components $(PATH_SW)/io/stream $(PATH_SW)/system
 
 CXX     = g++
 CPPOPTIONS = -std=gnu++11 -g -O0 -Wall -Wextra -Wno-unused-parameter -DNIOS=1 -DU64=1 \
@@ -20,12 +22,13 @@ CPPOPTIONS = -std=gnu++11 -g -O0 -Wall -Wextra -Wno-unused-parameter -DNIOS=1 -D
 
 TLS_SRCS   = wifi_tls_test.cc wifi_dedicated_test.cc m1_oracle.cc world.cc \
              wifi_tls.cc wifi_dedicated.cc wifi_random.cc
-SPIKE_SRCS = spike_test.cc wifi_tls_spike.cc
+SPIKE_SRCS = spike_test.cc wifi_tls_spike.cc wifi_tls_json.cc json.cc mystring.cc small_printf.cc
+GOLDEN     = ../../../../tests/e2e/io/wifi/golden
 
 TLS_OBJS   = $(addprefix $(OUTPUT)/tls/, $(TLS_SRCS:%.cc=%.o))
 SPIKE_OBJS = $(addprefix $(OUTPUT)/spike/, $(SPIKE_SRCS:%.cc=%.o))
 
-.PHONY: all test clean
+.PHONY: all test golden clean
 
 all: $(RESULT)/wifitls $(RESULT)/tlsspike
 
@@ -43,12 +46,27 @@ $(OUTPUT)/tls/wifi_dedicated.o: $(PATH_SW)/io/wifi/wifi_dedicated.cc
 
 $(OUTPUT)/spike/%.o: %.cc
 	@mkdir -p $(OUTPUT)/spike
-	$(CXX) $(CPPOPTIONS) -DTLS_SPIKE -c -o $@ $<
+	$(CXX) $(CPPOPTIONS) -DTLS_SPIKE -DRUNS_ON_PC $(addprefix -idirafter , $(JSON_PATH)) -c -o $@ $<
 
 # The spike's allocation goes to spike_test.cc, which can then make it fail.
 $(OUTPUT)/spike/wifi_tls_spike.o: wifi_tls_spike.cc
 	@mkdir -p $(OUTPUT)/spike
 	$(CXX) $(CPPOPTIONS) -DTLS_SPIKE -Dmalloc=spike_malloc -Dfree=spike_free -c -o $@ $<
+
+$(OUTPUT)/spike/%.o: $(PATH_SW)/api/%.cc
+	@mkdir -p $(OUTPUT)/spike
+	$(CXX) $(CPPOPTIONS) -DRUNS_ON_PC $(addprefix -I, $(JSON_PATH)) -c -o $@ $<
+
+$(OUTPUT)/spike/%.o: $(PATH_SW)/components/%.cc
+	@mkdir -p $(OUTPUT)/spike
+	$(CXX) $(CPPOPTIONS) -DRUNS_ON_PC $(addprefix -I, $(JSON_PATH)) -c -o $@ $<
+
+# The firmware's formatter, which StreamRamFile renders the JSON with. The rest
+# of that file would replace the host's printf family, so it is renamed away.
+FW_STDIO = printf puts putchar sprintf snprintf vsprintf vsnprintf sscanf
+$(OUTPUT)/spike/%.o: $(PATH_SW)/system/%.cc
+	@mkdir -p $(OUTPUT)/spike
+	$(CXX) $(CPPOPTIONS) -DRUNS_ON_PC $(foreach f,$(FW_STDIO),-D$(f)=fw_$(f)) $(addprefix -I, $(JSON_PATH)) -c -o $@ $<
 
 $(RESULT)/wifitls: $(TLS_OBJS)
 	@mkdir -p $(RESULT)
@@ -58,9 +76,17 @@ $(RESULT)/tlsspike: $(SPIKE_OBJS)
 	@mkdir -p $(RESULT)
 	$(CXX) -o $@ $(SPIKE_OBJS)
 
+# The spike test also renders the route's JSON for each exit path into
+# $(OUTPUT)/golden and checks it against the files in $(GOLDEN), which
+# `make golden` rewrites.
 test: all
 	@$(RESULT)/wifitls
-	@$(RESULT)/tlsspike
+	@mkdir -p $(OUTPUT)/golden
+	@$(RESULT)/tlsspike $(OUTPUT)/golden $(GOLDEN)
+
+golden: all
+	@mkdir -p $(GOLDEN)
+	@$(RESULT)/tlsspike $(GOLDEN) $(GOLDEN)
 
 clean:
 	@rm -rf $(OUTPUT) $(RESULT)

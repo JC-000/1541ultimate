@@ -163,9 +163,11 @@ typedef struct {
     int handshake_steps;
     int resends;         // steps sent again after AGAIN
     uint32_t handshake_ms; // from OPEN to ESTABLISHED, on this side's tick
-    bool have_before, have_peak, have_after;
+    uint32_t step_max_ms;  // the longest single STEP round trip, on this side's tick
+    bool have_before, have_opened, have_peak, have_after;
     int stats_error;     // the last STATS call that failed, if any
     wifi_tls_stats_t before; // the module, before the socket is opened
+    wifi_tls_stats_t opened; // the session, just after OPEN: its clock and where that came from
     wifi_tls_stats_t peak;   // the session, just after ESTABLISHED
     wifi_tls_stats_t after;  // the module, after the session is closed
     uint32_t unix_time;  // what OPEN carried
