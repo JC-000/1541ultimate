@@ -106,7 +106,8 @@ STAGES = ("connect", "open", "handshake", "echo", "close", "done")
 TIME_SOURCES = ("nios", "sntp", "none")
 # The section 9 refusal is "a distinct error text"; the text itself is the Nios
 # lane's to choose, so the suite asks only that it speaks of time.
-NO_TIME_WORDS = ("time", "clock")
+NO_TIME = re.compile(r"\b(time|clock)\b", re.IGNORECASE)
+TIMED_OUT = re.compile(r"time\s*-?\s*out|timed\s+out", re.IGNORECASE)
 # The device's clock may be off; this is only where a WARN starts.
 CLOCK_SKEW_WARN_SECONDS = 86400
 # mbedTLS 3.6.0 has no public getter for the negotiated group, so the device
@@ -317,6 +318,15 @@ def spike(rest: RestClient, route: str, params: dict, timeout: float) -> tuple[i
     except Failure as exc:
         raise Failure(f"no answer to PUT {route} within {timeout:.0f}s; not re-issued, "
                       f"because the route is not idempotent ({exc})") from exc
+    return code, classify_reply(route, code, body, params)
+
+
+def classify_reply(route: str, code: int, body: bytes, params: dict) -> dict:
+    """The reply's JSON object, or the Failure that names what the answer means.
+
+    Split from spike() so that the golden contract test (tls_spike_sim.py)
+    classifies the Nios lane's recorded answers exactly as a rig run would.
+    """
     if code == 404 and not body.strip():
         # MicroHttpServer answers a route nobody registered with exactly this:
         # execute_api_v1 finds no command and returns -1 (software/api/routes.cc,
@@ -337,7 +347,7 @@ def spike(rest: RestClient, route: str, params: dict, timeout: float) -> tuple[i
                       f"{text[:200]!r}") from exc
     if not isinstance(data, dict):
         raise Failure(f"PUT {route} answered HTTP {code} with JSON that is not an object")
-    return code, data
+    return data
 
 
 def run_scenario(rest: RestClient, args, server: Server, scenario: Scenario) -> Outcome:
@@ -542,6 +552,20 @@ def judge_failed(args, outcome: Outcome, manifest: dict) -> tuple[list[str], str
     return problems, warning
 
 
+def refusal_kind(error: str) -> str | None:
+    """'time' or 'entropy' for the two section 12 refusals, else None.
+
+    A timeout is not a time refusal: "open timeout" must not read as "no
+    trusted time", because the golden open_timeout reply would then pass as a
+    correct refusal.
+    """
+    if "entropy" in error.lower():
+        return "entropy"
+    if NO_TIME.search(error) and not TIMED_OUT.search(error):
+        return "time"
+    return None
+
+
 def judge_open_refused(outcome: Outcome) -> list[str]:
     """Verify on, and OPEN refused: no trustworthy time (section 9) or no entropy.
 
@@ -558,10 +582,12 @@ def judge_open_refused(outcome: Outcome) -> list[str]:
         problems.append(f"device says ok={device.get('ok')!r}, stage {device.get('stage')!r}; "
                         "with verify on and no trusted time it must fail at 'open'")
     error = str(device.get("error", ""))
-    no_entropy = "entropy" in error.lower()
-    if not no_entropy and not any(word in error.lower() for word in NO_TIME_WORDS):
-        problems.append(f"device error {error!r} says neither time nor entropy: the "
-                        "section 12 refusals are distinct texts")
+    kind = refusal_kind(error)
+    if kind is None:
+        # Not a refusal at all (an OPEN timeout, a module error): the scenario
+        # failed, and nothing says the device broke the fail-closed rule.
+        return [f"OPEN failed without a section 12 refusal: {error!r}", *problems]
+    no_entropy = kind == "entropy"
     if device.get("time_source") != "none" and not no_entropy:
         problems.append(f"OPEN refused for time, but time_source is "
                         f"{device.get('time_source')!r}")

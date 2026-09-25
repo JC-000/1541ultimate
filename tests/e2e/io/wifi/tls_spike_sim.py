@@ -446,42 +446,61 @@ def expected_ok(mode: str, result: dict) -> tuple[bool, str]:
 
 # ------------------------------------------------------------ golden replies --
 #
-# Amendment 9 E: the Nios lane's host harness writes the route's REAL JSON for
-# every exit path into tests/e2e/io/wifi/golden/. Each reply is fed through
-# the suite's own judge_outcome, beside a real server record for its chain,
-# made by this host's TLS client against the suite's echo server. Only the
-# fields that depend on the live server (tls_version and ciphersuite) are
-# patched, plus esp_time (set to now when it is nonzero), because the harness
-# ran at another time.
+# Amendments 9 E and 10 (M2-SPEC.md sections 17 and 19): the Nios lane's host
+# harness records the route's REAL answer for every exit path, wrapped as
+#   {stem, exit_path, request{host, port, sni, verify, ca, echo, seed},
+#    http_status, response}
+# with response null for an empty body. Each file is classified by the suite's
+# own classify_reply and judged by its own judge_outcome, beside a real server
+# record for its chain, made by this host's TLS client against the suite's echo
+# server with the request's seed and echo count. Only fields that depend on the
+# live server are patched, and every patch is printed.
 #
 # stem -> (scenario kind, chain, verify, what the server sees, expected verdict)
-#   server: "tls" (a full echo), "reject" (the host client with verify on
-#   against a must-fail chain), or "none" (no connection)
+#   server: "tls" (a clean echo), "flip" (the server flips the last echoed
+#   byte), "reject" (the host client, verifying, refuses the chain), or "none"
+#   (no connection)
 #   verdict: "pass" (no problems), "precondition" (a correct refusal the rig
-#   cannot run past), or "fail" (a real FAIL, and never a "fail-closed rule
-#   broken" one)
+#   cannot run past), or "fail" (a FAIL that is neither a precondition nor a
+#   "fail-closed rule broken")
 GOLDEN_EXPECT = {
-    "success": ("established", "ecdsa", 1, "tls", "pass"),
+    "success_ecdsa": ("established", "ecdsa", 1, "tls", "pass"),
+    "success_rsa": ("established", "rsa", 1, "tls", "pass"),
+    "verify_off": ("established", "mismatch", 0, "tls", "pass"),
     "mismatch": ("failed", "mismatch", 1, "reject", "pass"),
     "untrusted": ("failed", "untrusted", 1, "reject", "pass"),
     "expired": ("failed", "expired", 1, "reject", "pass"),
-    "verify_off": ("established", "mismatch", 0, "tls", "pass"),
     "no_time": ("established", "ecdsa", 1, "none", "precondition"),
+    "bad_param": ("established", "ecdsa", 1, "none", "fail"),
     "connect_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "open_timeout": ("established", "ecdsa", 1, "none", "fail"),
     "handshake_timeout": ("established", "ecdsa", 1, "none", "fail"),
-    "echo_timeout": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_mismatch": ("echo-broken", "ecdsa", 1, "flip", "pass"),
 }
+GOLDEN_ENV = "TLS_SPIKE_GOLDEN"
+# The fields of a golden reply that depend on the server it met, not on the
+# route's code, and so are taken from the live record instead. esp_time is the
+# clock at recording time; it is moved to now only when it was nonzero.
+LIVE_FIELDS = ("tls_version", "ciphersuite")
 
 
-def golden_case(stem: str, reply: dict, work: Path) -> tuple[bool, str]:
+def golden_case(stem: str, wrapped: dict, work: Path) -> tuple[bool, str, list[str]]:
     import tls_spike_test as suite
     kind, chain, verify, seen, want = GOLDEN_EXPECT[stem]
+    request = wrapped.get("request") or {}
+    notes: list[str] = []
+    if wrapped.get("stem") != stem:
+        return False, f"file {stem}.json says stem {wrapped.get('stem')!r}", notes
+    if int(request.get("verify", -1)) != verify:
+        return False, (f"request verify={request.get('verify')!r}, but {stem} is a verify="
+                       f"{verify} path"), notes
+    n = int(request.get("echo") or 0) or suite.DEFAULT_ECHO_BYTES
+    seed = int(request.get("seed") or 0)
     manifest = pki.generate(pki.pki_dir())
-    n = reply.get("echo_sent") or 3000
-    seed = 12345
     records: list[dict] = []
     if seen != "none":
-        server = suite.Server(suite.ServerConfig(chain), pki.pki_dir(),
+        mangle = "flip-last" if seen == "flip" else "none"
+        server = suite.Server(suite.ServerConfig(chain, mangle=mangle), pki.pki_dir(),
                               work / f"golden-{stem}.jsonl", n)
         server.start()
         try:
@@ -490,20 +509,34 @@ def golden_case(stem: str, reply: dict, work: Path) -> tuple[bool, str]:
             records = server.new_records(suite.RECORD_WAIT, stray=0.2)
         finally:
             server.stop()
-    device = dict(reply)
-    if records and records[0]["handshake_ok"]:
-        device["tls_version"] = records[0]["negotiated"]["version"]
-        device["ciphersuite"] = records[0]["negotiated"]["cipher_suite"]
-    if isinstance(device.get("esp_time"), int) and device["esp_time"]:
-        device["esp_time"] = int(time.time())
-    scenario = suite.Scenario(stem, stem, suite.ServerConfig(chain), verify=verify, expect=kind)
-    outcome = suite.Outcome(scenario, seed, 200, device, records)
+    response = wrapped.get("response")
+    body = b"" if response is None else json.dumps(response).encode()
 
     class Args:
         sni = pki.SNI
         echo_bytes = n
 
-    problems, warning = suite.judge_outcome(Args, outcome, manifest, positives_ok=True)
+    scenario = suite.Scenario(stem, stem, suite.ServerConfig(chain), verify=verify, expect=kind)
+    try:
+        device = suite.classify_reply(suite.ROUTE, int(wrapped.get("http_status", 0)), body,
+                                      request)
+    except suite.Failure as exc:
+        problems, warning = [str(exc)], None
+    else:
+        device = dict(device)
+        if records and records[0]["handshake_ok"]:
+            live = {"tls_version": records[0]["negotiated"]["version"],
+                    "ciphersuite": records[0]["negotiated"]["cipher_suite"]}
+            for name in LIVE_FIELDS:
+                if device.get(name) not in (0, None) and device.get(name) != live[name]:
+                    notes.append(f"patched {name}: {device.get(name)!r} -> {live[name]!r}")
+                    device[name] = live[name]
+        if isinstance(device.get("esp_time"), int) and device["esp_time"]:
+            now = int(time.time())
+            notes.append(f"patched esp_time: {device['esp_time']} -> {now}")
+            device["esp_time"] = now
+        outcome = suite.Outcome(scenario, seed, int(wrapped["http_status"]), device, records)
+        problems, warning = suite.judge_outcome(Args, outcome, manifest, positives_ok=True)
     first = problems[0] if problems else ""
     if want == "pass":
         ok = not problems
@@ -512,28 +545,32 @@ def golden_case(stem: str, reply: dict, work: Path) -> tuple[bool, str]:
     else:
         ok = bool(problems) and not first.startswith(("precondition", "fail-closed rule"))
     said = first or warning or "no problems"
-    return ok, f"expected {want}: {said[:170]}"
+    return ok, f"[{wrapped.get('exit_path')}] expected {want}: {said[:160]}", notes
 
 
 def run_golden(directory: Path, work: Path) -> bool:
-    files = sorted(directory.glob("*.json"))
-    if not files:
-        print(f"GOLDEN NOT RUN  no files in {directory} (amendment 9 E is not yet exercised)")
+    found = {path.stem: path for path in sorted(directory.glob("*.json"))}
+    if not found:
+        print(f"GOLDEN NOT RUN  no files in {directory} (amendment 10 is not yet exercised)")
         return False
     all_ok = True
-    for path in files:
-        stem = path.stem
+    for stem in sorted(set(found) | set(GOLDEN_EXPECT)):
         if stem not in GOLDEN_EXPECT:
-            print(f"UNEXPECTED   golden {stem:18} no expected verdict registered for it")
+            print(f"UNEXPECTED   golden {stem:18} a file with no expected verdict in GOLDEN_EXPECT")
+            all_ok = False
+            continue
+        if stem not in found:
+            print(f"UNEXPECTED   golden {stem:18} a required stem with no file")
             all_ok = False
             continue
         try:
-            reply = json.loads(path.read_text())
-            ok, why = golden_case(stem, reply, work)
+            ok, why, notes = golden_case(stem, json.loads(found[stem].read_text()), work)
         except Exception as exc:  # noqa: BLE001
-            ok, why = False, f"could not judge it: {exc!r}"
+            ok, why, notes = False, f"could not judge it: {exc!r}", []
         all_ok &= ok
         print(f"{'AS EXPECTED' if ok else 'UNEXPECTED '}  golden {stem:18} {why}")
+        for note in notes:
+            print(f"      {note}")
     return all_ok
 
 
@@ -543,8 +580,10 @@ def main() -> int:
     parser.add_argument("--repeat", type=int, default=2)
     parser.add_argument("--jobs", type=int, default=6)
     parser.add_argument("--keep", help="write every run's output under this directory")
-    parser.add_argument("--golden-dir", default=str(HERE / "golden"),
-                        help="the Nios lane's golden route replies (amendment 9 E)")
+    parser.add_argument("--golden-dir",
+                        default=os.environ.get(GOLDEN_ENV) or str(HERE / "golden"),
+                        help=f"the Nios lane's golden route replies (amendment 10; default "
+                             f"${GOLDEN_ENV}, else golden/ beside this file)")
     parser.add_argument("--no-golden", action="store_true",
                         help="skip the golden contract test, and say so")
     parser.add_argument("--golden-only", action="store_true")
