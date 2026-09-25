@@ -32,6 +32,7 @@ whose hash is checked against the committed registry before and after the run.
 """
 
 import argparse
+import calendar
 import hashlib
 import json
 import re
@@ -62,7 +63,9 @@ import tls_spike_predictions as predictions  # noqa: E402
 
 SUITE = "tls_spike_test"
 
-# The route and the reply are M2-SPEC.md section 7 (amendment 1), exactly.
+# The route and the reply are M2-SPEC.md section 7 (amendment 1), exactly, with
+# time_source and esp_time from section 9 (amendment 3) and the group ruling of
+# section 10 (amendment 4).
 ROUTE = "/v1/machine:tlsspike"
 
 # The device's JSON, field by field, and each field's type. A dotted key reads
@@ -80,16 +83,29 @@ FIELDS = {
     "echo_received": "echo_received",
     "echo_ok": "echo_ok",
     "steps": "steps",
+    "time_source": "time_source",
+    "esp_time": "esp_time",
     "heap_free_before": "stats_before.heap_free",
     "heap_free_after": "stats_after.heap_free",
     "heap_free_peak": "stats_peak.heap_free",
+    "stack_free_peak": "stats_peak.stack_free",
 }
 TYPES = {"ok": bool, "stage": str, "error": str, "handshake_ms": int, "handshake_us": int,
          "tls_version": int, "ciphersuite": int, "group": int, "echo_sent": int,
-         "echo_received": int, "echo_ok": bool, "steps": int}
+         "echo_received": int, "echo_ok": bool, "steps": int, "time_source": str,
+         "esp_time": int}
 STATS_BLOCKS = ("stats_before", "stats_after", "stats_peak")
 STATS_KEYS = ("heap_free", "heap_min_ever", "largest_block")
 STAGES = ("connect", "open", "handshake", "echo", "close", "done")
+TIME_SOURCES = ("nios", "sntp", "none")
+# The section 9 refusal is "a distinct error text"; the text itself is the Nios
+# lane's to choose, so the suite asks only that it speaks of time.
+NO_TIME_WORDS = ("time", "clock")
+# The device's clock may be off; this is only where a WARN starts.
+CLOCK_SKEW_WARN_SECONDS = 86400
+# mbedTLS 3.6.0 has no public getter for the negotiated group, so the device
+# reports 0, meaning unknown (section 10). The group is taken from the server.
+GROUP_UNKNOWN = 0
 
 # mbedTLS returns this from the handshake for every certificate verification
 # failure: the X.509 verify sets flags, and any flag makes it fail with
@@ -100,6 +116,7 @@ X509_CERT_VERIFY_FAILED = -0x2700
 ERROR_NUMBER = re.compile(r"-?0x[0-9a-fA-F]+|-?\b\d{3,}\b")
 
 TLS13 = 0x0304
+EXPIRED_NOT_AFTER = calendar.timegm(time.strptime(pki.EXPIRED_NOT_AFTER, "%Y%m%d%H%M%SZ"))
 
 # The echo payload, generated on the Nios from (seed, n), recomputed here so the
 # server's hash of what it received is checked against the spec, not against
@@ -148,6 +165,9 @@ def contract_problems(device: dict) -> list[str]:
             problems.append(f"{block} lacks integer {wrong}")
     if device.get("stage") not in STAGES:
         problems.append(f"stage {device.get('stage')!r} is not one of {STAGES}")
+    if device.get("time_source") not in TIME_SOURCES:
+        problems.append(f"time_source {device.get('time_source')!r} is not one of "
+                        f"{TIME_SOURCES}")
     return problems
 
 
@@ -343,9 +363,9 @@ def judge_established(args, outcome: Outcome) -> list[str]:
     if device["ciphersuite"] != negotiated["cipher_suite"]:
         problems.append(f"device reports cipher suite {field_of(device, 'ciphersuite')!r}; "
                         f"the ServerHello selected {negotiated['cipher_suite']:#06x}")
-    if device["group"] != negotiated["group"]:
-        problems.append(f"device reports group {field_of(device, 'group')!r}; the "
-                        f"ServerHello selected {negotiated['group']:#06x}")
+    if device["group"] not in (GROUP_UNKNOWN, negotiated["group"]):
+        problems.append(f"device reports group {device['group']!r}; the ServerHello "
+                        f"selected {negotiated['group']:#06x} (0, unknown, would be accepted)")
     if negotiated["group"] not in scenario.allowed_groups:
         problems.append(f"the server selected group {negotiated['group']:#06x}, outside "
                         f"{[hex(g) for g in scenario.allowed_groups]}")
@@ -447,6 +467,13 @@ def judge_failed(args, outcome: Outcome, manifest: dict) -> tuple[list[str], str
                         "MBEDTLS_ERR_X509_CERT_VERIFY_FAILED (-0x2700 = -9984)")
     elif not numbers and "verif" not in error.lower():
         warning = f"device error {error!r} names no code and no verification failure"
+    if scenario.server.chain == "expired":
+        # Expiry is only a fact relative to the clock the device verified with.
+        if device["esp_time"] <= EXPIRED_NOT_AFTER:
+            problems.append(f"uninterpretable: the device verified at esp_time="
+                            f"{device['esp_time']}, which is not past the certificate's "
+                            f"notAfter ({EXPIRED_NOT_AFTER}), so its rejection is not about "
+                            "expiry")
     if record["handshake_ok"]:
         problems.append("the server completed the handshake")
     if record["app_in"] or record["app_out"]:
@@ -466,6 +493,52 @@ def judge_failed(args, outcome: Outcome, manifest: dict) -> tuple[list[str], str
         problems.append(f"the device rejected the certificate with {alert}, expected "
                         f"{expected_alert}: it failed, but for another reason")
     return problems, warning
+
+
+def judge_no_time(outcome: Outcome) -> list[str]:
+    """Verify on, and the device says it has no trustworthy time (section 9).
+
+    The only correct behaviour is to refuse at OPEN, with an error that speaks
+    of time, before any TLS byte leaves: never verify with a 1970 clock. The
+    Nios may or may not have opened the TCP socket first, so zero connections
+    or one that carried nothing are both right. When the rule holds, the
+    scenario still cannot run, and that is reported as the rig precondition it
+    is, never as a pass.
+    """
+    device = outcome.device
+    problems = contract_problems(device)
+    if device.get("ok") is not False or device.get("stage") != "open":
+        problems.append(f"device says ok={device.get('ok')!r}, stage {device.get('stage')!r}; "
+                        "with verify on and no trusted time it must fail at 'open'")
+    error = str(device.get("error", ""))
+    if not any(word in error.lower() for word in NO_TIME_WORDS):
+        problems.append(f"device error {error!r} does not say the refusal is about time")
+    for record in outcome.server:
+        if record["wire"]["client_hellos"] or record["tcp_in"]:
+            problems.append(f"the server received {record['tcp_in']} bytes (a ClientHello: "
+                            f"{bool(record['wire']['client_hellos'])}) from a device with no "
+                            "trusted time")
+        if not record["fin"]:
+            problems.append("the device left its TCP connection open after refusing")
+    if len(outcome.server) > 1:
+        problems.append(f"the server logged {len(outcome.server)} connections")
+    if problems:
+        return ["fail-closed rule broken (section 9): " + problems[0], *problems[1:]]
+    return ["precondition: the device has no trusted time (time_source 'none') and correctly "
+            "refused at OPEN (section 9 held), so this verify-on scenario could not run; give "
+            "the Nios a clock (RTC or SNTP) and rerun"]
+
+
+def clock_warning(outcome: Outcome) -> str | None:
+    """The device's esp_time far from this host's clock: reported, not failed."""
+    esp_time = outcome.device.get("esp_time")
+    if outcome.device.get("time_source") == "none" or not isinstance(esp_time, int):
+        return None
+    skew = esp_time - time.time()
+    if abs(skew) > CLOCK_SKEW_WARN_SECONDS:
+        return (f"esp_time={esp_time} is {skew / 86400:+.1f} days from this host's clock "
+                f"(time_source {outcome.device.get('time_source')!r})")
+    return None
 
 
 def judge_echo_broken(args, outcome: Outcome) -> list[str]:
@@ -611,10 +684,15 @@ def scenarios(repeat: int) -> list[Scenario]:
     return listed
 
 
-def measurement(outcome: Outcome) -> dict:
+def measurement(args, outcome: Outcome) -> dict:
     device = outcome.device
     record = outcome.server[0]
     return {
+        "seed": outcome.seed,
+        "echo_payload_matches_seed": not payload_problems(args, outcome, record),
+        "stack_free_peak": field_of(device, "stack_free_peak", False),
+        "esp_time": field_of(device, "esp_time", False),
+        "time_source": field_of(device, "time_source", False),
         "scenario": outcome.scenario.key,
         "chain": outcome.scenario.server.chain,
         "handshake_us": field_of(device, "handshake_us", False),
@@ -623,7 +701,10 @@ def measurement(outcome: Outcome) -> dict:
         "heap_free_after": field_of(device, "heap_free_after", False),
         "heap_free_peak": field_of(device, "heap_free_peak", False),
         "echo_ok": field_of(device, "echo_ok", False),
-        "echo_intact_server": (record["app_in"] == record["app_out"]
+        # Intact per the server: it received the section 7 payload for this
+        # seed, and echoed exactly that.
+        "echo_intact_server": (not payload_problems(args, outcome, record)
+                               and record["app_in"] == record["app_out"]
                                and record["app_in_sha256"] == record["app_out_sha256"]),
         "server_handshake_ms": record["server_handshake_ms"],
         "tcp_in": record["tcp_in"], "tcp_out": record["tcp_out"],
@@ -681,9 +762,12 @@ def run(args) -> tuple[bool, str]:
 
         warning = None
         try:
-            if scenario.expect == "established":
+            if scenario.verify and outcome.device.get("time_source") == "none":
+                problems = judge_no_time(outcome)
+            elif scenario.expect == "established":
                 problems = judge_established(args, outcome)
-                warning = None if problems else timing_warning(outcome)
+                warning = None if problems else (timing_warning(outcome)
+                                                 or clock_warning(outcome))
             elif scenario.expect == "echo-broken":
                 problems = judge_echo_broken(args, outcome)
             else:
@@ -715,8 +799,9 @@ def run(args) -> tuple[bool, str]:
         if (scenario.verify and scenario.expect == "established" and len(outcome.server) == 1
                 and outcome.server[0]["handshake_ok"]):
             positives_ok = True
-        if scenario.measured and outcome.server and outcome.server[0]["handshake_ok"]:
-            measured.append(measurement(outcome))
+        if (scenario.measured and len(outcome.server) == 1
+                and outcome.server[0]["handshake_ok"]):
+            measured.append(measurement(args, outcome))
 
     leak_check(measured)
     p1 = json.loads(Path(args.p1_sizes).read_text()) if args.p1_sizes else None
@@ -742,7 +827,7 @@ def passed_summary(outcome: Outcome) -> str:
     if outcome.scenario.expect == "echo-broken":
         return (f"server {MANGLED[outcome.scenario.server.mangle]} byte "
                 f"{record.get('mangled_at')}, device said echo_ok=false")
-    return (f"TLS 1.3 {record['negotiated']['cipher_suite']:#06x}, group "
+    return (f"TLS 1.3 {record['negotiated']['cipher_suite']:#06x}, server group "
             f"{record['negotiated']['group']:#06x}"
             f"{' after HRR' if record['negotiated']['hrr'] else ''}, "
             f"{record['app_in']} B echoed")
@@ -755,6 +840,10 @@ def leak_check(measured: list[dict]) -> None:
     check_start("heap_free after each session does not drift down")
     drop = after[0] - after[-1]
     detail(f"heap_free after each session: {after}")
+    stacks = [m["stack_free_peak"] for m in measured if isinstance(m["stack_free_peak"], int)]
+    if stacks:
+        detail(f"dispatcher stack_free at peak (section 10, counts against P3): lowest "
+               f"{min(stacks)} B over {len(stacks)} sessions")
     if drop > 2048:
         check_warn(f"{drop} bytes less free after the last session than after the first")
     else:

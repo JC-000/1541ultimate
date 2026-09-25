@@ -60,7 +60,8 @@ MODES = {
     "fallback-reports-failed": ("reports FAILED honestly, but reconnects with verification "
                                 "off behind the report and sends the echo anyway",
                                 {"d-mismatch", "d-untrusted", "d-expired"}),
-    "lie-group": ("reports X25519 whatever the ServerHello said", {"c-p256"}),
+    "lie-group": ("reports X25519 (29) whatever the ServerHello said; a correct device "
+                  "reports 0, unknown (section 10)", {"c-p256"}),
     "echo-corrupt-honest": ("flips a byte of the echo on the way in, and says so",
                             {"a", "b", "c-x25519", "c-p256", "e-verify-off"}),
     "echo-corrupt-liar": ("flips a byte of the echo on the way in, and says echo_ok anyway",
@@ -75,9 +76,17 @@ MODES = {
     "no-test-ca": ("ca=test loads nothing: every verify-on handshake fails",
                    {"a", "b", "c-x25519", "c-p256", "echo-flip", "echo-short",
                     "d-mismatch", "d-untrusted", "d-expired"}),
-    "wrong-payload": ("ignores the seed and sends its own pattern, which it compares honestly",
+    "wrong-payload": ("ignores the seed and sends its own pattern: echo_ok is true, but the "
+                      "server received the wrong bytes",
                       {"a", "b", "c-x25519", "c-p256", "echo-flip", "echo-short",
                        "e-verify-off"}),
+    "no-time-correct": ("no trusted time (time_source none): refuses verify-on at OPEN "
+                        "without sending a byte, as section 9 requires",
+                        {"a", "b", "c-x25519", "c-p256", "echo-flip", "echo-short",
+                         "d-mismatch", "d-untrusted", "d-expired"}),
+    "no-time-verifies": ("reports time_source none, but verifies and runs anyway",
+                         {"a", "b", "c-x25519", "c-p256", "echo-flip", "echo-short",
+                          "d-mismatch", "d-untrusted", "d-expired"}),
     "fast-clock": ("reports handshake_ms of 1 while the server watched tens of ms; this is "
                    "a WARN by design, because a busy host inflates the server's window",
                    set()),
@@ -86,6 +95,14 @@ MODES = {
 
 # Modes whose deviation the suite can only flag, and the scenarios that must
 # carry the WARN.
+# Modes whose failures must carry this text, where the set of failed scenarios
+# alone cannot tell two fakes apart.
+MUST_SAY = {
+    "no-time-correct": "precondition: the device has no trusted time",
+    "no-time-verifies": "fail-closed rule broken",
+    "wrong-payload": "not the payload for seed",
+}
+
 MUST_WARN = {
     "no-alert": {"d-mismatch", "d-untrusted", "d-expired"},
     "fast-clock": {"a", "b", "c-x25519", "c-p256", "e-verify-off"},
@@ -210,12 +227,21 @@ def run_spike(mode: str, query: dict) -> dict:
     if mode == "no-test-ca":
         cafile = pki.pki_dir() / "untrusted-root" / "root.pem"
     effective_verify = verify and mode != "verify-ignored"
-    stats = {"heap_free": 180000, "heap_min_ever": 120000, "largest_block": 90000}
+    stats = {"heap_free": 180000, "heap_min_ever": 120000, "largest_block": 90000,
+             "state": 0, "sessions_open": 0, "stack_free": 2600}
+    no_time = mode.startswith("no-time")
     result = {"ok": False, "stage": "connect", "error": "", "steps": 0,
+              "time_source": "none" if no_time else "nios",
+              "esp_time": 0 if no_time else int(time.time()),
               "handshake_ms": 0, "handshake_us": 0, "tls_version": 0, "ciphersuite": 0,
               "group": 0, "echo_sent": 0, "echo_received": 0, "echo_ok": False,
               "stats_before": dict(stats), "stats_after": dict(stats),
               "stats_peak": dict(stats, heap_free=180000 - 46 * 1024)}
+    if mode == "no-time-correct" and verify:
+        # The Nios opened the socket before OPEN refused; nothing is sent.
+        socket.create_connection((host, port), timeout=READ_TIMEOUT).close()
+        result.update(stage="open", error="TLS open refused: no trusted time for verification")
+        return result
     started = time.monotonic()
     session = FakeSession(mode, host, port, sni, effective_verify, cafile)
     reason = session.handshake()
@@ -252,9 +278,7 @@ def run_spike(mode: str, query: dict) -> dict:
 def fill_success(result: dict, session: FakeSession, n: int, echo_ok: bool,
                  handshake_s: float, received: int | None = None) -> None:
     final = session.negotiated()
-    group = final.get("group")
-    if session.mode == "lie-group":
-        group = 0x001D
+    group = 0x001D if session.mode == "lie-group" else 0
     result.update({
         "ok": echo_ok, "stage": "done" if echo_ok else "echo",
         "error": "" if echo_ok else "echo mismatch",
@@ -349,9 +373,11 @@ def expected_ok(mode: str, result: dict) -> tuple[bool, str]:
     ok = result["exit"] != 0 if must_fail else result["exit"] == 0
     warned = {k for k, v in result["verdicts"].items() if any(x.startswith("WARN") for x in v)}
     missing = MUST_WARN.get(mode, set()) - warned
-    return (ok and failed == must_fail and not missing,
+    said = MUST_SAY.get(mode, "") in result["stdout"]
+    return (ok and failed == must_fail and not missing and said,
             f"exit {result['exit']}, failed {sorted(failed)}, expected {sorted(must_fail)}"
-            + (f", no WARN on {sorted(missing)}" if missing else ""))
+            + (f", no WARN on {sorted(missing)}" if missing else "")
+            + ("" if said else f", never said {MUST_SAY[mode]!r}"))
 
 
 def main() -> int:
