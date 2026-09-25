@@ -75,8 +75,20 @@ MODES = {
     "no-test-ca": ("ca=test loads nothing: every verify-on handshake fails",
                    {"a", "b", "c-x25519", "c-p256", "echo-flip", "echo-short",
                     "d-mismatch", "d-untrusted", "d-expired"}),
-    "fast-clock": ("reports handshake_ms smaller than the server saw", {"a", "b", "c-x25519",
-                                                                        "c-p256", "e-verify-off"}),
+    "wrong-payload": ("ignores the seed and sends its own pattern, which it compares honestly",
+                      {"a", "b", "c-x25519", "c-p256", "echo-flip", "echo-short",
+                       "e-verify-off"}),
+    "fast-clock": ("reports handshake_ms of 1 while the server watched tens of ms; this is "
+                   "a WARN by design, because a busy host inflates the server's window",
+                   set()),
+}
+
+
+# Modes whose deviation the suite can only flag, and the scenarios that must
+# carry the WARN.
+MUST_WARN = {
+    "no-alert": {"d-mismatch", "d-untrusted", "d-expired"},
+    "fast-clock": {"a", "b", "c-x25519", "c-p256", "e-verify-off"},
 }
 
 
@@ -184,15 +196,24 @@ class FakeSession:
 LEAKED: list[socket.socket] = []
 
 
+def payload_for(seed: int, n: int) -> bytes:
+    """M2-SPEC.md section 7, written out again rather than imported from the suite."""
+    return bytes(((((seed + i) & 0xFFFFFFFF) * 2654435761) & 0xFFFFFFFF) >> 24
+                 for i in range(n))
+
+
 def run_spike(mode: str, query: dict) -> dict:
     host, port = query["host"], int(query["port"])
     sni, verify, n = query["sni"], query["verify"] == "1", int(query["echo"])
-    cafile = None if mode == "no-test-ca" else pki.pki_dir() / "test-ca.pem"
+    seed = int(query["seed"])
+    cafile = pki.pki_dir() / "test-ca.pem"
     if mode == "no-test-ca":
         cafile = pki.pki_dir() / "untrusted-root" / "root.pem"
     effective_verify = verify and mode != "verify-ignored"
     stats = {"heap_free": 180000, "heap_min_ever": 120000, "largest_block": 90000}
-    result = {"ok": False, "stage": "connect", "error": 0, "steps": 0,
+    result = {"ok": False, "stage": "connect", "error": "", "steps": 0,
+              "handshake_ms": 0, "handshake_us": 0, "tls_version": 0, "ciphersuite": 0,
+              "group": 0, "echo_sent": 0, "echo_received": 0, "echo_ok": False,
               "stats_before": dict(stats), "stats_after": dict(stats),
               "stats_peak": dict(stats, heap_free=180000 - 46 * 1024)}
     started = time.monotonic()
@@ -200,20 +221,23 @@ def run_spike(mode: str, query: dict) -> dict:
     reason = session.handshake()
     handshake_s = time.monotonic() - started
     result["steps"] = session.steps
+    payload = payload_for(seed, n)
+    if mode == "wrong-payload":
+        payload = (bytes(range(256)) * (n // 256 + 1))[:n]
     if reason:
         session.close()
-        result.update(stage="handshake", error=-0x2700 if reason.startswith("verify") else -1,
-                      state=3, handshake_ms=round(handshake_s * 1000, 3))
+        error = ("X509 - Certificate verification failed (-0x2700)"
+                 if reason.startswith("verify") else f"SSL - {reason}")
+        result.update(stage="handshake", error=error,
+                      handshake_ms=round(handshake_s * 1000))
         if mode in ("fallback-retry", "fallback-reports-failed") and reason.startswith("verify"):
             retry = FakeSession(mode, host, port, sni, False, cafile)
             if retry.handshake() is None:
-                retry.echo(bytes(range(256)) * (n // 256 + 1))
+                retry.echo(payload)
             retry.close()
             if mode == "fallback-retry":
-                result.update(ok=True, stage="done", error=0, state=1)
                 fill_success(result, retry, n, True, handshake_s)
         return result
-    payload = (bytes(range(256)) * (n // 256 + 1))[:n]
     got = session.echo(payload)
     if mode in ("echo-corrupt-honest", "echo-corrupt-liar") and got:
         got = bytes([got[0] ^ 0x40]) + got[1:]
@@ -231,15 +255,13 @@ def fill_success(result: dict, session: FakeSession, n: int, echo_ok: bool,
     group = final.get("group")
     if session.mode == "lie-group":
         group = 0x001D
-    handshake_ms = handshake_s * 1000
-    if session.mode == "fast-clock":
-        handshake_ms = 0.001
     result.update({
-        "ok": echo_ok, "stage": "done" if echo_ok else "echo", "state": 1,
-        "tls_version": "TLSv1.3" if final.get("version") == 0x0304 else final.get("version"),
+        "ok": echo_ok, "stage": "done" if echo_ok else "echo",
+        "error": "" if echo_ok else "echo mismatch",
+        "tls_version": final.get("version"),
         "ciphersuite": final.get("cipher_suite"),
         "group": group,
-        "handshake_ms": round(handshake_ms, 3),
+        "handshake_ms": max(1, round(handshake_s * 1000)),
         "handshake_us": max(1, int(handshake_s * 1e6 * 0.8)),
         "echo_sent": n,
         "echo_received": n if received is None else received,
@@ -247,7 +269,7 @@ def fill_success(result: dict, session: FakeSession, n: int, echo_ok: bool,
         "steps": session.steps,
     })
     if session.mode == "fast-clock":
-        result["handshake_us"] = 1
+        result["handshake_ms"] = result["handshake_us"] = 1
 
 
 def fake_device(mode: str) -> ThreadingHTTPServer:
@@ -325,8 +347,11 @@ def expected_ok(mode: str, result: dict) -> tuple[bool, str]:
         return (result["exit"] == 0 and not failed,
                 f"exit {result['exit']}, failed {sorted(failed)}")
     ok = result["exit"] != 0 if must_fail else result["exit"] == 0
-    return (ok and failed == must_fail,
-            f"exit {result['exit']}, failed {sorted(failed)}, expected {sorted(must_fail)}")
+    warned = {k for k, v in result["verdicts"].items() if any(x.startswith("WARN") for x in v)}
+    missing = MUST_WARN.get(mode, set()) - warned
+    return (ok and failed == must_fail and not missing,
+            f"exit {result['exit']}, failed {sorted(failed)}, expected {sorted(must_fail)}"
+            + (f", no WARN on {sorted(missing)}" if missing else ""))
 
 
 def main() -> int:

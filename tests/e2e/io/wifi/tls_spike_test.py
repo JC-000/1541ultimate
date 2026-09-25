@@ -32,7 +32,10 @@ whose hash is checked against the committed registry before and after the run.
 """
 
 import argparse
+import hashlib
 import json
+import re
+import secrets
 import socket
 import subprocess
 import sys
@@ -59,18 +62,15 @@ import tls_spike_predictions as predictions  # noqa: E402
 
 SUITE = "tls_spike_test"
 
-# The route of spec section 3. The spec gives it as an example, so it is one
-# constant, and --route overrides it without an edit.
+# The route and the reply are M2-SPEC.md section 7 (amendment 1), exactly.
 ROUTE = "/v1/machine:tlsspike"
 
-# The device's JSON, field by field. The spec names the facts but not the keys;
-# these are the keys this suite reads, and the one place to change if the Nios
-# lane chose others. A dotted key reads into a nested object.
+# The device's JSON, field by field, and each field's type. A dotted key reads
+# into a nested object.
 FIELDS = {
     "ok": "ok",
     "stage": "stage",
     "error": "error",
-    "state": "state",
     "handshake_ms": "handshake_ms",
     "handshake_us": "handshake_us",
     "tls_version": "tls_version",
@@ -84,21 +84,34 @@ FIELDS = {
     "heap_free_after": "stats_after.heap_free",
     "heap_free_peak": "stats_peak.heap_free",
 }
+TYPES = {"ok": bool, "stage": str, "error": str, "handshake_ms": int, "handshake_us": int,
+         "tls_version": int, "ciphersuite": int, "group": int, "echo_sent": int,
+         "echo_received": int, "echo_ok": bool, "steps": int}
+STATS_BLOCKS = ("stats_before", "stats_after", "stats_peak")
 STATS_KEYS = ("heap_free", "heap_min_ever", "largest_block")
+STAGES = ("connect", "open", "handshake", "echo", "close", "done")
 
 # mbedTLS returns this from the handshake for every certificate verification
 # failure: the X.509 verify sets flags, and any flag makes it fail with
 # MBEDTLS_ERR_X509_CERT_VERIFY_FAILED (-0x2700). Which flag it was travels in the
-# alert, not in the code.
+# alert, not in the code. The spec makes `error` free text, so the code is
+# looked for in it rather than required.
 X509_CERT_VERIFY_FAILED = -0x2700
-STATE_FAILED = 3
+ERROR_NUMBER = re.compile(r"-?0x[0-9a-fA-F]+|-?\b\d{3,}\b")
 
 TLS13 = 0x0304
-CIPHER_SUITES = {"TLS_AES_128_GCM_SHA256": 0x1301, "TLS_AES_256_GCM_SHA384": 0x1302,
-                 "TLS_CHACHA20_POLY1305_SHA256": 0x1303}
-GROUP_SPELLINGS = {"X25519": 0x001D, "SECP256R1": 0x0017, "P256": 0x0017,
-                   "PRIME256V1": 0x0017, "P_256": 0x0017}
-VERSION_SPELLINGS = {"TLSV1.3", "TLS1.3", "TLS 1.3", "1.3", "TLSV13", "TLS1_3"}
+
+# The echo payload, generated on the Nios from (seed, n), recomputed here so the
+# server's hash of what it received is checked against the spec, not against
+# whatever the device says it sent.
+PAYLOAD_MULTIPLIER = 2654435761
+MAX_ECHO_BYTES = 4096
+
+
+def expected_payload(seed: int, n: int) -> bytes:
+    return bytes((((seed + i) * PAYLOAD_MULTIPLIER) & 0xFFFFFFFF) >> 24 & 0xFF
+                 for i in range(n))
+
 
 DEFAULT_ECHO_BYTES = 3000   # more than one 1024-byte step each way (spec section 2)
 DEFAULT_REPEAT = 5
@@ -106,6 +119,7 @@ SPIKE_TIMEOUT = 60.0        # one REST call: connect, handshake, echo and close
 RECORD_WAIT = 10.0          # after the reply, for the server's connection record
 STRAY_WAIT = 2.0            # after that, for a second connection nobody asked for
 SERVER_IDLE_TIMEOUT = 90.0  # longer than one REST call, so an open socket shows
+TIMING_SLACK_MS = 5
 
 
 MANGLED = {"flip-last": "flipped", "drop-last": "withheld"}
@@ -115,51 +129,26 @@ class RouteAbsent(Failure):
     """The firmware has no spike route: the stock RED."""
 
 
-def normalise_int(value) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        text = value.strip()
-        try:
-            return int(text, 0)
-        except ValueError:
-            return None
-    return None
-
-
-def normalise_version(value) -> int:
-    number = normalise_int(value)
-    if number is not None:
-        return number
-    if isinstance(value, str) and value.strip().upper() in VERSION_SPELLINGS:
-        return TLS13
-    raise Failure(f"device reported tls_version {value!r}, which the oracle cannot map; "
-                  "add the spelling to VERSION_SPELLINGS only if it names a real version")
-
-
-def normalise_cipher(value) -> int:
-    number = normalise_int(value)
-    if number is not None:
-        return number
-    if isinstance(value, str):
-        text = value.strip().upper().replace("-", "_")
-        text = text.replace("TLS1_3_", "TLS_")
-        if text in CIPHER_SUITES:
-            return CIPHER_SUITES[text]
-    raise Failure(f"device reported ciphersuite {value!r}, which the oracle cannot map")
-
-
-def normalise_group(value) -> int:
-    number = normalise_int(value)
-    if number is not None:
-        return number
-    if isinstance(value, str):
-        text = value.strip().upper().replace("-", "")
-        if text in GROUP_SPELLINGS:
-            return GROUP_SPELLINGS[text]
-    raise Failure(f"device reported group {value!r}, which the oracle cannot map")
+def contract_problems(device: dict) -> list[str]:
+    """Every way the reply departs from the section 7 names and types."""
+    problems = []
+    for name, kind in TYPES.items():
+        value = device.get(FIELDS[name])
+        # bool is an int in Python; an int field holding true is still wrong.
+        if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+            problems.append(f"{FIELDS[name]}={value!r} is not {kind.__name__}")
+    for block in STATS_BLOCKS:
+        stats = device.get(block)
+        if not isinstance(stats, dict):
+            problems.append(f"{block} is not an object")
+            continue
+        wrong = [k for k in STATS_KEYS
+                 if not isinstance(stats.get(k), int) or isinstance(stats.get(k), bool)]
+        if wrong:
+            problems.append(f"{block} lacks integer {wrong}")
+    if device.get("stage") not in STAGES:
+        problems.append(f"stage {device.get('stage')!r} is not one of {STAGES}")
+    return problems
 
 
 def field_of(report_: dict, name: str, required: bool = True):
@@ -254,6 +243,7 @@ class Scenario:
 @dataclass
 class Outcome:
     scenario: Scenario
+    seed: int = 0
     code: int = 0
     device: dict = field(default_factory=dict)
     server: list[dict] = field(default_factory=list)
@@ -287,11 +277,24 @@ def spike(rest: RestClient, route: str, params: dict) -> tuple[int, dict]:
 
 
 def run_scenario(rest: RestClient, args, server: Server, scenario: Scenario) -> Outcome:
+    # A fresh seed per call, so a device that replays an earlier payload, or
+    # ignores the seed, sends bytes whose hash matches nothing expected.
+    seed = secrets.randbits(32)
     params = {"host": args.server_ip, "port": server.port, "sni": args.sni,
-              "verify": scenario.verify, "ca": "test", "echo": args.echo_bytes}
+              "verify": scenario.verify, "ca": "test", "echo": args.echo_bytes, "seed": seed}
     code, data = spike(rest, args.route, params)
     records = server.new_records(RECORD_WAIT)
-    return Outcome(scenario, code, data, records)
+    return Outcome(scenario, seed, code, data, records)
+
+
+def payload_problems(args, outcome: Outcome, record: dict) -> list[str]:
+    """What the server received, against the section 7 payload for (seed, n)."""
+    expected = expected_payload(outcome.seed, args.echo_bytes)
+    if record["app_in_sha256"] == hashlib.sha256(expected).hexdigest():
+        return []
+    return [f"the server received {record['app_in']} bytes that are not the payload for "
+            f"seed={outcome.seed}, n={args.echo_bytes} (head {record['app_in_head']}, "
+            f"expected {expected[:32].hex()})"]
 
 
 def one_connection(outcome: Outcome) -> dict:
@@ -319,11 +322,12 @@ def judge_established(args, outcome: Outcome) -> list[str]:
     """Every way an ESTABLISHED report can disagree with the server. Empty is a pass."""
     device, scenario = outcome.device, outcome.scenario
     record = one_connection(outcome)
-    problems = []
-    if field_of(device, "ok") is not True:
-        problems.append(f"device says ok={field_of(device, 'ok')!r}, stage "
-                        f"{field_of(device, 'stage', False)!r}, error "
-                        f"{field_of(device, 'error', False)!r}")
+    problems = contract_problems(device)
+    if problems:
+        return problems
+    if device["ok"] is not True or device["stage"] != "done" or device["error"] != "":
+        problems.append(f"device says ok={device['ok']!r}, stage {device['stage']!r}, "
+                        f"error {device['error']!r}; a completed run is ok, done, \"\"")
     if not record["handshake_ok"]:
         problems.append(f"the server saw no completed handshake: {record['error']}")
         return problems
@@ -333,13 +337,13 @@ def judge_established(args, outcome: Outcome) -> list[str]:
                         f"not {args.sni!r}")
     if negotiated["version"] != TLS13:
         problems.append(f"the server negotiated {negotiated['version']!r}, not TLS 1.3")
-    if normalise_version(field_of(device, "tls_version")) != negotiated["version"]:
+    if device["tls_version"] != negotiated["version"]:
         problems.append(f"device reports version {field_of(device, 'tls_version')!r}; "
                         f"the ServerHello selected {negotiated['version']:#06x}")
-    if normalise_cipher(field_of(device, "ciphersuite")) != negotiated["cipher_suite"]:
+    if device["ciphersuite"] != negotiated["cipher_suite"]:
         problems.append(f"device reports cipher suite {field_of(device, 'ciphersuite')!r}; "
                         f"the ServerHello selected {negotiated['cipher_suite']:#06x}")
-    if normalise_group(field_of(device, "group")) != negotiated["group"]:
+    if device["group"] != negotiated["group"]:
         problems.append(f"device reports group {field_of(device, 'group')!r}; the "
                         f"ServerHello selected {negotiated['group']:#06x}")
     if negotiated["group"] not in scenario.allowed_groups:
@@ -348,6 +352,7 @@ def judge_established(args, outcome: Outcome) -> list[str]:
     n = args.echo_bytes
     if record["app_in"] != n:
         problems.append(f"the server received {record['app_in']} plaintext bytes, not {n}")
+    problems += payload_problems(args, outcome, record)
     if scenario.server.mangle == "none":
         if record["app_out"] != n or record["app_in_sha256"] != record["app_out_sha256"]:
             problems.append(f"the server echoed {record['app_out']} bytes that differ from "
@@ -355,7 +360,7 @@ def judge_established(args, outcome: Outcome) -> list[str]:
         if field_of(device, "echo_ok") is not True:
             problems.append(f"device says echo_ok={field_of(device, 'echo_ok')!r}")
         for name in ("echo_sent", "echo_received"):
-            if normalise_int(field_of(device, name)) != n:
+            if device[name] != n:
                 problems.append(f"device reports {name}={field_of(device, name)!r}, not {n}")
     if record["close"] not in ("close_notify", "eof"):
         problems.append(f"the connection ended with {record['close']!r}")
@@ -368,46 +373,49 @@ def judge_timing(device: dict, record: dict) -> list[str]:
     problems = []
     handshake_ms = field_of(device, "handshake_ms")
     handshake_us = field_of(device, "handshake_us")
-    steps = normalise_int(field_of(device, "steps"))
-    if not isinstance(handshake_ms, int | float) or handshake_ms <= 0:
-        problems.append(f"handshake_ms={handshake_ms!r} is not a positive number")
-    if not isinstance(handshake_us, int | float) or handshake_us <= 0:
-        problems.append(f"handshake_us={handshake_us!r} is not a positive number")
+    steps = field_of(device, "steps")
+    if handshake_ms <= 0:
+        problems.append(f"handshake_ms={handshake_ms!r} is not positive")
+    if handshake_us <= 0:
+        problems.append(f"handshake_us={handshake_us!r} is not positive")
     if problems:
         return problems
-    # The server saw the handshake from the first ClientHello byte to the
-    # client's Finished. The Nios clock spans more than that (it also covers
-    # the TCP connect), so a shorter device figure is not a measurement.
-    if record["server_handshake_ms"] and handshake_ms + 5 < record["server_handshake_ms"]:
-        problems.append(f"device handshake_ms={handshake_ms} is shorter than the "
-                        f"{record['server_handshake_ms']} ms the server itself observed")
     if handshake_us / 1000 > handshake_ms * 1.05 + 5:
         problems.append(f"ESP32 handshake_us={handshake_us} exceeds the Nios wall clock "
                         f"handshake_ms={handshake_ms}")
     # A TLS 1.3 client cannot finish in fewer than two exchanges: the
     # ClientHello out, the server's flight in, then its own Finished out.
-    if steps is None or steps < 2:
+    if steps < 2:
         problems.append(f"steps={field_of(device, 'steps')!r}: a TLS 1.3 handshake takes "
                         "at least 2")
     return problems
 
 
+def timing_warning(outcome: Outcome) -> str | None:
+    """A device figure shorter than the handshake the server itself watched.
+
+    The server's window runs from the recv() that brought the first ClientHello
+    byte to the recv() that brought the client's Finished, and the Nios clock
+    spans more than that (it also covers the TCP connect). So a shorter device
+    figure is not a measurement. It is a WARN, not a FAIL, because the server's
+    window grows whenever the host schedules it late: in the offline sim, on a
+    host at load average 57, honest 45-114 ms handshakes were watched as
+    160-460 ms. Compare the rig host's load before reading much into one.
+    """
+    handshake_ms = outcome.device.get("handshake_ms")
+    observed = outcome.server[0]["server_handshake_ms"]
+    if isinstance(handshake_ms, int) and observed and handshake_ms + TIMING_SLACK_MS < observed:
+        return (f"device handshake_ms={handshake_ms} is shorter than the {observed} ms the "
+                "server itself observed (a made-up figure, or a busy host)")
+    return None
+
+
 def judge_stats(device: dict) -> list[str]:
-    problems = []
-    for block in ("stats_before", "stats_after", "stats_peak"):
-        stats = device.get(block)
-        if not isinstance(stats, dict):
-            problems.append(f"device JSON has no {block!r} object")
-            continue
-        missing = [k for k in STATS_KEYS if not isinstance(stats.get(k), int)]
-        if missing:
-            problems.append(f"{block} lacks integer {missing}")
-    if not problems:
-        before = field_of(device, "heap_free_before")
-        peak = field_of(device, "heap_free_peak")
-        if peak > before:
-            problems.append(f"heap_free at peak ({peak}) is above heap_free before ({before})")
-    return problems
+    before = field_of(device, "heap_free_before")
+    peak = field_of(device, "heap_free_peak")
+    if peak > before:
+        return [f"heap_free at peak ({peak}) is above heap_free before ({before})"]
+    return []
 
 
 def judge_failed(args, outcome: Outcome, manifest: dict) -> tuple[list[str], str | None]:
@@ -421,25 +429,24 @@ def judge_failed(args, outcome: Outcome, manifest: dict) -> tuple[list[str], str
     device, scenario = outcome.device, outcome.scenario
     expected_alert = manifest["chains"][scenario.server.chain]["expected_alert"]
     record = one_connection(outcome)
-    problems = []
-    if field_of(device, "ok") is not False:
-        problems.append(f"device says ok={field_of(device, 'ok')!r} for a certificate it "
-                        "must reject")
-    stage = str(field_of(device, "stage", False) or "")
-    if "handshake" not in stage.lower():
-        problems.append(f"device's failing stage is {stage!r}, not the handshake")
-    state = field_of(device, "state", False)
-    if state is not None and state not in (STATE_FAILED, "FAILED"):
-        problems.append(f"device reports state {state!r}, not FAILED")
-    error = field_of(device, "error", False)
-    code = normalise_int(error)
-    if code is not None:
-        if abs(code) != abs(X509_CERT_VERIFY_FAILED):
-            problems.append(f"device error {error!r} is not MBEDTLS_ERR_X509_CERT_VERIFY_FAILED "
-                            "(-0x2700)")
-    elif not (isinstance(error, str) and ("2700" in error or "VERIFY" in error.upper())):
-        problems.append(f"device error {error!r} does not name a certificate verification "
-                        "failure")
+    problems = contract_problems(device)
+    if problems:
+        return problems, None
+    warning = None
+    if device["ok"] is not False:
+        problems.append(f"device says ok={device['ok']!r} for a certificate it must reject")
+    if device["stage"] != "handshake":
+        problems.append(f"the last stage the device reached is {device['stage']!r}, not "
+                        "'handshake'")
+    error = device["error"]
+    numbers = [int(n, 0) for n in ERROR_NUMBER.findall(error)]
+    if not error:
+        problems.append("device reports a failure with an empty error")
+    elif numbers and not any(abs(n) == abs(X509_CERT_VERIFY_FAILED) for n in numbers):
+        problems.append(f"device error {error!r} carries {numbers}, not "
+                        "MBEDTLS_ERR_X509_CERT_VERIFY_FAILED (-0x2700 = -9984)")
+    elif not numbers and "verif" not in error.lower():
+        warning = f"device error {error!r} names no code and no verification failure"
     if record["handshake_ok"]:
         problems.append("the server completed the handshake")
     if record["app_in"] or record["app_out"]:
@@ -451,7 +458,6 @@ def judge_failed(args, outcome: Outcome, manifest: dict) -> tuple[list[str], str
     if not finals:
         problems.append("the server never sent its ServerHello, so the failure came before "
                         "the certificate and says nothing about verification")
-    warning = None
     alert = record["alert_from_client"]
     if alert is None:
         warning = (f"no alert reached the server (connection ended {record['close']!r}); "
@@ -472,9 +478,11 @@ def judge_echo_broken(args, outcome: Outcome) -> list[str]:
         problems.append(f"the control did not reach its echo (handshake_ok="
                         f"{record['handshake_ok']}, received {record['app_in']} of {n})")
         return problems
+    problems += payload_problems(args, outcome, record)
     if record.get("mangled_at") != n - 1:
         problems.append(f"the server did not break byte {n - 1} "
                         f"(mangled_at={record.get('mangled_at')!r})")
+    problems += contract_problems(device)
     if field_of(device, "echo_ok") is not False:
         problems.append(f"the server {MANGLED[scenario.server.mangle]} the last echoed byte, "
                         f"and the device still says echo_ok={field_of(device, 'echo_ok')!r}")
@@ -675,6 +683,7 @@ def run(args) -> tuple[bool, str]:
         try:
             if scenario.expect == "established":
                 problems = judge_established(args, outcome)
+                warning = None if problems else timing_warning(outcome)
             elif scenario.expect == "echo-broken":
                 problems = judge_echo_broken(args, outcome)
             else:
@@ -771,8 +780,9 @@ def main() -> int:
     parser.add_argument("--only", action="append",
                         help="run only scenarios whose key starts with this (repeatable)")
     args = parser.parse_args()
-    if args.echo_bytes < 2:
-        parser.error("--echo-bytes must be at least 2, so the controls have a last byte")
+    if not 2 <= args.echo_bytes <= MAX_ECHO_BYTES:
+        parser.error(f"--echo-bytes must be 2-{MAX_ECHO_BYTES}: the spec caps echo at "
+                     f"{MAX_ECHO_BYTES}, and the controls need a last byte")
     if not args.server_ip:
         device = targets.device_of(args.host)
         probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

@@ -254,16 +254,20 @@ def serve_one(ssl, context, conn: socket.socket, peer, args, number: int) -> dic
             if data == b"":
                 record["close"] = "eof"
                 break
+            # Both ends of server_handshake_ms are the moment recv() returned,
+            # not the moment the TLS work on those bytes finished, so the
+            # server's own processing and scheduling after the client's
+            # Finished arrived are not counted.
             last_activity = time.monotonic()
             if first_byte is None:
-                first_byte = time.monotonic()
+                first_byte = last_activity
             c2s.feed(data)
             incoming.write(data)
             try:
                 if not established:
                     tls.do_handshake()
                     established = True
-                    handshake_done = time.monotonic()
+                    handshake_done = last_activity
                     record["handshake_ok"] = True
                     record["version_api"] = tls.version()
                     record["cipher_api"] = tls.cipher()[0]
