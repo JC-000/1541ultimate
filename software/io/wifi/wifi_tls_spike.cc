@@ -432,6 +432,9 @@ static bool spike_run(spike_t *s, const char *host, uint16_t port, const char *s
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }
+    // All of OPEN, retries included, so that handshake_ms - open_ms is the
+    // steps alone; on a failed OPEN too.
+    r->open_ms = (xTaskGetTickCount() - start) * portTICK_PERIOD_MS;
     if (result) {
         // After BUSY the module may have opened a session all the same, and
         // this side cannot name it to close it; the module evicts the least

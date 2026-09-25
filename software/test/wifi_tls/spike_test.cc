@@ -328,9 +328,10 @@ int wifi_tls_open(uint8_t flags, const char *sni, uint32_t unix_time, uint8_t *s
     *esp_err = 0;
     *reason = 0;
     opened_with_time = unix_time;
+    now += 4; // a round trip, and the module sets up the session
     if (fails(K_OPEN)) {
         switch (fail_variant) {
-            case 0: return WIFI_TLS_BUSY;
+            case 0: now += 1000; return WIFI_TLS_BUSY; // the 5 s the call waits
             case 1: *esp_err = 0x103; *reason = WIFI_TLS_REASON_NO_ENTROPY; return WIFI_TLS_REFUSED;
             case 5: *esp_err = 0x103; *reason = WIFI_TLS_REASON_NO_TIME; return WIFI_TLS_REFUSED;
             case 2: return WIFI_TLS_INVALID;
@@ -770,6 +771,10 @@ static void goldens(const char *out, const char *golden)
     reset_world(-1, 0);
     status = route(good, body, r);
     check(r.ok && r.have_opened && (r.after.sessions_open == 0), "success_ecdsa runs clean");
+    check((r.open_ms > 0) && (r.open_ms < r.handshake_ms) && (r.peak.sessions_open == 1) &&
+          (r.before.sessions_open == 0) && (body.find("\"open_ms\" : ") != std::string::npos) &&
+          (body.find("\"sessions_open\" : 1") != std::string::npos),
+          "open_ms %u is part of handshake_ms %u; the peak block says 1 session open", r.open_ms, r.handshake_ms);
     golden_file(out, golden, "success_ecdsa", "15 done", good, status, body);
 
     reset_world(-1, 0);
@@ -852,6 +857,9 @@ static void goldens(const char *out, const char *golden)
     for (unsigned i = 0; i < sizeof(faults) / sizeof(faults[0]); i++) {
         bool found = route_failing(good, faults[i].kind, faults[i].variant, faults[i].detail, body, r, status);
         check(found, "%s ends at %s", faults[i].stem, faults[i].detail);
+        if (!strcmp(faults[i].stem, "open_timeout")) {
+            check(r.open_ms >= 5000, "open_timeout: open_ms %u covers the 5 s wait", r.open_ms);
+        }
         golden_file(out, golden, faults[i].stem, faults[i].exit_path, good, status, body);
     }
 

@@ -7,25 +7,29 @@
   "ok" : false,
   "stage" : "echo",
   "error" : "echo_recv: Operation timed out (errno 60)",
-  "handshake_ms" : 365,
+  "handshake_ms" : 390,
+  "open_ms" : 25,
   "handshake_us" : 319250,
   "stats_before" : { 
   "heap_free" : 100000,
   "heap_min_ever" : 100000,
   "largest_block" : 45000,
-  "stack_free" : 2345
+  "stack_free" : 2345,
+  "sessions_open" : 0
 },
   "stats_peak" : { 
   "heap_free" : 61000,
   "heap_min_ever" : 52000,
   "largest_block" : 30000,
-  "stack_free" : 2345
+  "stack_free" : 2345,
+  "sessions_open" : 1
 },
   "stats_after" : { 
   "heap_free" : 100000,
   "heap_min_ever" : 52000,
   "largest_block" : 45000,
-  "stack_free" : 2345
+  "stack_free" : 2345,
+  "sessions_open" : 0
 },
   "tls_version" : 772,
   "ciphersuite" : 4865,

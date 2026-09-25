@@ -9,8 +9,8 @@
 #include "json.h"
 #include "wifi_tls_json.h"
 
-// heap_free, heap_min_ever, largest_block and stack_free; zeros when the
-// STATS call failed, which detail.have_* tells.
+// heap_free, heap_min_ever, largest_block, stack_free and sessions_open;
+// zeros when the STATS call failed, which detail.have_* tells.
 static void add_tls_heap(JSON_Object *obj, const char *key, const wifi_tls_stats_t &s)
 {
     JSON_Object *heap = JSON::Obj();
@@ -18,6 +18,7 @@ static void add_tls_heap(JSON_Object *obj, const char *key, const wifi_tls_stats
     heap->add("heap_min_ever", (int)s.heap_min_ever);
     heap->add("largest_block", (int)s.largest_block);
     heap->add("stack_free", (int)s.stack_free);
+    heap->add("sessions_open", (int)s.sessions_open);
     obj->add(key, heap);
 }
 
@@ -28,6 +29,7 @@ void wifi_tls_spike_json(const wifi_tls_spike_result_t *r, JSON_Object *json)
     json->add("stage", r->stage);
     json->add("error", r->error);
     json->add("handshake_ms", (int)r->handshake_ms);
+    json->add("open_ms", (int)r->open_ms);
     json->add("handshake_us", (int)r->peak.handshake_us);
     add_tls_heap(json, "stats_before", r->before);
     add_tls_heap(json, "stats_peak", r->peak);
