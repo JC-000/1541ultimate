@@ -212,11 +212,17 @@ static void test_take_step(void)
     fresh_step(&st, 1024);
     r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
     check((r == WIFI_TLS_INVALID) && nothing_out(&st), "ESP_ERR_NO_MEM keeps the rule: no plaintext during the handshake");
-    size = step_reply(TLS_STATE_CLOSED, 0x101, 4, 0);
+    size = step_reply(TLS_STATE_CLOSED, 0x101, 4, 7);
+    fresh_step(&st, 1024);
+    r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
+    check((r == 0) && (st.state == WIFI_TLS_CLOSED) && (st.ct_out_len == 4) && (st.pt_out_len == 7) &&
+          (pt_out[0] == 0x50) && (pt_out[6] == 0x56) && (st.esp_err == 0x101),
+          "CLOSED with ESP_ERR_NO_MEM: the peer closed, so the last plaintext is taken and CLOSED reported");
+    size = step_reply(TLS_STATE_CLOSED, 0x105, 0, 0);
     fresh_step(&st, 1024);
     r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
     check((r == WIFI_TLS_REFUSED) && nothing_out(&st) && (st.state == WIFI_TLS_CLOSED),
-          "ESP_ERR_NO_MEM from a session that is gone is refused");
+          "CLOSED with ESP_ERR_NOT_FOUND, a session that is gone, is refused");
     size = step_reply(TLS_STATE_ESTABLISHED, 0x101, 20, 0);
     fresh_step(&st, 19);
     r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
@@ -305,7 +311,8 @@ static void test_take_step(void)
                         (st.ct_out_len == ct) && ((st.pt_out_len == pt) || (res->state == TLS_STATE_FAILED)) &&
                         (res->state <= TLS_STATE_FAILED) &&
                         ((pt == 0) || (res->state != TLS_STATE_HANDSHAKING)) && // withheld when FAILED, below
-                        ((res->esp_err == 0) || (res->state == TLS_STATE_FAILED)) &&
+                        ((res->esp_err == 0) || (res->state == TLS_STATE_FAILED) ||
+                         ((res->esp_err == 0x101) && (res->state == TLS_STATE_CLOSED))) &&
                         (memcmp(ct_out, res->data, ct) == 0) &&
                         ((res->state == TLS_STATE_FAILED) ? ((st.pt_out_len == 0) && untouched(pt_out))
                                                           : (memcmp(pt_out, res->data + ct, pt) == 0));

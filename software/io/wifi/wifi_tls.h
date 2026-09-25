@@ -74,7 +74,9 @@ typedef struct {
 //
 // The module takes the input all or nothing. When it has no room it answers
 // ESP_ERR_NO_MEM with its output all the same: the call returns AGAIN, hands the
-// output over, and the same input is to be sent again.
+// output over, and the same input is to be sent again. If that answer also says
+// CLOSED, the peer has closed and the refusal no longer matters: the call
+// returns 0 with state CLOSED and the output, the last plaintext included.
 //
 // A session that fails is an answer, not an error: the call returns 0 with state
 // FAILED and the mbedTLS error in esp_err, and ct_out may hold the alert for the
@@ -129,6 +131,25 @@ int wifi_tls_take_stats(const uint8_t *reply, int size, uint16_t sequence, wifi_
 
 // The payload: byte i of the one made from seed.
 uint8_t wifi_tls_spike_payload(uint32_t seed, uint32_t i);
+
+// The route's parameters, checked. host is dotted IPv4 (four decimal numbers
+// 0-255), port 1-65535, sni at most WIFI_TLS_MAX_SNI bytes, verify 0 or 1
+// (default 1), ca test, bundle or none (default test), echo 0-4096 (default
+// 0), seed 0-4294967295 (default 0); the numbers in decimal digits only, and
+// verify 1 needs a non-empty sni. An optional parameter is NULL when absent.
+// Returns NULL and fills args, or text starting with the name of the first
+// parameter that is not valid, and leaves args alone.
+typedef struct {
+    const char *host;
+    uint16_t port;
+    const char *sni;
+    uint8_t flags;
+    int echo;
+    uint32_t seed;
+} wifi_tls_spike_args_t;
+
+const char *wifi_tls_spike_parse(const char *host, const char *port, const char *sni, const char *verify,
+                                 const char *ca, const char *echo, const char *seed, wifi_tls_spike_args_t *args);
 
 typedef struct {
     bool ok;

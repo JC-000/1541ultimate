@@ -665,24 +665,6 @@ API_CALL(GET, machine, heap, NULL, ARRAY( {  }))
 // SPIKE CODE, NOT FOR RELEASE (esp-tls M2). Built only with TLS_SPIKE; the flow
 // is in software/io/wifi/wifi_tls_spike.cc.
 
-// Decimal digits and nothing else, no larger than limit.
-static bool parse_decimal(const char *text, uint32_t limit, uint32_t &value)
-{
-    if ((text == NULL) || (*text == '\0')) {
-        return false;
-    }
-    uint32_t parsed = 0;
-    for (const char *p = text; *p; p++) {
-        uint32_t digit = *p - '0';
-        if ((*p < '0') || (*p > '9') || (parsed > (limit - digit) / 10)) {
-            return false;
-        }
-        parsed = (parsed * 10) + digit;
-    }
-    value = parsed;
-    return true;
-}
-
 // heap_free, heap_min_ever and largest_block, as M2 spec section 7 names them.
 static void add_tls_heap(JSON_Object *obj, const char *key, const wifi_tls_stats_t &s)
 {
@@ -711,61 +693,26 @@ API_DOC(PUT, machine, tlsspike,
     PARAM("echo", "integer(0..4096)", "Payload bytes to send and expect back.", "0", "1024")
     PARAM("seed", "integer(0..4294967295)", "Makes the payload: byte i is ((seed + i) * 2654435761) >> 24.", "0", "1")
     RESPONSE("200", "application/json", "", "The measurements.", "")
-    RESPONSE_ERROR("400", "Invalid port", "")
+    RESPONSE_ERROR("400", "Invalid host, port, sni, verify, ca, echo or seed", "")
 )
 API_CALL(PUT, machine, tlsspike, NULL, ARRAY( { {"host", P_REQUIRED}, {"port", P_REQUIRED}, {"sni", P_OPTIONAL},
                                                 {"verify", P_OPTIONAL}, {"ca", P_OPTIONAL}, {"echo", P_OPTIONAL},
                                                 {"seed", P_OPTIONAL} }))
 {
-    uint32_t port;
-    if (!parse_decimal(args["port"], 65535, port) || (port == 0)) {
-        resp->error("Invalid port");
-        resp->json_response(HTTP_BAD_REQUEST);
-        return;
-    }
-    uint32_t verify = 1;
-    if (args.get_or("verify", NULL) && !parse_decimal(args["verify"], 1, verify)) {
-        resp->error("Invalid verify");
-        resp->json_response(HTTP_BAD_REQUEST);
-        return;
-    }
-    uint8_t flags;
-    const char *ca = args.get_or("ca", "test");
-    if (strcmp(ca, "test") == 0) {
-        flags = WIFI_TLS_FLAG_TEST_CA;
-    } else if (strcmp(ca, "bundle") == 0) {
-        flags = WIFI_TLS_FLAG_CA_BUNDLE;
-    } else if (strcmp(ca, "none") == 0) {
-        flags = 0;
-    } else {
-        resp->error("Invalid ca");
-        resp->json_response(HTTP_BAD_REQUEST);
-        return;
-    }
-    if (verify) {
-        flags |= WIFI_TLS_FLAG_VERIFY;
-    }
-    uint32_t echo = 0;
-    if (args.get_or("echo", NULL) && !parse_decimal(args["echo"], WIFI_TLS_SPIKE_MAX_ECHO, echo)) {
-        resp->error("Invalid echo");
-        resp->json_response(HTTP_BAD_REQUEST);
-        return;
-    }
-    uint32_t seed = 0;
-    if (args.get_or("seed", NULL) && !parse_decimal(args["seed"], 0xFFFFFFFFu, seed)) {
-        resp->error("Invalid seed");
-        resp->json_response(HTTP_BAD_REQUEST);
-        return;
-    }
-    const char *sni = args.get_or("sni", "");
-    if (strlen(sni) > WIFI_TLS_MAX_SNI) {
-        resp->error("Invalid sni");
+    // Every parameter is checked before anything happens, and any one that is
+    // out of range or not what its grammar says ends the call here.
+    wifi_tls_spike_args_t a;
+    const char *invalid = wifi_tls_spike_parse(args["host"], args["port"], args.get_or("sni", NULL),
+                                               args.get_or("verify", NULL), args.get_or("ca", NULL),
+                                               args.get_or("echo", NULL), args.get_or("seed", NULL), &a);
+    if (invalid) {
+        resp->error("Invalid %s", invalid);
         resp->json_response(HTTP_BAD_REQUEST);
         return;
     }
 
     wifi_tls_spike_result_t r;
-    wifi_tls_spike(args["host"], (uint16_t)port, sni, flags, (int)echo, seed, &r);
+    wifi_tls_spike(a.host, a.port, a.sni, a.flags, a.echo, a.seed, &r);
 
     // M2 spec section 7 and 9, by these names and types.
     static const char *const time_sources[] = { "none", "nios", "sntp" };

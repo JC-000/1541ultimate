@@ -54,6 +54,96 @@ uint8_t wifi_tls_spike_payload(uint32_t seed, uint32_t i)
     return (uint8_t)(((uint32_t)(seed + i) * 2654435761u) >> 24);
 }
 
+// Decimal digits and nothing else, one at least, no larger than limit.
+static bool parse_decimal(const char *text, uint32_t limit, uint32_t *value)
+{
+    if ((text == NULL) || (*text == '\0')) {
+        return false;
+    }
+    uint32_t parsed = 0;
+    for (const char *p = text; *p; p++) {
+        if ((*p < '0') || (*p > '9')) {
+            return false;
+        }
+        uint32_t digit = *p - '0';
+        if ((digit > limit) || (parsed > (limit - digit) / 10)) {
+            return false;
+        }
+        parsed = (parsed * 10) + digit;
+    }
+    *value = parsed;
+    return true;
+}
+
+// Four decimal numbers 0-255 with a dot between, and nothing else. Stricter
+// than inet_aton, which also takes hexadecimal, octal and fewer parts.
+static bool dotted_ipv4(const char *text)
+{
+    if (text == NULL) {
+        return false;
+    }
+    char part[4];
+    for (int n = 0; n < 4; n++) {
+        int len = 0;
+        while ((*text >= '0') && (*text <= '9') && (len < 3)) {
+            part[len++] = *text++;
+        }
+        part[len] = '\0';
+        uint32_t value;
+        if (!parse_decimal(part, 255, &value) || (*text != ((n < 3) ? '.' : '\0'))) {
+            return false;
+        }
+        text++;
+    }
+    return true;
+}
+
+const char *wifi_tls_spike_parse(const char *host, const char *port, const char *sni, const char *verify,
+                                 const char *ca, const char *echo, const char *seed, wifi_tls_spike_args_t *args)
+{
+    uint32_t port_value, verify_value = 1, echo_value = 0, seed_value = 0;
+    uint8_t flags;
+    if (!dotted_ipv4(host)) {
+        return "host";
+    }
+    if (!parse_decimal(port, 65535, &port_value) || (port_value == 0)) {
+        return "port";
+    }
+    if (sni && (strlen(sni) > WIFI_TLS_MAX_SNI)) {
+        return "sni";
+    }
+    if (verify && !parse_decimal(verify, 1, &verify_value)) {
+        return "verify";
+    }
+    // The module refuses to verify without a name to check the certificate
+    // against (ESP_ERR_INVALID_ARG), so do not open a socket to find that out.
+    if (verify_value && (!sni || !*sni)) {
+        return "sni (verify=1 needs a server name; give sni, or verify=0)";
+    }
+    if (!ca || !strcmp(ca, "test")) {
+        flags = WIFI_TLS_FLAG_TEST_CA;
+    } else if (!strcmp(ca, "bundle")) {
+        flags = WIFI_TLS_FLAG_CA_BUNDLE;
+    } else if (!strcmp(ca, "none")) {
+        flags = 0;
+    } else {
+        return "ca";
+    }
+    if (echo && !parse_decimal(echo, WIFI_TLS_SPIKE_MAX_ECHO, &echo_value)) {
+        return "echo";
+    }
+    if (seed && !parse_decimal(seed, 0xFFFFFFFFu, &seed_value)) {
+        return "seed";
+    }
+    args->host = host;
+    args->port = (uint16_t)port_value;
+    args->sni = sni ? sni : "";
+    args->flags = flags | (verify_value ? WIFI_TLS_FLAG_VERIFY : 0);
+    args->echo = (int)echo_value;
+    args->seed = seed_value;
+    return NULL;
+}
+
 static const char *code_name(int code)
 {
     switch (code) {
