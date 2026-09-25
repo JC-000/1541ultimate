@@ -12,6 +12,9 @@ extern "C" void route_input_note_menu_button(void);
 extern "C" void route_input_release_rest_mouse(void);
 extern "C" bool push_active_menu_button(void) __attribute__((weak));
 #endif
+#if defined(TLS_SPIKE) && (U64 == 1)
+#include "wifi_tls.h"
+#endif
 
 #define MENU_C64_PAUSE      0x640B
 #define MENU_C64_RESUME     0x640C
@@ -657,3 +660,137 @@ API_CALL(GET, machine, heap, NULL, ARRAY( {  }))
     resp->json->add("total", (int)configTOTAL_HEAP_SIZE);
     resp->json_response(HTTP_OK);
 }
+
+#if defined(TLS_SPIKE) && (U64 == 1)
+// SPIKE CODE, NOT FOR RELEASE (esp-tls M2). Built only with TLS_SPIKE; the flow
+// is in software/io/wifi/wifi_tls_spike.cc.
+
+static bool parse_decimal(const char *text, int limit, int &value)
+{
+    if ((text == NULL) || (*text == '\0')) {
+        return false;
+    }
+    int parsed = 0;
+    for (const char *p = text; *p; p++) {
+        if ((*p < '0') || (*p > '9') || (parsed > (limit - (*p - '0')) / 10)) {
+            return false;
+        }
+        parsed = (parsed * 10) + (*p - '0');
+    }
+    value = parsed;
+    return true;
+}
+
+static void add_tls_stats(JSON_Object *obj, const char *key, bool have, const wifi_tls_stats_t &s)
+{
+    if (!have) {
+        return;
+    }
+    JSON_Object *stats = JSON::Obj();
+    stats->add("heap_free", (int)s.heap_free);
+    stats->add("heap_min_ever", (int)s.heap_min_ever);
+    stats->add("largest_block", (int)s.largest_block);
+    stats->add("ct_in_bytes", (int)s.ct_in_bytes);
+    stats->add("ct_out_bytes", (int)s.ct_out_bytes);
+    stats->add("pt_in_bytes", (int)s.pt_in_bytes);
+    stats->add("pt_out_bytes", (int)s.pt_out_bytes);
+    stats->add("handshake_us", (int)s.handshake_us);
+    stats->add("tls_version", (int)s.tls_version);
+    stats->add("ciphersuite", (int)s.ciphersuite);
+    stats->add("group", (int)s.group);
+    obj->add(key, stats);
+}
+
+API_DOC(PUT, machine, tlsspike,
+    TAG("Diagnostics")
+    SUMMARY("Run the TLS spike")
+    CAUTION("diagnostic", "Spike code for measuring TLS on the WiFi module; not in release builds.")
+    DESCRIPTION("Connects to `host`:`port`, runs a TLS handshake on the WiFi module with this side "
+                "carrying the ciphertext, sends `echo` bytes of plaintext, expects the same bytes "
+                "back, and closes the session and the socket. Answers 200 with the measurements "
+                "whether or not the run succeeded; `ok` and `stage` say how far it got.")
+    PATH("/v1/machine:tlsspike", "runTlsSpike", "")
+    PARAM("host", "string", "IPv4 address of the server.", "", "192.168.1.10")
+    PARAM("port", "integer(1..65535)", "TCP port of the server.", "", "4433")
+    PARAM("sni", "string", "Server name to send and to verify against.", "", "test.local")
+    PARAM("verify", "integer(0..1)", "Whether to verify the server's chain and name.", "1", "1")
+    PARAM("ca", "string", "Which trust anchors: test or bundle.", "test", "test")
+    PARAM("echo", "integer(0..65536)", "Plaintext bytes to send and expect back.", "0", "1024")
+    RESPONSE("200", "application/json", "", "The measurements.", "")
+    RESPONSE_ERROR("400", "Invalid port", "")
+)
+API_CALL(PUT, machine, tlsspike, NULL, ARRAY( { {"host", P_REQUIRED}, {"port", P_REQUIRED}, {"sni", P_OPTIONAL},
+                                                {"verify", P_OPTIONAL}, {"ca", P_OPTIONAL}, {"echo", P_OPTIONAL} }))
+{
+    int port;
+    if (!parse_decimal(args["port"], 65535, port) || (port == 0)) {
+        resp->error("Invalid port");
+        resp->json_response(HTTP_BAD_REQUEST);
+        return;
+    }
+    int verify = 1;
+    if (args.get_or("verify", NULL) && !parse_decimal(args["verify"], 1, verify)) {
+        resp->error("Invalid verify");
+        resp->json_response(HTTP_BAD_REQUEST);
+        return;
+    }
+    uint8_t flags;
+    const char *ca = args.get_or("ca", "test");
+    if (strcmp(ca, "test") == 0) {
+        flags = WIFI_TLS_FLAG_TEST_CA;
+    } else if (strcmp(ca, "bundle") == 0) {
+        flags = WIFI_TLS_FLAG_CA_BUNDLE;
+    } else {
+        resp->error("Invalid ca");
+        resp->json_response(HTTP_BAD_REQUEST);
+        return;
+    }
+    if (verify) {
+        flags |= WIFI_TLS_FLAG_VERIFY;
+    }
+    int echo = 0;
+    if (args.get_or("echo", NULL) && !parse_decimal(args["echo"], WIFI_TLS_SPIKE_MAX_ECHO, echo)) {
+        resp->error("Invalid echo");
+        resp->json_response(HTTP_BAD_REQUEST);
+        return;
+    }
+    const char *sni = args.get_or("sni", "");
+    if (strlen(sni) > WIFI_TLS_MAX_SNI) {
+        resp->error("Invalid sni");
+        resp->json_response(HTTP_BAD_REQUEST);
+        return;
+    }
+
+    wifi_tls_spike_result_t r;
+    wifi_tls_spike(args["host"], (uint16_t)port, sni, flags, echo, &r);
+
+    resp->json->add("ok", r.ok);
+    resp->json->add("stage", r.stage);
+    resp->json->add("error", r.error);
+    resp->json->add("esp_err", r.esp_err);
+    resp->json->add("state", r.state);
+    resp->json->add("steps", r.steps);
+    resp->json->add("handshake_steps", r.handshake_steps);
+    resp->json->add("handshake_ms", (int)r.handshake_ms);
+    if (r.have_peak) {
+        resp->json->add("handshake_us", (int)r.peak.handshake_us);
+        resp->json->add("tls_version", (int)r.peak.tls_version);
+        resp->json->add("ciphersuite", (int)r.peak.ciphersuite);
+        resp->json->add("group", (int)r.peak.group);
+    }
+    add_tls_stats(resp->json, "stats_before", r.have_before, r.before);
+    add_tls_stats(resp->json, "stats_peak", r.have_peak, r.peak);
+    add_tls_stats(resp->json, "stats_after", r.have_after, r.after);
+    resp->json->add("stats_error", r.stats_error);
+    resp->json->add("tcp_out", (int)r.tcp_out);
+    resp->json->add("tcp_in", (int)r.tcp_in);
+    resp->json->add("echo_sent", r.echo_sent);
+    resp->json->add("echo_received", r.echo_received);
+    resp->json->add("early_plaintext", r.early_plaintext);
+    resp->json->add("echo_ok", r.echo_ok);
+    resp->json->add("session_opened", r.session_opened);
+    resp->json->add("close_result", r.close_result);
+    resp->json->add("socket_opened", r.socket_opened);
+    resp->json_response(HTTP_OK);
+}
+#endif
