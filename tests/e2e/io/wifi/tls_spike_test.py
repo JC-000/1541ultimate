@@ -150,9 +150,7 @@ DEFAULT_REPEAT = 5
 #    1  STATS after                       (:27)
 #   --
 #   67  s, summed as in code review S10 (m2-codereview.md:70-74). 90 s leaves room
-#       for the REST round trip and the httpd queue. retries=1 on this PUT means
-#       one attempt only (rest.py RestClient.request: max(1, retries) attempts),
-#       so a timeout never starts a second spike run behind the first.
+#       for the REST round trip and the httpd queue.
 SPIKE_TIMEOUT = 90.0
 RECORD_WAIT = 10.0          # after the reply, for the server's connection record
 STRAY_WAIT = 2.0            # after that, for a second connection nobody asked for
@@ -295,10 +293,21 @@ class Outcome:
     server: list[dict] = field(default_factory=list)
 
 
-def spike(rest: RestClient, route: str, params: dict) -> tuple[int, dict]:
-    """One PUT to the spike route, classified before anything reads its fields."""
-    code, _headers, body = rest.request("PUT", route, params=params,
-                                        timeout=SPIKE_TIMEOUT, retries=1)
+def spike(rest: RestClient, route: str, params: dict, timeout: float) -> tuple[int, dict]:
+    """One PUT to the spike route, classified before anything reads its fields.
+
+    The route is not idempotent: every call opens a fresh TLS connection. A
+    re-issued PUT would run the spike twice, and the server would log two
+    connections, which the silent-fallback check fails. So it is sent once
+    (retries=0: RestClient.request makes max(1, retries) attempts,
+    tests/lib/rest.py:545), and no answer is reported as no answer.
+    """
+    try:
+        code, _headers, body = rest.request("PUT", route, params=params,
+                                            timeout=timeout, retries=0)
+    except Failure as exc:
+        raise Failure(f"no answer to PUT {route} within {timeout:.0f}s; not re-issued, "
+                      f"because the route is not idempotent ({exc})") from exc
     if code == 404 and not body.strip():
         # MicroHttpServer answers a route nobody registered with exactly this:
         # execute_api_v1 finds no command and returns -1 (software/api/routes.cc,
@@ -328,7 +337,7 @@ def run_scenario(rest: RestClient, args, server: Server, scenario: Scenario) -> 
     seed = secrets.randbits(32)
     params = {"host": args.server_ip, "port": server.port, "sni": args.sni,
               "verify": scenario.verify, "ca": "test", "echo": args.echo_bytes, "seed": seed}
-    code, data = spike(rest, args.route, params)
+    code, data = spike(rest, args.route, params, args.spike_timeout)
     records = server.new_records(RECORD_WAIT)
     return Outcome(scenario, seed, code, data, records)
 
@@ -916,6 +925,9 @@ def main() -> int:
                         help="the results file, opened before the first device call")
     parser.add_argument("--p1-sizes", help="JSON from the budget lane: base_bin_bytes, "
                                            "tls_bin_bytes, full_bin_bytes, app_partition_bytes")
+    parser.add_argument("--spike-timeout", type=float, default=SPIKE_TIMEOUT,
+                        help=f"seconds to wait for one spike PUT (default {SPIKE_TIMEOUT:.0f}, "
+                             "above the firmware's own worst case); the sim lowers it")
     parser.add_argument("--expect-spike", action="store_true",
                         help="the image under test was built with TLS_SPIKE=1 (GREEN runs): "
                              "an empty 404 then means a stale or wrong image, not stock")
