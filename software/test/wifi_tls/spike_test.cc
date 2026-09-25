@@ -82,6 +82,7 @@ static bool server_silent;        // the server never answers
 static int step_busy_at;          // nonzero: the n-th STEP gets no answer in time
 static bool module_chatty;        // the module keeps sending handshake records and never finishes
 static int crypto_ticks = 60;     // what the step with the key exchange and the chain costs the module
+static uint32_t handshake_ticks;  // fake time the module spent inside handshake steps
 static bool module_ended;         // the module ended the session itself (FAILED or CLOSED)
 static bool refused_pending;      // the last step was refused for want of room
 static std::vector<uint8_t> refused_input;
@@ -398,6 +399,9 @@ int wifi_tls_step(uint8_t session, wifi_tls_step_t *st)
     }
     module_steps++;
     now += 2; // a round trip over the link
+    if (!module_established) {
+        handshake_ticks += 2; // part of it the module's, inside mbedtls_ssl_handshake
+    }
     if (step_busy_at && (module_steps == step_busy_at)) {
         now += 1000; // the 5 s the call waits
         return WIFI_TLS_BUSY;
@@ -414,6 +418,7 @@ int wifi_tls_step(uint8_t session, wifi_tls_step_t *st)
             module_ct_seen += st->ct_in_len;
             if (module_ct_seen >= 180) {
                 now += crypto_ticks; // the key exchange and the chain, on the module's dispatcher
+                handshake_ticks += crypto_ticks;
                 if (handshake_fail_err) {
                     st->state = WIFI_TLS_FAILED; // the module frees the session
                     st->esp_err = handshake_fail_err;
@@ -495,7 +500,9 @@ int wifi_tls_stats(uint8_t session, wifi_tls_stats_t *stats, int *esp_err)
             stats->tls_version = 0x0304;
             stats->ciphersuite = 0x1301;
             stats->group = 0; // mbedTLS 3.6 does not say
-            stats->handshake_us = 431250;
+            // What the module spent inside the handshake, taken from the fake
+            // clock the steps used, less the link: never more than the Nios saw.
+            stats->handshake_us = handshake_ticks * portTICK_PERIOD_MS * 1000 - 750;
         }
     }
     return 0;
@@ -527,6 +534,7 @@ static void reset_world(int at, int variant)
     step_busy_at = 0;
     module_chatty = false;
     crypto_ticks = 60;
+    handshake_ticks = 0;
     module_ended = false;
     refused_pending = false;
     refused_input.clear();
@@ -701,6 +709,14 @@ static void golden_file(const char *out, const char *golden, const char *stem, c
         value(q.sni) + ", \"verify\": " + value(q.verify) + ", \"ca\": " + value(q.ca) + ", \"echo\": " +
         value(q.echo) + ", \"seed\": " + value(q.seed) + " },\n  \"http_status\": " + std::to_string(status) +
         ",\n  \"response\": " + (body.empty() ? std::string("null") : body) + "}\n";
+    // The two clocks: the Nios cannot see the handshake take less than the
+    // module spent computing it.
+    size_t at_ms = body.find("\"handshake_ms\" : "), at_us = body.find("\"handshake_us\" : ");
+    if ((at_ms != std::string::npos) && (at_us != std::string::npos)) {
+        long ms = strtol(body.c_str() + at_ms + 17, NULL, 10);
+        long us = strtol(body.c_str() + at_us + 17, NULL, 10);
+        check(ms * 1000 >= us, "%s: handshake_ms %ld * 1000 >= handshake_us %ld", stem, ms, us);
+    }
     std::string name = std::string(stem) + ".json";
     std::string path = std::string(out) + "/" + name;
     FILE *f = fopen(path.c_str(), "wb");

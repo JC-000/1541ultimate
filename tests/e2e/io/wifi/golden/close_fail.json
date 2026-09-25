@@ -8,7 +8,7 @@
   "stage" : "close",
   "error" : "close: no answer in time (1)",
   "handshake_ms" : 365,
-  "handshake_us" : 431250,
+  "handshake_us" : 319250,
   "stats_before" : { 
   "heap_free" : 100000,
   "heap_min_ever" : 100000,

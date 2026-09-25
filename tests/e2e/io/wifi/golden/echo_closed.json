@@ -8,7 +8,7 @@
   "stage" : "echo",
   "error" : "echo_state: session CLOSED, esp_err 0",
   "handshake_ms" : 365,
-  "handshake_us" : 431250,
+  "handshake_us" : 319250,
   "stats_before" : { 
   "heap_free" : 100000,
   "heap_min_ever" : 100000,
