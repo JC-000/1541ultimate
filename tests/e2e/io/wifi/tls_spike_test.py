@@ -89,14 +89,19 @@ FIELDS = {
     "heap_free_before": "stats_before.heap_free",
     "heap_free_after": "stats_after.heap_free",
     "heap_free_peak": "stats_peak.heap_free",
+    "heap_min_ever_peak": "stats_peak.heap_min_ever",
+    "stack_free_before": "stats_before.stack_free",
+    "stack_free_after": "stats_after.stack_free",
     "stack_free_peak": "stats_peak.stack_free",
+    "step_max_ms": "step_max_ms",
+    "sessions_open_after": "sessions_open_after",
 }
 TYPES = {"ok": bool, "stage": str, "error": str, "handshake_ms": int, "handshake_us": int,
          "tls_version": int, "ciphersuite": int, "group": int, "echo_sent": int,
          "echo_received": int, "echo_ok": bool, "steps": int, "time_source": str,
-         "esp_time": int}
+         "esp_time": int, "step_max_ms": int, "sessions_open_after": int}
 STATS_BLOCKS = ("stats_before", "stats_after", "stats_peak")
-STATS_KEYS = ("heap_free", "heap_min_ever", "largest_block")
+STATS_KEYS = ("heap_free", "heap_min_ever", "largest_block", "stack_free")
 STAGES = ("connect", "open", "handshake", "echo", "close", "done")
 TIME_SOURCES = ("nios", "sntp", "none")
 # The section 9 refusal is "a distinct error text"; the text itself is the Nios
@@ -135,28 +140,32 @@ DEFAULT_ECHO_BYTES = 3000   # more than one 1024-byte step each way (spec sectio
 DEFAULT_REPEAT = 5
 # One REST call has to outlast the firmware's own worst case, so that a slow run
 # comes back as the device's timeout result rather than as "no answer". The
-# Nios limits, from the Nios lane's report (scratchpad/esp-tls/reports/m2-nios.md;
-# this lane does not read the implementation):
-#    1  STATS before                      (:27, wifi_tls.cc timeouts, STATS 1 s)
-#    5  TCP connect                       (:112, exit 4)
-#    5  OPEN                              (:27, OPEN 5 s)
-#   15  handshake deadline                (:118-119, exits 10-11)
-#    5  + the STEP in flight at it        (:27, STEP 5 s; the deadline is checked after a step)
-#    5  + the send after that step        (:116, exit 8)
-#   15  echo deadline                     (:120, exit 12, "as 10, 11")
-#    5  + the STEP in flight              (:120 via :27)
-#    5  + the send after it               (:120 via :116)
-#    5  CLOSE                             (:27, CLOSE 5 s)
-#    1  STATS after                       (:27)
-#   --
-#   67  s, summed as in code review S10 (m2-codereview.md:70-74). 90 s leaves room
-#       for the REST round trip and the httpd queue.
+# limits are from the Nios lane's report (scratchpad/esp-tls/reports/m2-nios.md)
+# and the adversarial review (m2-adversarial.md §7); this lane does not read the
+# implementation. Each dedicated call may first spend about 0.7 s in its UNSENT
+# retries (10 x (20 ms + 50 ms), adversarial §7), and one send can take about
+# 10 s, because expiry is checked only after a partial send (adversarial §7):
+#    1.7  STATS before              (m2-nios.md:27, STATS 1 s, + 0.7 retries)
+#    5    TCP connect               (m2-nios.md:112, exit 4)
+#    5.7  OPEN                      (:27, OPEN 5 s, + 0.7)
+#   15    handshake deadline        (:118-119, exits 10-11)
+#    5.7  + the STEP in flight      (:27, STEP 5 s, + 0.7; the deadline is checked after it)
+#   10    + the send after it       (:116 exit 8, 5 s SO_SNDTIMEO, up to twice)
+#    1.7  STATS after OPEN/peak     (:27, amendment 9 A)
+#   30.8  echo, the same shape      (:120, exit 12, "as 10, 11": 15 + 5.7 + 10)
+#    5.7  CLOSE                     (:27, CLOSE 5 s, + 0.7)
+#    1.7  STATS after               (:27)
+#   ----
+#   83    s, as the adversarial review sums it. 90 s leaves about 7 s for the
+#         REST round trip and the httpd queue.
 SPIKE_TIMEOUT = 90.0
 RECORD_WAIT = 10.0          # after the reply, for the server's connection record
 STRAY_WAIT = 2.0            # after that, for a second connection nobody asked for
 SERVER_IDLE_TIMEOUT = 120.0  # longer than one REST call, so an open socket shows
 TIMING_SLACK_MS = 5
-CLOCK_CROSSCHECK_SLACK_US = 2000
+# Amendment 9 G: the Nios clock ticks every 5 ms and handshake_ms is two
+# samples of it, so it can read up to a tick short; 10 ms covers both samples.
+CLOCK_CROSSCHECK_SLACK_US = 10000
 # Test hook for tls_spike_sim.py only: a load average to report instead of the
 # host's, so the sim can show P2 judged and P2 held back. A run that uses it
 # says so in its output and in the results file.
@@ -533,8 +542,8 @@ def judge_failed(args, outcome: Outcome, manifest: dict) -> tuple[list[str], str
     return problems, warning
 
 
-def judge_no_time(outcome: Outcome) -> list[str]:
-    """Verify on, and the device says it has no trustworthy time (section 9).
+def judge_open_refused(outcome: Outcome) -> list[str]:
+    """Verify on, and OPEN refused: no trustworthy time (section 9) or no entropy.
 
     The only correct behaviour is to refuse at OPEN, with an error that speaks
     of time, before any TLS byte leaves: never verify with a 1970 clock. The
@@ -549,8 +558,13 @@ def judge_no_time(outcome: Outcome) -> list[str]:
         problems.append(f"device says ok={device.get('ok')!r}, stage {device.get('stage')!r}; "
                         "with verify on and no trusted time it must fail at 'open'")
     error = str(device.get("error", ""))
-    if not any(word in error.lower() for word in NO_TIME_WORDS):
-        problems.append(f"device error {error!r} does not say the refusal is about time")
+    no_entropy = "entropy" in error.lower()
+    if not no_entropy and not any(word in error.lower() for word in NO_TIME_WORDS):
+        problems.append(f"device error {error!r} says neither time nor entropy: the "
+                        "section 12 refusals are distinct texts")
+    if device.get("time_source") != "none" and not no_entropy:
+        problems.append(f"OPEN refused for time, but time_source is "
+                        f"{device.get('time_source')!r}")
     for record in outcome.server:
         if record["wire"]["client_hellos"] or record["tcp_in"]:
             problems.append(f"the server received {record['tcp_in']} bytes (a ClientHello: "
@@ -562,9 +576,57 @@ def judge_no_time(outcome: Outcome) -> list[str]:
         problems.append(f"the server logged {len(outcome.server)} connections")
     if problems:
         return ["fail-closed rule broken (section 9): " + problems[0], *problems[1:]]
+    if no_entropy:
+        return ["precondition: the ESP32 has no entropy source and correctly refused at OPEN "
+                "(spec section 2), so this verify-on scenario could not run"]
     return ["precondition: the device has no trusted time (time_source 'none') and correctly "
             "refused at OPEN (section 9 held), so this verify-on scenario could not run; give "
             "the Nios a clock (RTC or SNTP) and rerun"]
+
+
+def judge_outcome(args, outcome: Outcome, manifest: dict,
+                  positives_ok: bool) -> tuple[list[str], str | None]:
+    """One scenario's problems and warning, from the device's reply and the server log.
+
+    A pure function of its inputs, so the golden contract test in
+    tls_spike_sim.py feeds the Nios lane's real route output through exactly
+    the judgement a rig run uses.
+    """
+    scenario, device = outcome.scenario, outcome.device
+    warning = None
+    try:
+        if scenario.verify and device.get("stage") == "open" and device.get("ok") is False:
+            problems = judge_open_refused(outcome)
+        elif scenario.verify and device.get("time_source") == "none":
+            # Amendment 9 A: the time fields come from a STATS right after a
+            # successful OPEN, so "none" past OPEN means either the device went
+            # on to verify with no trusted time, or that STATS was not taken.
+            problems = [f"time_source 'none' past OPEN (stage {device.get('stage')!r}): "
+                        "either the device verified without trusted time (the section 9 "
+                        "fail-closed rule) or its STATS after OPEN was not taken "
+                        "(amendment 9 A)"]
+        elif scenario.expect == "established":
+            problems = judge_established(args, outcome)
+            warning = None if problems else (timing_warning(outcome)
+                                             or clock_warning(outcome))
+        elif scenario.expect == "echo-broken":
+            problems = judge_echo_broken(args, outcome)
+        elif not positives_ok:
+            problems, warning = judge_failed(args, outcome, manifest)
+            problems = ["uninterpretable: no verify-on handshake with the test root "
+                        "completed earlier in this run, so a failure here may be the "
+                        "device failing everything", *problems]
+        else:
+            problems, warning = judge_failed(args, outcome, manifest)
+    except Failure as exc:
+        problems = [str(exc)]
+    # Amendment 9 D: every exit path closes its ESP32 session. A firmware that
+    # never CLOSEs would otherwise pass, the heap drift being only a WARN.
+    left = device.get("sessions_open_after")
+    if isinstance(left, int) and not isinstance(left, bool) and left != 0:
+        problems.append(f"sessions_open_after={left}: the run left an ESP32 session open "
+                        "(amendment 9 D)")
+    return problems, warning
 
 
 def clock_warning(outcome: Outcome) -> str | None:
@@ -632,11 +694,16 @@ def host_control(server: Server, sni: str, verify: bool, curve: str | None,
         return False, str(exc), b""
 
 
-def host_load() -> float:
-    """This host's 1-minute load average, the input to amendment 7's P2 rule."""
+def host_load(quiet: bool = False) -> float:
+    """This host's 1-minute load average, the input to amendment 7's P2 rule.
+
+    Sampled at the start, after every scenario and at the end, so "below 4
+    throughout" is judged on the whole run, not on its two ends.
+    """
     fake = os.environ.get(FAKE_LOAD_ENV)
     if fake is not None:
-        detail(f"host load average FAKED as {fake} via ${FAKE_LOAD_ENV} (simulation only)")
+        if not quiet:
+            detail(f"host load average FAKED as {fake} via ${FAKE_LOAD_ENV} (simulation only)")
         return float(fake)
     return os.getloadavg()[0]
 
@@ -747,6 +814,10 @@ def measurement(args, outcome: Outcome) -> dict:
         "heap_free_before": field_of(device, "heap_free_before", False),
         "heap_free_after": field_of(device, "heap_free_after", False),
         "heap_free_peak": field_of(device, "heap_free_peak", False),
+        "heap_min_ever_peak": field_of(device, "heap_min_ever_peak", False),
+        "stack_free_before": field_of(device, "stack_free_before", False),
+        "stack_free_after": field_of(device, "stack_free_after", False),
+        "step_max_ms": field_of(device, "step_max_ms", False),
         "echo_ok": field_of(device, "echo_ok", False),
         # Intact per the server: it received the section 7 payload for this
         # seed, and echoed exactly that.
@@ -770,6 +841,7 @@ def run(args) -> tuple[bool, str]:
 
     with check("predictions: the judge matches its registration"):
         load_start = host_load()
+        load_samples = [load_start]
         opened = predictions.open_results(results_path, load_start)
         if opened["integrity_at_start"]:
             raise Failure("; ".join(opened["integrity_at_start"]))
@@ -815,27 +887,8 @@ def run(args) -> tuple[bool, str]:
             check_start(f"f: PUT {args.route} is served (the spike route exists)")
             check_ok(f"HTTP {outcome.code}", elapsed=time.monotonic() - started)
 
-        warning = None
-        try:
-            if scenario.verify and outcome.device.get("time_source") == "none":
-                problems = judge_no_time(outcome)
-            elif scenario.expect == "established":
-                problems = judge_established(args, outcome)
-                warning = None if problems else (timing_warning(outcome)
-                                                 or clock_warning(outcome))
-            elif scenario.expect == "echo-broken":
-                problems = judge_echo_broken(args, outcome)
-            else:
-                if not positives_ok:
-                    problems = ["uninterpretable: no verify-on handshake with the test root "
-                                "completed earlier in this run, so a failure here may be the "
-                                "device failing everything"]
-                    problems_extra, warning = judge_failed(args, outcome, manifest)
-                    problems += problems_extra
-                else:
-                    problems, warning = judge_failed(args, outcome, manifest)
-        except Failure as exc:
-            problems = [str(exc)]
+        load_samples.append(host_load(quiet=True))
+        problems, warning = judge_outcome(args, outcome, manifest, positives_ok)
         elapsed = time.monotonic() - started
         check_start(label + (" [SPIKE-ONLY: verification off]" if scenario.spike_only else ""))
         if problems:
@@ -861,12 +914,14 @@ def run(args) -> tuple[bool, str]:
     leak_check(measured)
     p1 = json.loads(Path(args.p1_sizes).read_text()) if args.p1_sizes else None
     with check("predictions: judged by the registered code"):
-        load = {"start": load_start, "end": host_load(),
+        load_end = host_load()
+        load = {"start": load_start, "end": load_end, "samples": [*load_samples, load_end],
                 "faked": os.environ.get(FAKE_LOAD_ENV) is not None}
         results = predictions.close_results(results_path,
                                             {"p1": p1, "runs": measured, "concurrent": None,
                                              "host_load": load})
-        detail(f"host load {load['start']:.2f} at start, {load['end']:.2f} at end")
+        detail(f"host load {load['start']:.2f} at start, {load['end']:.2f} at end, "
+               f"{max(load['samples']):.2f} at most over {len(load['samples'])} samples")
         detail(f"verdict: {results['verdict']}")
         for key in predictions.BANDS:
             entry = results["judgement"][key]
@@ -899,10 +954,16 @@ def leak_check(measured: list[dict]) -> None:
     check_start("heap_free after each session does not drift down")
     drop = after[0] - after[-1]
     detail(f"heap_free after each session: {after}")
-    stacks = [m["stack_free_peak"] for m in measured if isinstance(m["stack_free_peak"], int)]
+    stacks = [m[k] for m in measured
+              for k in ("stack_free_before", "stack_free_peak", "stack_free_after")
+              if isinstance(m[k], int)]
     if stacks:
-        detail(f"dispatcher stack_free at peak (section 10, counts against P3): lowest "
-               f"{min(stacks)} B over {len(stacks)} sessions")
+        detail(f"dispatcher stack_free (section 10, counts against P3): lowest {min(stacks)} B "
+               f"over {len(measured)} sessions")
+    steps = [m["step_max_ms"] for m in measured if isinstance(m["step_max_ms"], int)]
+    if steps:
+        detail(f"longest single STEP round trip (amendment 9 C, the worst dispatcher block): "
+               f"{max(steps)} ms")
     if drop > 2048:
         check_warn(f"{drop} bytes less free after the last session than after the first")
     else:
