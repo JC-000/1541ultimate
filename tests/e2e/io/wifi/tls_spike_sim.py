@@ -470,6 +470,7 @@ def expected_ok(mode: str, result: dict) -> tuple[bool, str]:
 # mbedTLS returns for every verification failure); their judge tells them apart
 # by the server-side alert, never by the device's error text.
 GOLDEN_EXPECT = {
+    # the twelve of amendment 10
     "success_ecdsa": ("established", "ecdsa", 1, "tls", "pass"),
     "success_rsa": ("established", "rsa", 1, "tls", "pass"),
     "verify_off": ("established", "mismatch", 0, "tls", "pass"),
@@ -477,14 +478,35 @@ GOLDEN_EXPECT = {
     "untrusted": ("failed", "untrusted", 1, "reject", "pass"),
     "expired": ("failed", "expired", 1, "reject", "pass"),
     "no_time": ("established", "ecdsa", 1, "none", "precondition"),
-    "bad_param": ("established", "ecdsa", 1, "none", "bad-request"),
-    "verify_without_sni": ("established", "ecdsa", 1, "none", "bad-request"),
-    "no_entropy": ("established", "ecdsa", None, "none", "precondition"),
-    "step_timeout": ("established", "ecdsa", 1, "none", "fail"),
+    "bad_param": ("established", "ecdsa", None, "none", "bad-request"),
     "connect_fail": ("established", "ecdsa", 1, "none", "fail"),
     "open_timeout": ("established", "ecdsa", 1, "none", "fail"),
     "handshake_timeout": ("established", "ecdsa", 1, "none", "fail"),
     "echo_mismatch": ("echo-broken", "ecdsa", 1, "flip", "pass"),
+    # the supervisor's three extra stems (verify_without_sni was delivered as
+    # bad_param_no_sni, the Nios exit-path row's name)
+    "no_entropy": ("established", "ecdsa", None, "none", "precondition"),
+    "step_timeout": ("established", "ecdsa", 1, "none", "fail"),
+    "bad_param_no_sni": ("established", "ecdsa", None, "none", "bad-request"),
+    # one per further Nios exit-path row (m2-nios.md section 5)
+    "bad_param_host": ("established", "ecdsa", None, "none", "bad-request"),
+    "memory_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "socket_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "connect_timeout": ("established", "ecdsa", 1, "none", "fail"),
+    "socket_options_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "open_invalid": ("established", "ecdsa", 1, "none", "fail"),
+    "handshake_send_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "handshake_closed": ("established", "ecdsa", 1, "none", "fail"),
+    "handshake_eof": ("established", "ecdsa", 1, "none", "fail"),
+    "handshake_deadline": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_recv_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_send_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_silent": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_step_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_closed": ("established", "ecdsa", 1, "none", "fail"),
+    # exit 16: the run completed, CLOSE failed, and the session is left open;
+    # sessions_open_after=1 must FAIL it (amendment 9 D)
+    "close_fail": ("established", "ecdsa", 1, "tls", "fail"),
 }
 GOLDEN_ENV = "TLS_SPIKE_GOLDEN"
 # The fields of a golden reply that depend on the server it met, not on the
@@ -493,7 +515,8 @@ GOLDEN_ENV = "TLS_SPIKE_GOLDEN"
 LIVE_FIELDS = ("tls_version", "ciphersuite")
 # What a stem's reply itself must show, beyond its verdict: (stage, error pattern).
 GOLDEN_REPLY = {
-    "step_timeout": ("handshake", r"time\s*-?\s*out|timed\s+out"),
+    "step_timeout": ("handshake", r"time\s*-?\s*out|timed\s+out|no answer in time"),
+    "close_fail": ("close", r"."),
 }
 
 
@@ -505,7 +528,10 @@ def golden_case(stem: str, wrapped: dict, work: Path) -> tuple[bool, str, list[s
     if wrapped.get("stem") != stem:
         return False, f"file {stem}.json says stem {wrapped.get('stem')!r}", notes
     if verify is None:
-        verify = int(request.get("verify", 1))
+        # A bad-request row may carry an invalid or missing verify; it never
+        # reaches the judges that use it.
+        given = request.get("verify")
+        verify = given if isinstance(given, int) and given in (0, 1) else 1
     elif int(request.get("verify", -1)) != verify:
         return False, (f"request verify={request.get('verify')!r}, but {stem} is a verify="
                        f"{verify} path"), notes
@@ -566,6 +592,13 @@ def golden_case(stem: str, wrapped: dict, work: Path) -> tuple[bool, str, list[s
             device["esp_time"] = now
         outcome = suite.Outcome(scenario, seed, int(wrapped["http_status"]), device, records)
         problems, warning = suite.judge_outcome(Args, outcome, manifest, positives_ok=True)
+        # Whatever decides the verdict, the reply itself has to meet the
+        # section 7/9/17 contract on every exit path; that is the seam the
+        # adversarial review found untested (m2-adversarial.md §1).
+        contract = suite.contract_problems(device)
+        if contract:
+            return False, f"[{wrapped.get('exit_path')}] the reply breaks the contract: " \
+                          f"{contract}", notes
     first = problems[0] if problems else ""
     if want == "pass":
         ok = not problems
@@ -574,7 +607,12 @@ def golden_case(stem: str, wrapped: dict, work: Path) -> tuple[bool, str, list[s
     elif want == "bad-request":
         ok = "answered HTTP 400" in first
     else:
-        ok = bool(problems) and not first.startswith(("precondition", "fail-closed rule"))
+        # A plain FAIL: never a correct refusal, never a security break, never
+        # the "none past OPEN" contract FAIL, which is about OPEN having run.
+        ok = (bool(problems) and not first.startswith("precondition")
+              and not any(word in first for word in ("fail-closed rule", "past OPEN")))
+        if stem == "close_fail":
+            ok = ok and any("sessions_open_after=1" in problem for problem in problems)
     said = first or warning or "no problems"
     return ok, f"[{wrapped.get('exit_path')}] expected {want}: {said[:160]}", notes
 

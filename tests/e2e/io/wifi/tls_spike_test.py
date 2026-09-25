@@ -104,10 +104,18 @@ STATS_BLOCKS = ("stats_before", "stats_after", "stats_peak")
 STATS_KEYS = ("heap_free", "heap_min_ever", "largest_block", "stack_free")
 STAGES = ("connect", "open", "handshake", "echo", "close", "done")
 TIME_SOURCES = ("nios", "sntp", "none")
+# Where a successful OPEN lies behind the run, so the STATS after it exists
+# (amendment 9 A). Before it ("connect", "open") time_source "none" is right.
+STAGES_PAST_OPEN = ("handshake", "echo", "close", "done")
 # The section 9 refusal is "a distinct error text"; the text itself is the Nios
 # lane's to choose, so the suite asks only that it speaks of time.
-NO_TIME = re.compile(r"\b(time|clock)\b", re.IGNORECASE)
-TIMED_OUT = re.compile(r"time\s*-?\s*out|timed\s+out", re.IGNORECASE)
+# The Nios lane's real refusal reads "open: verify needs a trustworthy time, and
+# neither the Ultimate (clock: none) nor the module has one" (golden no_time),
+# while its timeouts read "no answer in time" or "timed out" (golden
+# open_timeout, step_timeout). A bare "time" therefore says nothing.
+NO_TIME = re.compile(r"\btrust\w*\s+time\b|\bno\s+(trusted\s+)?time\b|\bclock\b",
+                     re.IGNORECASE)
+TIMED_OUT = re.compile(r"time\s*-?\s*out|timed\s+out|\bin\s+time\b", re.IGNORECASE)
 # The device's clock may be off; this is only where a WARN starts.
 CLOCK_SKEW_WARN_SECONDS = 86400
 # mbedTLS 3.6.0 has no public getter for the negotiated group, so the device
@@ -630,7 +638,8 @@ def judge_outcome(args, outcome: Outcome, manifest: dict,
         if open_refused and (scenario.verify
                              or refusal_kind(str(device.get("error", ""))) == "entropy"):
             problems = judge_open_refused(outcome)
-        elif scenario.verify and device.get("time_source") == "none":
+        elif scenario.verify and device.get("time_source") == "none" \
+                and device.get("stage") in STAGES_PAST_OPEN:
             # Amendment 9 A: the time fields come from a STATS right after a
             # successful OPEN, so "none" past OPEN means either the device went
             # on to verify with no trusted time, or that STATS was not taken.
