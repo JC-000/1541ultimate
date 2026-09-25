@@ -102,9 +102,11 @@ static int tls_bio_recv(void *ctx, unsigned char *buf, size_t len)
     return (int)len;
 }
 
+#if CONFIG_TLS_SPIKE
 // mbedTLS 3.6.0's TLS 1.3 client verifies whatever authmode says (ssl_tls13_validate_certificate()
 // starts from VERIFY_REQUIRED and only a server reads conf->authmode), and it wants a CA chain.
 // So "verify off" is an empty CA chain plus a callback that clears every verification flag.
+// Spike builds only (CONFIG_TLS_SPIKE): anything else refuses to open without verification.
 static int tls_accept_any(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags)
 {
     (void)ctx;
@@ -113,6 +115,7 @@ static int tls_accept_any(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t 
     *flags = 0;
     return 0;
 }
+#endif
 
 // 00:00 UTC on the day this file was compiled: a clock before it cannot be right
 static time_t tls_build_time(void)
@@ -158,7 +161,10 @@ static tls_session_t *tls_find(uint8_t id)
 
 static void tls_free(tls_session_t *s)
 {
-    sessions[s->id % TLS_MAX_SESSIONS] = NULL;
+    // A session that failed to open never took its slot, which may still hold the one it would evict
+    if (sessions[s->id % TLS_MAX_SESSIONS] == s) {
+        sessions[s->id % TLS_MAX_SESSIONS] = NULL;
+    }
     mbedtls_ssl_free(&s->ssl);
     mbedtls_ssl_config_free(&s->conf);
     mbedtls_x509_crt_free(&s->ca);
@@ -194,6 +200,11 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
         (memchr(sni, 0, sni_len) != NULL)) {
         return ESP_ERR_INVALID_ARG;
     }
+#if !CONFIG_TLS_SPIKE
+    if (!verify) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+#endif
     if (entropy_source() == ENTROPY_NONE) {
         *reason = TLS_OPEN_REASON_NO_ENTROPY;
         return ESP_ERR_INVALID_STATE;
@@ -224,7 +235,8 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
     memcpy(hostname, sni, sni_len);
     hostname[sni_len] = 0;
 
-    // A full table evicts the least recently used session, so orphans cannot lock TLS out
+    // A full table evicts the least recently used session, so orphans cannot lock TLS out.
+    // The victim goes only once the new session is fully set up: a failed OPEN kills nothing.
     int slot = -1;
     for (int i = 0; i < TLS_MAX_SESSIONS; i++) {
         if (!sessions[i]) {
@@ -232,6 +244,7 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
             break;
         }
     }
+    tls_session_t *victim = NULL;
     if (slot < 0) {
         slot = 0;
         for (int i = 1; i < TLS_MAX_SESSIONS; i++) {
@@ -239,8 +252,7 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
                 slot = i;
             }
         }
-        ESP_LOGW(TAG, "Table full, evicting session %d", sessions[slot]->id);
-        tls_free(sessions[slot]);
+        victim = sessions[slot];
     }
     if (tls_sessions_open() == 0) {
         // heap_min then reports the peak of this burst of sessions, not of the Wi-Fi start
@@ -263,7 +275,6 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
     mbedtls_x509_crt_init(&s->ca);
     mbedtls_ctr_drbg_init(&s->drbg);
     mbedtls_entropy_init(&s->entropy);
-    sessions[slot] = s;
 
     static const char pers[] = "u64 tls spike";
     int ret = mbedtls_ctr_drbg_seed(&s->drbg, mbedtls_entropy_func, &s->entropy,
@@ -277,10 +288,12 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
         mbedtls_ssl_conf_max_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
         mbedtls_ssl_conf_rng(&s->conf, mbedtls_ctr_drbg_random, &s->drbg);
         mbedtls_ssl_conf_authmode(&s->conf, verify ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
+#if CONFIG_TLS_SPIKE
         if (!verify) {
             mbedtls_ssl_conf_ca_chain(&s->conf, &s->ca, NULL);
             mbedtls_ssl_conf_verify(&s->conf, tls_accept_any, NULL);
         }
+#endif
         if (verify && (cas == TLS_OPEN_CA_TEST)) {
             ret = mbedtls_x509_crt_parse(&s->ca, tls_test_ca_pem_start, tls_test_ca_pem_end - tls_test_ca_pem_start);
             if (ret > 0) {
@@ -307,6 +320,11 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
         tls_free(s);
         return ret;
     }
+    if (victim) {
+        ESP_LOGW(TAG, "Table full, evicting session %d", victim->id);
+        tls_free(victim);
+    }
+    sessions[slot] = s;
     mbedtls_ssl_set_bio(&s->ssl, s, tls_bio_send, tls_bio_recv, NULL);
     *session = s->id;
     return ESP_OK;
