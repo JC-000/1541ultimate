@@ -338,8 +338,11 @@ def classify_reply(route: str, code: int, body: bytes, params: dict) -> dict:
         raise Failure(f"PUT {route} answered 403: the REST password was refused")
     text = body.decode("utf-8", "replace")
     if code == 400 and "does not have parameter" in text:
-        raise Failure(f"PUT {route} exists but rejects this suite's parameter names "
-                      f"{sorted(params)}: {text[:300]}")
+        raise Failure(f"PUT {route} answered HTTP 400: it exists but rejects this suite's "
+                      f"parameter names {sorted(params)}: {text[:300]}")
+    if code == 400:
+        raise Failure(f"PUT {route} answered HTTP 400, a bad request from this suite's "
+                      f"parameters {sorted(params)}: {text[:300]}")
     try:
         data = json.loads(text)
     except ValueError as exc:
@@ -604,7 +607,7 @@ def judge_open_refused(outcome: Outcome) -> list[str]:
         return ["fail-closed rule broken (section 9): " + problems[0], *problems[1:]]
     if no_entropy:
         return ["precondition: the ESP32 has no entropy source and correctly refused at OPEN "
-                "(spec section 2), so this verify-on scenario could not run"]
+                "(spec section 2), so this scenario could not run"]
     return ["precondition: the device has no trusted time (time_source 'none') and correctly "
             "refused at OPEN (section 9 held), so this verify-on scenario could not run; give "
             "the Nios a clock (RTC or SNTP) and rerun"]
@@ -621,7 +624,11 @@ def judge_outcome(args, outcome: Outcome, manifest: dict,
     scenario, device = outcome.scenario, outcome.device
     warning = None
     try:
-        if scenario.verify and device.get("stage") == "open" and device.get("ok") is False:
+        open_refused = device.get("stage") == "open" and device.get("ok") is False
+        # A no-entropy refusal applies whatever verify says (spec section 2);
+        # the no-time refusal only with verify on (section 9).
+        if open_refused and (scenario.verify
+                             or refusal_kind(str(device.get("error", ""))) == "entropy"):
             problems = judge_open_refused(outcome)
         elif scenario.verify and device.get("time_source") == "none":
             # Amendment 9 A: the time fields come from a STATS right after a

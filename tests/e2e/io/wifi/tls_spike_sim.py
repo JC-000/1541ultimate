@@ -460,9 +460,15 @@ def expected_ok(mode: str, result: dict) -> tuple[bool, str]:
 #   server: "tls" (a clean echo), "flip" (the server flips the last echoed
 #   byte), "reject" (the host client, verifying, refuses the chain), or "none"
 #   (no connection)
+#   verify: 0, 1, or None for a path that holds either way (the request's own
+#   value is then used)
 #   verdict: "pass" (no problems), "precondition" (a correct refusal the rig
-#   cannot run past), or "fail" (a FAIL that is neither a precondition nor a
-#   "fail-closed rule broken")
+#   cannot run past), "bad-request" (the suite classified an HTTP 400), or
+#   "fail" (a FAIL that is none of those and never "fail-closed rule broken")
+#
+# The three must-fail replies may carry the same error (-0x2700, the one code
+# mbedTLS returns for every verification failure); their judge tells them apart
+# by the server-side alert, never by the device's error text.
 GOLDEN_EXPECT = {
     "success_ecdsa": ("established", "ecdsa", 1, "tls", "pass"),
     "success_rsa": ("established", "rsa", 1, "tls", "pass"),
@@ -471,7 +477,10 @@ GOLDEN_EXPECT = {
     "untrusted": ("failed", "untrusted", 1, "reject", "pass"),
     "expired": ("failed", "expired", 1, "reject", "pass"),
     "no_time": ("established", "ecdsa", 1, "none", "precondition"),
-    "bad_param": ("established", "ecdsa", 1, "none", "fail"),
+    "bad_param": ("established", "ecdsa", 1, "none", "bad-request"),
+    "verify_without_sni": ("established", "ecdsa", 1, "none", "bad-request"),
+    "no_entropy": ("established", "ecdsa", None, "none", "precondition"),
+    "step_timeout": ("established", "ecdsa", 1, "none", "fail"),
     "connect_fail": ("established", "ecdsa", 1, "none", "fail"),
     "open_timeout": ("established", "ecdsa", 1, "none", "fail"),
     "handshake_timeout": ("established", "ecdsa", 1, "none", "fail"),
@@ -482,6 +491,10 @@ GOLDEN_ENV = "TLS_SPIKE_GOLDEN"
 # route's code, and so are taken from the live record instead. esp_time is the
 # clock at recording time; it is moved to now only when it was nonzero.
 LIVE_FIELDS = ("tls_version", "ciphersuite")
+# What a stem's reply itself must show, beyond its verdict: (stage, error pattern).
+GOLDEN_REPLY = {
+    "step_timeout": ("handshake", r"time\s*-?\s*out|timed\s+out"),
+}
 
 
 def golden_case(stem: str, wrapped: dict, work: Path) -> tuple[bool, str, list[str]]:
@@ -491,9 +504,20 @@ def golden_case(stem: str, wrapped: dict, work: Path) -> tuple[bool, str, list[s
     notes: list[str] = []
     if wrapped.get("stem") != stem:
         return False, f"file {stem}.json says stem {wrapped.get('stem')!r}", notes
-    if int(request.get("verify", -1)) != verify:
+    if verify is None:
+        verify = int(request.get("verify", 1))
+    elif int(request.get("verify", -1)) != verify:
         return False, (f"request verify={request.get('verify')!r}, but {stem} is a verify="
                        f"{verify} path"), notes
+    if stem in GOLDEN_REPLY:
+        stage, pattern = GOLDEN_REPLY[stem]
+        response = wrapped.get("response")
+        response = response if isinstance(response, dict) else {}
+        if (response.get("stage") != stage
+                or not re.search(pattern, str(response.get("error", "")), re.IGNORECASE)):
+            return False, (f"the reply shows stage {response.get('stage')!r}, error "
+                           f"{response.get('error')!r}; {stem} must show stage {stage!r} "
+                           f"and an error matching {pattern!r}"), notes
     n = int(request.get("echo") or 0) or suite.DEFAULT_ECHO_BYTES
     seed = int(request.get("seed") or 0)
     manifest = pki.generate(pki.pki_dir())
@@ -510,7 +534,12 @@ def golden_case(stem: str, wrapped: dict, work: Path) -> tuple[bool, str, list[s
         finally:
             server.stop()
     response = wrapped.get("response")
-    body = b"" if response is None else json.dumps(response).encode()
+    if response is None:
+        body = b""
+    elif isinstance(response, str):
+        body = response.encode()
+    else:
+        body = json.dumps(response).encode()
 
     class Args:
         sni = pki.SNI
@@ -542,6 +571,8 @@ def golden_case(stem: str, wrapped: dict, work: Path) -> tuple[bool, str, list[s
         ok = not problems
     elif want == "precondition":
         ok = first.startswith("precondition")
+    elif want == "bad-request":
+        ok = "answered HTTP 400" in first
     else:
         ok = bool(problems) and not first.startswith(("precondition", "fail-closed rule"))
     said = first or warning or "no problems"
