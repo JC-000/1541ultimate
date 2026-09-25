@@ -22,6 +22,8 @@ void world_reset(uint32_t seed, world_maker_t maker, bool calm);
 uint32_t world_rand(uint32_t n);
 
 extern bool world_ready;          // what wifi_module_ready answers
+extern bool world_no_buffer;      // GetBuffer fails, even when calm
+extern bool world_no_transmit;    // TransmitPacket fails, even when calm
 extern std::string world_trace;   // every call, in order
 extern int world_suspended;       // vTaskSuspendAll minus xTaskResumeAll
 extern int world_transmits;       // requests that went out

@@ -45,7 +45,7 @@ static void check(bool condition, const char *what, ...)
 enum { K_MALLOC, K_SOCKET, K_IOCTL, K_CONNECT, K_SETSOCKOPT, K_OPEN, K_STEP, K_SEND, K_RECV, K_CLOSE, K_STATS, K_COUNT };
 static const char *kind_names[K_COUNT] = { "malloc", "socket", "ioctl", "connect", "setsockopt", "open", "step",
                                            "send", "recv", "close", "stats" };
-static const int variants[K_COUNT] = { 1, 1, 1, 2, 1, 4, 6, 2, 3, 2, 1 };
+static const int variants[K_COUNT] = { 1, 1, 1, 2, 1, 5, 7, 2, 3, 3, 2 };
 
 static int fail_at;      // the fallible call to fail, counted from 0; -1 for none
 static int fail_variant;
@@ -69,6 +69,7 @@ static uint32_t server_echo_owed; // plaintext the server echoes once the client
 static uint32_t echo_owed_next;
 static uint32_t echo_returned;
 static bool corrupt_echo;
+static uint32_t surplus_echo;     // bytes the server sends back beyond what it was sent
 static void *allocated;
 static int frees;
 
@@ -223,6 +224,10 @@ ssize_t lwip_send(int s, const void *dataptr, size_t size, int flags)
     if (!module_established) {
         server_to_send += (module_steps == 1) ? 180 : 0; // the server's flight answers the ClientHello
     }
+    if (server_echo_owed) {
+        server_echo_owed += surplus_echo;
+        surplus_echo = 0;
+    }
     server_to_send += server_echo_owed;
     server_echo_owed = 0;
     return size;
@@ -278,7 +283,8 @@ int wifi_tls_open(uint8_t flags, const char *sni, uint8_t *session, int *esp_err
             case 0: return WIFI_TLS_BUSY;
             case 1: *esp_err = 0x103; return WIFI_TLS_REFUSED;
             case 2: return WIFI_TLS_INVALID;
-            default: persistent = true; persistent_kind = K_OPEN; return WIFI_TLS_UNSENT;
+            case 3: persistent = true; persistent_kind = K_OPEN; return WIFI_TLS_UNSENT;
+            default: return WIFI_TLS_UNSENT; // once: nothing was sent, so it goes again
         }
     }
     module_open = true;
@@ -311,9 +317,11 @@ int wifi_tls_step(uint8_t session, wifi_tls_step_t *st)
                 st->esp_err = -0x2700;
                 st->ct_out_len = 7;
                 return 0;
-            default:
+            case 5:
                 st->state = WIFI_TLS_CLOSED;
                 return 0;
+            default:
+                return WIFI_TLS_UNSENT; // once
         }
     }
     module_steps++;
@@ -360,8 +368,10 @@ int wifi_tls_close(uint8_t session, int *esp_err)
         if (fail_variant == 0) {
             return WIFI_TLS_BUSY;
         }
-        persistent = true;
-        persistent_kind = K_CLOSE;
+        if (fail_variant == 1) {
+            persistent = true;
+            persistent_kind = K_CLOSE;
+        }
         return WIFI_TLS_UNSENT;
     }
     module_open = false;
@@ -373,7 +383,7 @@ int wifi_tls_stats(uint8_t session, wifi_tls_stats_t *stats, int *esp_err)
     calls.push_back(session == WIFI_TLS_SESSION_GLOBAL ? "stats" : "sessionstats");
     *esp_err = 0;
     if (fails(K_STATS)) {
-        return WIFI_TLS_BUSY;
+        return (fail_variant == 0) ? WIFI_TLS_BUSY : WIFI_TLS_UNSENT;
     }
     memset(stats, 0, sizeof(*stats));
     stats->heap_free = 100000;
@@ -398,6 +408,7 @@ static void reset_world(int at, int variant)
     module_ct_seen = 0;
     server_to_send = server_echo_owed = echo_owed_next = echo_returned = 0;
     corrupt_echo = false;
+    surplus_echo = 0;
     allocated = NULL;
     frees = 0;
 }
@@ -439,9 +450,13 @@ static std::string broken(const wifi_tls_spike_result_t &r, bool fatal)
     return why;
 }
 
-static bool fatal_kind(int kind)
+// A failed STATS costs only its numbers, and an UNSENT that does not repeat is
+// sent again; nothing else is survivable.
+static bool fatal(int kind, int variant)
 {
-    return (kind >= 0) && (kind != K_STATS);
+    bool transient_unsent = ((kind == K_OPEN) && (variant == 4)) || ((kind == K_STEP) && (variant == 6)) ||
+                            ((kind == K_CLOSE) && (variant == 2)) || ((kind == K_STATS) && (variant == 1));
+    return (kind >= 0) && (kind != K_STATS) && !transient_unsent;
 }
 
 int main(void)
@@ -474,7 +489,10 @@ int main(void)
                 break;
             }
             runs++;
-            std::string w = broken(r, fatal_kind(failed_kind));
+            std::string w = broken(r, fatal(failed_kind, v));
+            if (!fatal(failed_kind, v) && ((failed_kind != K_STATS) || (v == 1)) && !r.ok) {
+                w += "not ok after a fault it should survive; ";
+            }
             char key[80];
             snprintf(key, sizeof(key), "%-10s v%d -> %s", kind_names[failed_kind], v, r.stage ? r.stage : "(none)");
             stages[key]++;
@@ -507,6 +525,12 @@ int main(void)
     wifi_tls_spike("10.0.0.2", 4433, "test.local", 0, echo, &r);
     check(!r.ok && !strcmp(r.stage, "echo_compare") && !r.echo_ok && broken(r, true).empty(),
           "one wrong byte of echo fails the run, which still closes everything");
+
+    reset_world(-1, 0);
+    surplus_echo = 5;
+    wifi_tls_spike("10.0.0.2", 4433, "test.local", 0, echo, &r);
+    check(!r.ok && !strcmp(r.stage, "echo_compare") && !r.echo_ok && broken(r, true).empty(),
+          "more echo than was sent fails the run");
 
     reset_world(-1, 0);
     wifi_tls_spike("10.0.0.2", 4433, NULL, 0, 0, &r);

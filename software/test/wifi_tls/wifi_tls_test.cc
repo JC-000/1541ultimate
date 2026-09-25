@@ -504,6 +504,16 @@ static void test_calls(void)
     check((r == WIFI_TLS_UNSENT) && (world_transmits == 0) && dedicated_waiting &&
           (world_trace.find("no reply") == std::string::npos),
           "while another request is outstanding a call fails at once as unsent, and leaves the channel to its owner");
+    world_reset(16, tls_maker, true);
+    world_no_buffer = true;
+    r = wifi_tls_close(7, &esp_err);
+    check((r == WIFI_TLS_UNSENT) && (world_transmits == 0) && !dedicated_waiting,
+          "without a transmit buffer a call is unsent, not busy, and frees the channel");
+    world_reset(17, tls_maker, true);
+    world_no_transmit = true;
+    r = wifi_tls_step(7, &st);
+    check((r == WIFI_TLS_UNSENT) && (world_transmits == 0) && !dedicated_waiting && (st.ct_out_len == 0),
+          "a transmit that fails is unsent, not busy, and frees the channel");
     world_reset(12, tls_maker, true);
     world_ready = false;
     r = wifi_tls_close(7, &esp_err);

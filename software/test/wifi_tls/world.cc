@@ -13,6 +13,8 @@ QueueHandle_t dedicated_replies;
 volatile bool dedicated_waiting;
 
 bool world_ready;
+bool world_no_buffer;
+bool world_no_transmit;
 std::string world_trace;
 int world_suspended;
 int world_transmits;
@@ -79,6 +81,8 @@ void world_reset(uint32_t seed, world_maker_t maker, bool quiet)
     uart.generation = world_rand(1000);
     esp32.uart = &uart;
     world_ready = calm || (world_rand(100) >= 3);
+    world_no_buffer = false;
+    world_no_transmit = false;
     dedicated_replies = (!calm && (world_rand(100) < 2)) ? NULL : (QueueHandle_t)&queue;
     dedicated_waiting = !calm && (world_rand(100) < 5); // another caller holds the channel
     memset(tx_buf.data, 0xAB, sizeof(tx_buf.data));
@@ -185,7 +189,7 @@ BaseType_t xQueueReceive(QueueHandle_t q, void *item, TickType_t ticks)
 BaseType_t DmaUART::GetBuffer(command_buf_t **buf, TickType_t ticks)
 {
     trace("getbuffer %u", ticks);
-    if (!calm && (world_rand(100) < 5)) {
+    if (world_no_buffer || (!calm && (world_rand(100) < 5))) {
         now += ticks;
         trace(" -> none\n");
         return pdFALSE;
@@ -203,7 +207,7 @@ BaseType_t DmaUART::TransmitPacket(command_buf_t *buf, uint16_t *ms)
     for (int i = 0; (i < buf->size) && (i < CMD_BUF_SIZE); i++) {
         trace(" %02x", buf->data[i]);
     }
-    if (!calm && (world_rand(100) < 5)) {
+    if (world_no_transmit || (!calm && (world_rand(100) < 5))) {
         trace(" -> failed\n");
         return pdFALSE; // the real one frees the buffer itself
     }
