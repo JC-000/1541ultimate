@@ -146,32 +146,50 @@ typedef struct {
 } rpc_get_random_resp;
 
 //----------------------------------
-// TLS sessions: the module holds the keys, the host carries the ciphertext
-#define TLS_FLAG_VERIFY     0x01 // verify the server's chain and name
-#define TLS_FLAG_CA_BUNDLE  0x02 // trust the CA bundle
-#define TLS_FLAG_TEST_CA    0x04 // trust the built in test CA
-#define TLS_SESSION_GLOBAL  0xFF // STATS for the module as a whole
-#define TLS_STEP_MAX_IN     1024 // ct_in_len + pt_in_len in one step
-#define TLS_STEP_MAX_OUT    1024 // ct_out_len + pt_out_len in one step
+// TLS spike: the ESP32 runs the TLS engine, the Ultimate moves the ciphertext.
+// Fixed fields first, variable data last. Layouts are asserted in rpc_dispatch.c.
+#define TLS_MAX_SESSIONS   2
+#define TLS_SNI_MAX_LEN    253  // longest DNS name
+#define TLS_STEP_IN_MAX    1536 // ct_in_len + pt_in_len per step
+#define TLS_STEP_OUT_MAX   1024 // ct_out_len + pt_out_len per step
+#define TLS_SESSION_GLOBAL 0xFF // CMD_TLS_STATS without a session
+
+#define TLS_OPEN_VERIFY    0x01 // verify the server certificate and host name
+#define TLS_OPEN_CA_BUNDLE 0x02 // ...against the ESP-IDF certificate bundle
+#define TLS_OPEN_CA_TEST   0x04 // ...against the compiled-in test CA
+
+// rpc_tls_open_resp.reason, telling the two ESP_ERR_INVALID_STATE refusals apart
+#define TLS_OPEN_REASON_NONE       0
+#define TLS_OPEN_REASON_NO_ENTROPY 1 // the radio has not started: no RNG seed
+#define TLS_OPEN_REASON_NO_TIME    2 // verify asked for, but no trustworthy clock
+
+typedef enum {
+    TLS_TIME_NONE = 0, // clock not later than the build date
+    TLS_TIME_NIOS = 1, // set from unix_time in a CMD_TLS_OPEN
+    TLS_TIME_SNTP = 2, // already valid without the Ultimate: SNTP over the ESP32's own Wi-Fi
+} tls_time_source_t;
 
 typedef enum {
     TLS_STATE_HANDSHAKING = 0,
     TLS_STATE_ESTABLISHED = 1,
     TLS_STATE_CLOSED      = 2,
-    TLS_STATE_FAILED      = 3, // esp_err holds the mbedTLS error
+    TLS_STATE_FAILED      = 3, // esp_err holds the mbedTLS error code
 } tls_state_t;
 
 typedef struct {
     rpc_header_t hdr;
-    uint8_t flags; // TLS_FLAG_*
-    uint8_t sni_len;
-    char sni[]; // sni_len bytes, not terminated
+    uint8_t flags;   // TLS_OPEN_*
+    uint8_t sni_len; // 0..TLS_SNI_MAX_LEN, no terminator
+    uint16_t reserved;
+    uint32_t unix_time; // UTC seconds from the Ultimate's clock, 0 when it has none
+    char sni[];
 } rpc_tls_open_req;
 
 typedef struct {
     rpc_header_t hdr;
-    int esp_err; // to be casted to esp_err_t
-    uint8_t session;
+    int esp_err; // ESP_OK, an esp_err_t, or a negative mbedTLS code
+    uint8_t session; // TLS_SESSION_GLOBAL when esp_err != ESP_OK
+    uint8_t reason;  // TLS_OPEN_REASON_*
 } rpc_tls_open_resp;
 
 typedef struct {
@@ -185,40 +203,41 @@ typedef struct {
 
 typedef struct {
     rpc_header_t hdr;
-    int esp_err; // to be casted to esp_err_t, or the mbedTLS error when FAILED
-    uint8_t state; // to be casted to tls_state_t
+    int esp_err;
+    uint8_t state; // tls_state_t
     uint8_t reserved;
     uint16_t ct_out_len;
     uint16_t pt_out_len;
-    uint16_t reserved2; // so that data starts at sizeof()
+    uint16_t reserved2;
     uint8_t data[]; // ct_out, then pt_out
 } rpc_tls_step_resp;
 
 typedef struct {
     rpc_header_t hdr;
     uint8_t session;
-} rpc_tls_close_req; // answered with rpc_espcmd_resp
+    uint8_t reserved;
+} rpc_tls_session_req; // CMD_TLS_CLOSE (replies rpc_espcmd_resp) and CMD_TLS_STATS
 
 typedef struct {
     rpc_header_t hdr;
-    uint8_t session; // or TLS_SESSION_GLOBAL
-} rpc_tls_stats_req;
-
-typedef struct {
-    rpc_header_t hdr;
-    int esp_err; // to be casted to esp_err_t
-    uint32_t heap_free;
-    uint32_t heap_min_ever;
+    int esp_err;
+    uint32_t heap_free;     // internal 8-bit capable heap
+    uint32_t heap_min;      // low-water mark since the OPEN that found no session open
     uint32_t largest_block;
-    uint32_t ct_in_bytes; // the session's counters; 0 for TLS_SESSION_GLOBAL
+    uint32_t ct_in_bytes;   // session counters, 0 for TLS_SESSION_GLOBAL
     uint32_t ct_out_bytes;
     uint32_t pt_in_bytes;
     uint32_t pt_out_bytes;
-    uint32_t handshake_us;
-    uint16_t tls_version; // as on the wire: 0x0304 is TLS 1.3
-    uint16_t ciphersuite; // IANA number, e.g. 0x1301
-    uint16_t group; // IANA NamedGroup, e.g. 0x001D for X25519
-    uint16_t reserved;
+    uint32_t handshake_us;  // ESP32 time spent inside mbedtls_ssl_handshake()
+    uint16_t tls_version;   // 0x0304 for TLS 1.3
+    uint16_t ciphersuite;   // IANA id
+    uint16_t group;         // IANA id, 0 when unknown
+    uint8_t state;          // tls_state_t
+    uint8_t sessions_open;
+    uint32_t stack_free;    // dispatcher stack high-water mark, bytes
+    uint32_t esp_time;      // ESP32 clock at the session's OPEN (now, for TLS_SESSION_GLOBAL)
+    uint8_t time_source;    // tls_time_source_t of that clock
+    uint8_t reserved[3];
 } rpc_tls_stats_resp;
 
 //----------------------------------
