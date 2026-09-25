@@ -665,40 +665,32 @@ API_CALL(GET, machine, heap, NULL, ARRAY( {  }))
 // SPIKE CODE, NOT FOR RELEASE (esp-tls M2). Built only with TLS_SPIKE; the flow
 // is in software/io/wifi/wifi_tls_spike.cc.
 
-static bool parse_decimal(const char *text, int limit, int &value)
+// Decimal digits and nothing else, no larger than limit.
+static bool parse_decimal(const char *text, uint32_t limit, uint32_t &value)
 {
     if ((text == NULL) || (*text == '\0')) {
         return false;
     }
-    int parsed = 0;
+    uint32_t parsed = 0;
     for (const char *p = text; *p; p++) {
-        if ((*p < '0') || (*p > '9') || (parsed > (limit - (*p - '0')) / 10)) {
+        uint32_t digit = *p - '0';
+        if ((*p < '0') || (*p > '9') || (parsed > (limit - digit) / 10)) {
             return false;
         }
-        parsed = (parsed * 10) + (*p - '0');
+        parsed = (parsed * 10) + digit;
     }
     value = parsed;
     return true;
 }
 
-static void add_tls_stats(JSON_Object *obj, const char *key, bool have, const wifi_tls_stats_t &s)
+// heap_free, heap_min_ever and largest_block, as M2 spec section 7 names them.
+static void add_tls_heap(JSON_Object *obj, const char *key, const wifi_tls_stats_t &s)
 {
-    if (!have) {
-        return;
-    }
-    JSON_Object *stats = JSON::Obj();
-    stats->add("heap_free", (int)s.heap_free);
-    stats->add("heap_min_ever", (int)s.heap_min_ever);
-    stats->add("largest_block", (int)s.largest_block);
-    stats->add("ct_in_bytes", (int)s.ct_in_bytes);
-    stats->add("ct_out_bytes", (int)s.ct_out_bytes);
-    stats->add("pt_in_bytes", (int)s.pt_in_bytes);
-    stats->add("pt_out_bytes", (int)s.pt_out_bytes);
-    stats->add("handshake_us", (int)s.handshake_us);
-    stats->add("tls_version", (int)s.tls_version);
-    stats->add("ciphersuite", (int)s.ciphersuite);
-    stats->add("group", (int)s.group);
-    obj->add(key, stats);
+    JSON_Object *heap = JSON::Obj();
+    heap->add("heap_free", (int)s.heap_free);
+    heap->add("heap_min_ever", (int)s.heap_min_ever);
+    heap->add("largest_block", (int)s.largest_block);
+    obj->add(key, heap);
 }
 
 API_DOC(PUT, machine, tlsspike,
@@ -706,29 +698,32 @@ API_DOC(PUT, machine, tlsspike,
     SUMMARY("Run the TLS spike")
     CAUTION("diagnostic", "Spike code for measuring TLS on the WiFi module; not in release builds.")
     DESCRIPTION("Connects to `host`:`port`, runs a TLS handshake on the WiFi module with this side "
-                "carrying the ciphertext, sends `echo` bytes of plaintext, expects the same bytes "
-                "back, and closes the session and the socket. Answers 200 with the measurements "
-                "whether or not the run succeeded; `ok` and `stage` say how far it got.")
+                "carrying the ciphertext, sends `echo` bytes of a payload made from `seed`, expects "
+                "the same bytes back, and closes the session and the socket. Answers 200 with the "
+                "measurements whether or not the run succeeded; `ok`, `stage` and `error` say how "
+                "far it got.")
     PATH("/v1/machine:tlsspike", "runTlsSpike", "")
     PARAM("host", "string", "IPv4 address of the server.", "", "192.168.1.10")
     PARAM("port", "integer(1..65535)", "TCP port of the server.", "", "4433")
     PARAM("sni", "string", "Server name to send and to verify against.", "", "test.local")
     PARAM("verify", "integer(0..1)", "Whether to verify the server's chain and name.", "1", "1")
-    PARAM("ca", "string", "Which trust anchors: test or bundle.", "test", "test")
-    PARAM("echo", "integer(0..65536)", "Plaintext bytes to send and expect back.", "0", "1024")
+    PARAM("ca", "string", "Which trust anchors: test, bundle or none.", "test", "test")
+    PARAM("echo", "integer(0..4096)", "Payload bytes to send and expect back.", "0", "1024")
+    PARAM("seed", "integer(0..4294967295)", "Makes the payload: byte i is ((seed + i) * 2654435761) >> 24.", "0", "1")
     RESPONSE("200", "application/json", "", "The measurements.", "")
     RESPONSE_ERROR("400", "Invalid port", "")
 )
 API_CALL(PUT, machine, tlsspike, NULL, ARRAY( { {"host", P_REQUIRED}, {"port", P_REQUIRED}, {"sni", P_OPTIONAL},
-                                                {"verify", P_OPTIONAL}, {"ca", P_OPTIONAL}, {"echo", P_OPTIONAL} }))
+                                                {"verify", P_OPTIONAL}, {"ca", P_OPTIONAL}, {"echo", P_OPTIONAL},
+                                                {"seed", P_OPTIONAL} }))
 {
-    int port;
+    uint32_t port;
     if (!parse_decimal(args["port"], 65535, port) || (port == 0)) {
         resp->error("Invalid port");
         resp->json_response(HTTP_BAD_REQUEST);
         return;
     }
-    int verify = 1;
+    uint32_t verify = 1;
     if (args.get_or("verify", NULL) && !parse_decimal(args["verify"], 1, verify)) {
         resp->error("Invalid verify");
         resp->json_response(HTTP_BAD_REQUEST);
@@ -740,6 +735,8 @@ API_CALL(PUT, machine, tlsspike, NULL, ARRAY( { {"host", P_REQUIRED}, {"port", P
         flags = WIFI_TLS_FLAG_TEST_CA;
     } else if (strcmp(ca, "bundle") == 0) {
         flags = WIFI_TLS_FLAG_CA_BUNDLE;
+    } else if (strcmp(ca, "none") == 0) {
+        flags = 0;
     } else {
         resp->error("Invalid ca");
         resp->json_response(HTTP_BAD_REQUEST);
@@ -748,9 +745,15 @@ API_CALL(PUT, machine, tlsspike, NULL, ARRAY( { {"host", P_REQUIRED}, {"port", P
     if (verify) {
         flags |= WIFI_TLS_FLAG_VERIFY;
     }
-    int echo = 0;
+    uint32_t echo = 0;
     if (args.get_or("echo", NULL) && !parse_decimal(args["echo"], WIFI_TLS_SPIKE_MAX_ECHO, echo)) {
         resp->error("Invalid echo");
+        resp->json_response(HTTP_BAD_REQUEST);
+        return;
+    }
+    uint32_t seed = 0;
+    if (args.get_or("seed", NULL) && !parse_decimal(args["seed"], 0xFFFFFFFFu, seed)) {
+        resp->error("Invalid seed");
         resp->json_response(HTTP_BAD_REQUEST);
         return;
     }
@@ -762,35 +765,52 @@ API_CALL(PUT, machine, tlsspike, NULL, ARRAY( { {"host", P_REQUIRED}, {"port", P
     }
 
     wifi_tls_spike_result_t r;
-    wifi_tls_spike(args["host"], (uint16_t)port, sni, flags, echo, &r);
+    wifi_tls_spike(args["host"], (uint16_t)port, sni, flags, (int)echo, seed, &r);
 
+    // M2 spec section 7 and 9, by these names and types.
+    static const char *const time_sources[] = { "none", "nios", "sntp" };
     resp->json->add("ok", r.ok);
     resp->json->add("stage", r.stage);
     resp->json->add("error", r.error);
-    resp->json->add("esp_err", r.esp_err);
-    resp->json->add("state", r.state);
-    resp->json->add("steps", r.steps);
-    resp->json->add("handshake_steps", r.handshake_steps);
     resp->json->add("handshake_ms", (int)r.handshake_ms);
-    if (r.have_peak) {
-        resp->json->add("handshake_us", (int)r.peak.handshake_us);
-        resp->json->add("tls_version", (int)r.peak.tls_version);
-        resp->json->add("ciphersuite", (int)r.peak.ciphersuite);
-        resp->json->add("group", (int)r.peak.group);
-    }
-    add_tls_stats(resp->json, "stats_before", r.have_before, r.before);
-    add_tls_stats(resp->json, "stats_peak", r.have_peak, r.peak);
-    add_tls_stats(resp->json, "stats_after", r.have_after, r.after);
-    resp->json->add("stats_error", r.stats_error);
-    resp->json->add("tcp_out", (int)r.tcp_out);
-    resp->json->add("tcp_in", (int)r.tcp_in);
+    resp->json->add("handshake_us", (int)r.peak.handshake_us);
+    add_tls_heap(resp->json, "stats_before", r.before);
+    add_tls_heap(resp->json, "stats_peak", r.peak);
+    add_tls_heap(resp->json, "stats_after", r.after);
+    resp->json->add("tls_version", (int)r.peak.tls_version);
+    resp->json->add("ciphersuite", (int)r.peak.ciphersuite);
+    resp->json->add("group", (int)r.peak.group);
     resp->json->add("echo_sent", r.echo_sent);
     resp->json->add("echo_received", r.echo_received);
-    resp->json->add("early_plaintext", r.early_plaintext);
     resp->json->add("echo_ok", r.echo_ok);
-    resp->json->add("session_opened", r.session_opened);
-    resp->json->add("close_result", r.close_result);
-    resp->json->add("socket_opened", r.socket_opened);
+    resp->json->add("steps", r.steps);
+    resp->json->add("time_source", (r.have_peak && (r.peak.time_source < 3)) ? time_sources[r.peak.time_source] : "none");
+    resp->json->add("esp_time", (int)r.peak.esp_time);
+
+    // Everything else, for diagnosis. Zeros where a STATS call failed: the
+    // have_* flags say which.
+    JSON_Object *detail = JSON::Obj();
+    detail->add("where", r.detail ? r.detail : "");
+    detail->add("code", r.code);
+    detail->add("esp_err", r.esp_err);
+    detail->add("state", r.state);
+    detail->add("handshake_steps", r.handshake_steps);
+    detail->add("resends", r.resends);
+    detail->add("have_before", r.have_before);
+    detail->add("have_peak", r.have_peak);
+    detail->add("have_after", r.have_after);
+    detail->add("stats_error", r.stats_error);
+    detail->add("sessions_open_after", (int)r.after.sessions_open);
+    detail->add("stack_free_after", (int)r.after.stack_free);
+    detail->add("unix_time_sent", (int)r.unix_time);
+    detail->add("nios_clock", r.nios_clock);
+    detail->add("tcp_out", (int)r.tcp_out);
+    detail->add("tcp_in", (int)r.tcp_in);
+    detail->add("early_plaintext", r.early_plaintext);
+    detail->add("session_opened", r.session_opened);
+    detail->add("close_result", r.close_result);
+    detail->add("socket_opened", r.socket_opened);
+    resp->json->add("detail", detail);
     resp->json_response(HTTP_OK);
 }
 #endif
