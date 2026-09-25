@@ -483,11 +483,11 @@ GOLDEN_EXPECT = {
     "open_timeout": ("established", "ecdsa", 1, "none", "fail"),
     "handshake_timeout": ("established", "ecdsa", 1, "none", "fail"),
     "echo_mismatch": ("echo-broken", "ecdsa", 1, "flip", "pass"),
-    # the supervisor's three extra stems (verify_without_sni was delivered as
-    # bad_param_no_sni, the Nios exit-path row's name)
+    # the supervisor's three extra stems (amendment 10 follow-up; the name
+    # verify_without_sni is final)
     "no_entropy": ("established", "ecdsa", None, "none", "precondition"),
     "step_timeout": ("established", "ecdsa", 1, "none", "fail"),
-    "bad_param_no_sni": ("established", "ecdsa", None, "none", "bad-request"),
+    "verify_without_sni": ("established", "ecdsa", None, "none", "bad-request"),
     # one per further Nios exit-path row (m2-nios.md section 5)
     "bad_param_host": ("established", "ecdsa", None, "none", "bad-request"),
     "memory_fail": ("established", "ecdsa", 1, "none", "fail"),
