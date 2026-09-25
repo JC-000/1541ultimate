@@ -1,0 +1,2 @@
+# The spike PKI holds private keys; tls_spike_pki.py makes it on demand.
+.pki/
