@@ -133,10 +133,28 @@ def expected_payload(seed: int, n: int) -> bytes:
 
 DEFAULT_ECHO_BYTES = 3000   # more than one 1024-byte step each way (spec section 2)
 DEFAULT_REPEAT = 5
-SPIKE_TIMEOUT = 60.0        # one REST call: connect, handshake, echo and close
+# One REST call has to outlast the firmware's own worst case, so that a slow run
+# comes back as the device's timeout result rather than as "no answer". The
+# Nios limits, from the Nios lane's report (scratchpad/esp-tls/reports/m2-nios.md;
+# this lane does not read the implementation):
+#    1  STATS before                      (:27, wifi_tls.cc timeouts, STATS 1 s)
+#    5  TCP connect                       (:112, exit 4)
+#    5  OPEN                              (:27, OPEN 5 s)
+#   15  handshake deadline                (:118-119, exits 10-11)
+#    5  + the STEP in flight at it        (:27, STEP 5 s; the deadline is checked after a step)
+#    5  + the send after that step        (:116, exit 8)
+#   15  echo deadline                     (:120, exit 12, "as 10, 11")
+#    5  + the STEP in flight              (:120 via :27)
+#    5  + the send after it               (:120 via :116)
+#    5  CLOSE                             (:27, CLOSE 5 s)
+#    1  STATS after                       (:27)
+#   --
+#   67  s, summed as in code review S10 (m2-codereview.md:70-74). 90 s leaves room
+#       for the REST round trip and the httpd queue.
+SPIKE_TIMEOUT = 90.0
 RECORD_WAIT = 10.0          # after the reply, for the server's connection record
 STRAY_WAIT = 2.0            # after that, for a second connection nobody asked for
-SERVER_IDLE_TIMEOUT = 90.0  # longer than one REST call, so an open socket shows
+SERVER_IDLE_TIMEOUT = 120.0  # longer than one REST call, so an open socket shows
 TIMING_SLACK_MS = 5
 CLOCK_CROSSCHECK_SLACK_US = 2000
 # Test hook for tls_spike_sim.py only: a load average to report instead of the
@@ -275,10 +293,21 @@ class Outcome:
     server: list[dict] = field(default_factory=list)
 
 
-def spike(rest: RestClient, route: str, params: dict) -> tuple[int, dict]:
-    """One PUT to the spike route, classified before anything reads its fields."""
-    code, _headers, body = rest.request("PUT", route, params=params,
-                                        timeout=SPIKE_TIMEOUT, retries=1)
+def spike(rest: RestClient, route: str, params: dict, timeout: float) -> tuple[int, dict]:
+    """One PUT to the spike route, classified before anything reads its fields.
+
+    The route is not idempotent: every call opens a fresh TLS connection. A
+    re-issued PUT would run the spike twice, and the server would log two
+    connections, which the silent-fallback check fails. So it is sent once
+    (retries=0: RestClient.request makes max(1, retries) attempts,
+    tests/lib/rest.py:545), and no answer is reported as no answer.
+    """
+    try:
+        code, _headers, body = rest.request("PUT", route, params=params,
+                                            timeout=timeout, retries=0)
+    except Failure as exc:
+        raise Failure(f"no answer to PUT {route} within {timeout:.0f}s; not re-issued, "
+                      f"because the route is not idempotent ({exc})") from exc
     if code == 404 and not body.strip():
         # MicroHttpServer answers a route nobody registered with exactly this:
         # execute_api_v1 finds no command and returns -1 (software/api/routes.cc,
@@ -308,7 +337,7 @@ def run_scenario(rest: RestClient, args, server: Server, scenario: Scenario) -> 
     seed = secrets.randbits(32)
     params = {"host": args.server_ip, "port": server.port, "sni": args.sni,
               "verify": scenario.verify, "ca": "test", "echo": args.echo_bytes, "seed": seed}
-    code, data = spike(rest, args.route, params)
+    code, data = spike(rest, args.route, params, args.spike_timeout)
     records = server.new_records(RECORD_WAIT)
     return Outcome(scenario, seed, code, data, records)
 
@@ -766,6 +795,12 @@ def run(args) -> tuple[bool, str]:
             outcome = run_scenario(rest, args, server, scenario)
         except RouteAbsent as exc:
             check_start(f"f: PUT {args.route} is served (the spike route exists)")
+            if args.expect_spike:
+                # A spike build made without a clean after toggling TLS_SPIKE
+                # answers exactly like stock, so on a GREEN attempt the empty
+                # 404 means the wrong image, not missing work.
+                exc = Failure(f"the image was expected to carry the spike route (TLS_SPIKE=1 "
+                              f"clean build) but answers 404: a stale or wrong image ({exc})")
             check_fail(str(exc))
             not_run = ", ".join(s.key for s in selected)
             return False, f"{exc}. Not run: {not_run}"
@@ -890,6 +925,12 @@ def main() -> int:
                         help="the results file, opened before the first device call")
     parser.add_argument("--p1-sizes", help="JSON from the budget lane: base_bin_bytes, "
                                            "tls_bin_bytes, full_bin_bytes, app_partition_bytes")
+    parser.add_argument("--spike-timeout", type=float, default=SPIKE_TIMEOUT,
+                        help=f"seconds to wait for one spike PUT (default {SPIKE_TIMEOUT:.0f}, "
+                             "above the firmware's own worst case); the sim lowers it")
+    parser.add_argument("--expect-spike", action="store_true",
+                        help="the image under test was built with TLS_SPIKE=1 (GREEN runs): "
+                             "an empty 404 then means a stale or wrong image, not stock")
     parser.add_argument("--only", action="append",
                         help="run only scenarios whose key starts with this (repeatable)")
     args = parser.parse_args()

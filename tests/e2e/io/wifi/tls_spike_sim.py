@@ -53,6 +53,10 @@ STEP_DELAY = 0.03
 MODES = {
     "correct": ("a spec-correct device", None),
     "stock": ("stock firmware: no route, HTTP 404 with an empty body", {"f"}),
+    "slow-first-put": ("the first PUT gets no answer within the suite's timeout; it must "
+                       "not be re-issued", {"a"}),
+    "stale-image": ("run with --expect-spike against an image that answers 404 like stock",
+                    {"f"}),
     "verify-ignored": ("verify=1 is accepted and never applied",
                        {"d-mismatch", "d-untrusted", "d-expired"}),
     "fallback-retry": ("on a verification failure, silently reconnects with verification "
@@ -102,6 +106,9 @@ MODES = {
 # Modes whose failures must carry this text, where the set of failed scenarios
 # alone cannot tell two fakes apart.
 MUST_SAY = {
+    "slow-first-put": "no answer to PUT /v1/machine:tlsspike within",
+    "stock": "this firmware has no TLS spike route",
+    "stale-image": "a stale or wrong image",
     "correct": "P2a OUTSIDE",
     "high-load": "P2a INCONCLUSIVE (host load)",
     "nios-below-esp": "the Nios clock (handshake_ms=",
@@ -218,6 +225,11 @@ class FakeSession:
 
 
 LEAKED: list[socket.socket] = []
+PUTS: dict[str, int] = {}
+PUT_LOCK = threading.Lock()
+# The suite's PUT timeout in the sim, so a fake that never answers costs
+# seconds rather than the real 90.
+SLOW_PUT_TIMEOUT = 6.0
 
 
 def payload_for(seed: int, n: int) -> bytes:
@@ -312,8 +324,15 @@ def fake_device(mode: str) -> ThreadingHTTPServer:
 
         def do_PUT(self) -> None:
             parsed = urllib.parse.urlsplit(self.path)
+            with PUT_LOCK:
+                PUTS[mode] = PUTS.get(mode, 0) + 1
+                first = PUTS[mode] == 1
+            if mode == "slow-first-put" and first:
+                # Say nothing until the suite has given up, then drop the request.
+                time.sleep(SLOW_PUT_TIMEOUT * 2)
+                return
             query = dict(urllib.parse.parse_qsl(parsed.query))
-            if mode == "stock" or parsed.path != ROUTE:
+            if mode in ("stock", "stale-image") or parsed.path != ROUTE:
                 self.wfile.write(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n")
                 return
             try:
@@ -356,6 +375,10 @@ def run_mode(mode: str, repeat: int, work: Path) -> dict:
                "--server-ip", "127.0.0.1", "--repeat", str(repeat), "--color", "never",
                "--results", str(work / f"{mode}-results.json"),
                "--log-dir", str(work / mode)]
+    if mode == "stale-image":
+        command.append("--expect-spike")
+    if mode == "slow-first-put":
+        command += ["--spike-timeout", str(SLOW_PUT_TIMEOUT)]
     started = time.monotonic()
     completed = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
     device.shutdown()
@@ -368,6 +391,12 @@ def run_mode(mode: str, repeat: int, work: Path) -> dict:
             if key:
                 verdicts.setdefault(key, []).append(match["verdict"] + match["rest"])
     return {"mode": mode, "exit": completed.returncode, "verdicts": verdicts,
+            "puts": PUTS.get(mode, 0),
+            # One PUT per scenario line, and the route check's line stands in for
+            # the scenario only when the route was absent (then it is alone).
+            "calls": (sum(1 for line in lines if LINE.match(line)
+                          and scenario_key(LINE.match(line)["label"]) not in (None, "f"))
+                      or len(verdicts.get("f", []))),
             "seconds": round(time.monotonic() - started, 1),
             "suite_line": next((l for l in lines if l.startswith("tls_spike_test:")), ""),
             "fixture_fails": [l for l in lines if "fixtures" in l and "FAIL" in l],
@@ -379,6 +408,9 @@ def expected_ok(mode: str, result: dict) -> tuple[bool, str]:
     failed = {k for k, v in result["verdicts"].items() if any(x.startswith("FAIL") for x in v)}
     if result["fixture_fails"]:
         return False, f"fixture failures: {result['fixture_fails']}"
+    if result["puts"] > result["calls"]:
+        return False, (f"{result['puts']} PUTs reached the device for {result['calls']} "
+                       "scenarios: a PUT was re-issued")
     said = MUST_SAY.get(mode, "") in result["stdout"]
     unsaid = "" if said else f", never said {MUST_SAY[mode]!r}"
     if must_fail is None:
