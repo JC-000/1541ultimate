@@ -54,6 +54,8 @@ extern const uint8_t tls_test_ca_pem_end[]   asm("_binary_tls_test_ca_pem_end");
 // Step room kept free of plaintext for an alert that a failing read writes: header 5 + tag 16 +
 // alert padded to at most 32 (CONFIG_MBEDTLS_SSL_CID_PADDING_GRANULARITY range 0..32) = 53
 #define TLS_ALERT_ROOM   64
+// NewSessionTickets one call may run into; each is taken on its own, so this only bounds a loop
+#define TLS_TICKET_RETRIES 4
 // A session that nothing has touched (STEP, STATS, OPEN) for this long is an orphan: the Ultimate
 // timed out on it and will never CLOSE it. The next OPEN reclaims it.
 #define TLS_IDLE_RECLAIM_US (60LL * 1000 * 1000)
@@ -469,10 +471,14 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
             if (s->ssl.MBEDTLS_PRIVATE(out_left) != 0) {
                 ret = MBEDTLS_ERR_SSL_INTERNAL_ERROR;
             }
-            for (int done = 0; (ret == 0) && (done < pt_in_len); ) {
+            for (int done = 0, tickets = 0; (ret == 0) && (done < pt_in_len); ) {
                 int n = mbedtls_ssl_write(&s->ssl, pt_in + done, pt_in_len - done);
                 if (n > 0) {
                     done += n;
+                } else if ((n == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) && (++tickets <= TLS_TICKET_RETRIES)) {
+                    // A ticket an earlier read left pending: mbedtls_ssl_write() took it first and wrote
+                    // nothing, so write again (ssl_msg.c:6057-6062 in mbedTLS 3.6.0). Not a failure.
+                    continue;
                 } else {
                     ret = n ? n : MBEDTLS_ERR_SSL_INTERNAL_ERROR;
                 }
@@ -486,11 +492,17 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
 
     int ct_len = (s->out_len < TLS_STEP_OUT_MAX) ? s->out_len : TLS_STEP_OUT_MAX;
     int pt_len = 0;
+    int tickets = 0;
     while ((ret == 0) && (s->stats.state == TLS_STATE_ESTABLISHED) &&
            (ct_len + pt_len + TLS_ALERT_ROOM < TLS_STEP_OUT_MAX)) {
         int n = mbedtls_ssl_read(&s->ssl, out + ct_len + pt_len, TLS_STEP_OUT_MAX - TLS_ALERT_ROOM - ct_len - pt_len);
         if (n > 0) {
             pt_len += n;
+        } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) && (s->ssl.MBEDTLS_PRIVATE(state) != MBEDTLS_SSL_HANDSHAKE_OVER) &&
+                   (++tickets <= TLS_TICKET_RETRIES)) {
+            // A complete ticket makes mbedtls_ssl_read() return WANT_READ with the ticket kept for the
+            // next call (ssl_msg.c:5582-5589). Take it now, or the next step's write runs into it.
+            continue;
         } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) || (n == MBEDTLS_ERR_SSL_WANT_WRITE)) {
             break;
         } else if (n == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
