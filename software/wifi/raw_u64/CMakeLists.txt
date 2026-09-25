@@ -3,4 +3,9 @@
 cmake_minimum_required(VERSION 3.5)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+# M2 SPIKE: size experiments only; -D TLS_SIZE_USER_CONFIG=<abs path> adds an mbedTLS user config header
+if(TLS_SIZE_USER_CONFIG)
+    idf_build_set_property(COMPILE_OPTIONS "-DMBEDTLS_USER_CONFIG_FILE=\"${TLS_SIZE_USER_CONFIG}\"" APPEND)
+endif()
 project(bridge)
