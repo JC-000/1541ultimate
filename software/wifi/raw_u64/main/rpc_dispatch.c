@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "driver/uart.h"
 #include "esp_random.h"
+#include "esp_heap_caps.h"
 #include "rpc_calls.h"
 #include "rpc_dispatch.h"
 #include "my_uart.h"
@@ -20,6 +21,7 @@
 #include "pinout.h"
 #include "wifi_modem.h"
 #include "sntp.h"
+#include "tls_engine.h"
 
 // not officially supported
 #include "../lwip/esp_netif_lwip_internal.h"
@@ -266,6 +268,149 @@ void cmd_get_random(command_buf_t *buf)
     my_uart_transmit_packet(UART_CHAN, buf);
 }
 
+// TLS spike. Same rules as GET_RANDOM: the layout is part of the wire, the header is echoed,
+// and the fixed part of every reply is zeroed before it is filled.
+_Static_assert(sizeof(rpc_tls_open_req) == 6, "rpc_tls_open_req size");
+_Static_assert(offsetof(rpc_tls_open_req, flags) == 4, "rpc_tls_open_req.flags");
+_Static_assert(offsetof(rpc_tls_open_req, sni_len) == 5, "rpc_tls_open_req.sni_len");
+_Static_assert(offsetof(rpc_tls_open_req, sni) == 6, "rpc_tls_open_req.sni");
+_Static_assert(sizeof(rpc_tls_open_resp) == 12, "rpc_tls_open_resp size");
+_Static_assert(offsetof(rpc_tls_open_resp, esp_err) == 4, "rpc_tls_open_resp.esp_err");
+_Static_assert(offsetof(rpc_tls_open_resp, session) == 8, "rpc_tls_open_resp.session");
+_Static_assert(sizeof(rpc_tls_step_req) == 10, "rpc_tls_step_req size");
+_Static_assert(offsetof(rpc_tls_step_req, session) == 4, "rpc_tls_step_req.session");
+_Static_assert(offsetof(rpc_tls_step_req, ct_in_len) == 6, "rpc_tls_step_req.ct_in_len");
+_Static_assert(offsetof(rpc_tls_step_req, pt_in_len) == 8, "rpc_tls_step_req.pt_in_len");
+_Static_assert(offsetof(rpc_tls_step_req, data) == 10, "rpc_tls_step_req.data");
+_Static_assert(sizeof(rpc_tls_step_resp) == 16, "rpc_tls_step_resp size");
+_Static_assert(offsetof(rpc_tls_step_resp, esp_err) == 4, "rpc_tls_step_resp.esp_err");
+_Static_assert(offsetof(rpc_tls_step_resp, state) == 8, "rpc_tls_step_resp.state");
+_Static_assert(offsetof(rpc_tls_step_resp, ct_out_len) == 10, "rpc_tls_step_resp.ct_out_len");
+_Static_assert(offsetof(rpc_tls_step_resp, pt_out_len) == 12, "rpc_tls_step_resp.pt_out_len");
+_Static_assert(offsetof(rpc_tls_step_resp, data) == 16, "rpc_tls_step_resp.data");
+_Static_assert(sizeof(rpc_tls_session_req) == 6, "rpc_tls_session_req size");
+_Static_assert(offsetof(rpc_tls_session_req, session) == 4, "rpc_tls_session_req.session");
+_Static_assert(sizeof(rpc_espcmd_resp) == 8, "rpc_espcmd_resp size");
+_Static_assert(offsetof(rpc_espcmd_resp, esp_err) == 4, "rpc_espcmd_resp.esp_err");
+_Static_assert(sizeof(rpc_tls_stats_resp) == 52, "rpc_tls_stats_resp size");
+_Static_assert(offsetof(rpc_tls_stats_resp, esp_err) == 4, "rpc_tls_stats_resp.esp_err");
+_Static_assert(offsetof(rpc_tls_stats_resp, heap_free) == 8, "rpc_tls_stats_resp.heap_free");
+_Static_assert(offsetof(rpc_tls_stats_resp, heap_min) == 12, "rpc_tls_stats_resp.heap_min");
+_Static_assert(offsetof(rpc_tls_stats_resp, largest_block) == 16, "rpc_tls_stats_resp.largest_block");
+_Static_assert(offsetof(rpc_tls_stats_resp, ct_in_bytes) == 20, "rpc_tls_stats_resp.ct_in_bytes");
+_Static_assert(offsetof(rpc_tls_stats_resp, ct_out_bytes) == 24, "rpc_tls_stats_resp.ct_out_bytes");
+_Static_assert(offsetof(rpc_tls_stats_resp, pt_in_bytes) == 28, "rpc_tls_stats_resp.pt_in_bytes");
+_Static_assert(offsetof(rpc_tls_stats_resp, pt_out_bytes) == 32, "rpc_tls_stats_resp.pt_out_bytes");
+_Static_assert(offsetof(rpc_tls_stats_resp, handshake_us) == 36, "rpc_tls_stats_resp.handshake_us");
+_Static_assert(offsetof(rpc_tls_stats_resp, tls_version) == 40, "rpc_tls_stats_resp.tls_version");
+_Static_assert(offsetof(rpc_tls_stats_resp, ciphersuite) == 42, "rpc_tls_stats_resp.ciphersuite");
+_Static_assert(offsetof(rpc_tls_stats_resp, group) == 44, "rpc_tls_stats_resp.group");
+_Static_assert(offsetof(rpc_tls_stats_resp, state) == 46, "rpc_tls_stats_resp.state");
+_Static_assert(offsetof(rpc_tls_stats_resp, sessions_open) == 47, "rpc_tls_stats_resp.sessions_open");
+_Static_assert(offsetof(rpc_tls_stats_resp, stack_free) == 48, "rpc_tls_stats_resp.stack_free");
+_Static_assert((TLS_STATE_HANDSHAKING == 0) && (TLS_STATE_ESTABLISHED == 1) &&
+               (TLS_STATE_CLOSED == 2) && (TLS_STATE_FAILED == 3), "tls_state_t");
+// Every request and reply must fit one command buffer
+_Static_assert(sizeof(rpc_tls_open_req) + TLS_SNI_MAX_LEN <= CMD_BUF_SIZE, "largest CMD_TLS_OPEN request");
+_Static_assert(sizeof(rpc_tls_step_req) + TLS_STEP_IN_MAX <= CMD_BUF_SIZE, "largest CMD_TLS_STEP request");
+_Static_assert(sizeof(rpc_tls_step_resp) + TLS_STEP_OUT_MAX <= CMD_BUF_SIZE, "largest CMD_TLS_STEP reply");
+_Static_assert(sizeof(rpc_tls_stats_resp) <= CMD_BUF_SIZE, "CMD_TLS_STATS reply");
+_Static_assert(TLS_SNI_MAX_LEN <= 255, "sni_len is a byte");
+
+void cmd_tls_open(command_buf_t *buf)
+{
+    rpc_tls_open_req *req = (rpc_tls_open_req *)buf->data;
+    rpc_tls_open_resp *resp = (rpc_tls_open_resp *)buf->data;
+
+    // tls_open() copies the host name before the response overwrites it
+    uint8_t session = TLS_SESSION_GLOBAL;
+    int err = ESP_ERR_INVALID_ARG;
+    if ((buf->size >= (int)sizeof(rpc_tls_open_req)) && (buf->size == (int)sizeof(rpc_tls_open_req) + req->sni_len)) {
+        err = tls_open(req->flags, req->sni, req->sni_len, &session);
+    }
+    memset(&resp->esp_err, 0, sizeof(rpc_tls_open_resp) - sizeof(rpc_header_t));
+    resp->esp_err = err;
+    resp->session = session;
+    buf->size = sizeof(rpc_tls_open_resp);
+    my_uart_transmit_packet(UART_CHAN, buf);
+}
+
+void cmd_tls_step(command_buf_t *buf)
+{
+    rpc_tls_step_req *req = (rpc_tls_step_req *)buf->data;
+    rpc_tls_step_resp *resp = (rpc_tls_step_resp *)buf->data;
+
+    // The response overlays the request: tls_step() consumes ct_in and pt_in before it writes resp->data
+    uint16_t ct_out_len = 0;
+    uint16_t pt_out_len = 0;
+    uint8_t state = TLS_STATE_CLOSED;
+    int err = ESP_ERR_INVALID_ARG;
+    if (buf->size >= (int)sizeof(rpc_tls_step_req)) {
+        int ct_in_len = req->ct_in_len;
+        int pt_in_len = req->pt_in_len;
+        if (buf->size == (int)sizeof(rpc_tls_step_req) + ct_in_len + pt_in_len) {
+            err = tls_step(req->session, req->data, ct_in_len, req->data + ct_in_len, pt_in_len,
+                           resp->data, &ct_out_len, &pt_out_len, &state);
+        } else {
+            tls_session_stats_t stats;
+            tls_get_stats(req->session, &stats);
+            state = stats.state;
+        }
+    }
+    memset(&resp->esp_err, 0, sizeof(rpc_tls_step_resp) - sizeof(rpc_header_t));
+    resp->esp_err = err;
+    resp->state = state;
+    resp->ct_out_len = ct_out_len;
+    resp->pt_out_len = pt_out_len;
+    buf->size = sizeof(rpc_tls_step_resp) + ct_out_len + pt_out_len;
+    my_uart_transmit_packet(UART_CHAN, buf);
+}
+
+void cmd_tls_close(command_buf_t *buf)
+{
+    rpc_tls_session_req *req = (rpc_tls_session_req *)buf->data;
+    rpc_espcmd_resp *resp = (rpc_espcmd_resp *)buf->data;
+
+    int err = (buf->size >= (int)sizeof(rpc_tls_session_req)) ? tls_close(req->session) : ESP_ERR_INVALID_ARG;
+    memset(&resp->esp_err, 0, sizeof(rpc_espcmd_resp) - sizeof(rpc_header_t));
+    resp->esp_err = err;
+    buf->size = sizeof(rpc_espcmd_resp);
+    my_uart_transmit_packet(UART_CHAN, buf);
+}
+
+void cmd_tls_stats(command_buf_t *buf)
+{
+    rpc_tls_session_req *req = (rpc_tls_session_req *)buf->data;
+    rpc_tls_stats_resp *resp = (rpc_tls_stats_resp *)buf->data;
+
+    // Heap figures come with every reply, also when the session is gone
+    tls_session_stats_t stats;
+    int err = ESP_ERR_INVALID_ARG;
+    if (buf->size >= (int)sizeof(rpc_tls_session_req)) {
+        err = tls_get_stats(req->session, &stats);
+    } else {
+        tls_get_stats(TLS_SESSION_GLOBAL, &stats);
+    }
+    memset(&resp->esp_err, 0, sizeof(rpc_tls_stats_resp) - sizeof(rpc_header_t));
+    resp->esp_err = err;
+    resp->heap_free = heap_caps_get_free_size(TLS_HEAP_CAPS);
+    resp->heap_min = heap_caps_get_minimum_free_size(TLS_HEAP_CAPS);
+    resp->largest_block = heap_caps_get_largest_free_block(TLS_HEAP_CAPS);
+    resp->ct_in_bytes = stats.ct_in_bytes;
+    resp->ct_out_bytes = stats.ct_out_bytes;
+    resp->pt_in_bytes = stats.pt_in_bytes;
+    resp->pt_out_bytes = stats.pt_out_bytes;
+    resp->handshake_us = stats.handshake_us;
+    resp->tls_version = stats.tls_version;
+    resp->ciphersuite = stats.ciphersuite;
+    resp->group = stats.group;
+    resp->state = stats.state;
+    resp->sessions_open = tls_sessions_open();
+    resp->stack_free = uxTaskGetStackHighWaterMark(NULL);
+    buf->size = sizeof(rpc_tls_stats_resp);
+    my_uart_transmit_packet(UART_CHAN, buf);
+}
+
 void cmd_not_implemented(command_buf_t *buf)
 {
     rpc_espcmd_resp *resp = (rpc_espcmd_resp *)buf->data;
@@ -363,6 +508,18 @@ void dispatch(void *ct)
             break;
         case CMD_GET_RANDOM:
             cmd_get_random(pbuffer);
+            break;
+        case CMD_TLS_OPEN:
+            cmd_tls_open(pbuffer);
+            break;
+        case CMD_TLS_STEP:
+            cmd_tls_step(pbuffer);
+            break;
+        case CMD_TLS_CLOSE:
+            cmd_tls_close(pbuffer);
+            break;
+        case CMD_TLS_STATS:
+            cmd_tls_stats(pbuffer);
             break;
         default:
             cmd_not_implemented(pbuffer);

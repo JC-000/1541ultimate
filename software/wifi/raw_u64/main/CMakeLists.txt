@@ -1,3 +1,4 @@
 set(EXTERNAL "../../../io/uart")
-idf_component_register(SRCS "main.c" "my_uart.c" "rpc_dispatch.c" "dump_hex.c" "wifi_modem.c" "sntp.c" ${EXTERNAL}/cmd_buffer.c
-                    INCLUDE_DIRS "." ${EXTERNAL})
+idf_component_register(SRCS "main.c" "my_uart.c" "rpc_dispatch.c" "dump_hex.c" "wifi_modem.c" "sntp.c" "tls_engine.c" ${EXTERNAL}/cmd_buffer.c
+                    INCLUDE_DIRS "." ${EXTERNAL}
+                    EMBED_TXTFILES "tls_test_ca.pem")

@@ -146,6 +146,84 @@ typedef struct {
 } rpc_get_random_resp;
 
 //----------------------------------
+// TLS spike: the ESP32 runs the TLS engine, the Ultimate moves the ciphertext.
+// Fixed fields first, variable data last. Layouts are asserted in rpc_dispatch.c.
+#define TLS_MAX_SESSIONS   2
+#define TLS_SNI_MAX_LEN    253  // longest DNS name
+#define TLS_STEP_IN_MAX    1536 // ct_in_len + pt_in_len per step
+#define TLS_STEP_OUT_MAX   1024 // ct_out_len + pt_out_len per step
+#define TLS_SESSION_GLOBAL 0xFF // CMD_TLS_STATS without a session
+
+#define TLS_OPEN_VERIFY    0x01 // verify the server certificate and host name
+#define TLS_OPEN_CA_BUNDLE 0x02 // ...against the ESP-IDF certificate bundle
+#define TLS_OPEN_CA_TEST   0x04 // ...against the compiled-in test CA
+
+typedef enum {
+    TLS_STATE_HANDSHAKING = 0,
+    TLS_STATE_ESTABLISHED = 1,
+    TLS_STATE_CLOSED      = 2,
+    TLS_STATE_FAILED      = 3, // esp_err holds the mbedTLS error code
+} tls_state_t;
+
+typedef struct {
+    rpc_header_t hdr;
+    uint8_t flags;   // TLS_OPEN_*
+    uint8_t sni_len; // 0..TLS_SNI_MAX_LEN, no terminator
+    char sni[];
+} rpc_tls_open_req;
+
+typedef struct {
+    rpc_header_t hdr;
+    int esp_err; // ESP_OK, an esp_err_t, or a negative mbedTLS code
+    uint8_t session; // TLS_SESSION_GLOBAL when esp_err != ESP_OK
+} rpc_tls_open_resp;
+
+typedef struct {
+    rpc_header_t hdr;
+    uint8_t session;
+    uint8_t reserved;
+    uint16_t ct_in_len;
+    uint16_t pt_in_len;
+    uint8_t data[]; // ct_in, then pt_in
+} rpc_tls_step_req;
+
+typedef struct {
+    rpc_header_t hdr;
+    int esp_err;
+    uint8_t state; // tls_state_t
+    uint8_t reserved;
+    uint16_t ct_out_len;
+    uint16_t pt_out_len;
+    uint16_t reserved2;
+    uint8_t data[]; // ct_out, then pt_out
+} rpc_tls_step_resp;
+
+typedef struct {
+    rpc_header_t hdr;
+    uint8_t session;
+    uint8_t reserved;
+} rpc_tls_session_req; // CMD_TLS_CLOSE (replies rpc_espcmd_resp) and CMD_TLS_STATS
+
+typedef struct {
+    rpc_header_t hdr;
+    int esp_err;
+    uint32_t heap_free;     // internal 8-bit capable heap
+    uint32_t heap_min;      // low-water mark since the OPEN that found no session open
+    uint32_t largest_block;
+    uint32_t ct_in_bytes;   // session counters, 0 for TLS_SESSION_GLOBAL
+    uint32_t ct_out_bytes;
+    uint32_t pt_in_bytes;
+    uint32_t pt_out_bytes;
+    uint32_t handshake_us;  // ESP32 time spent inside mbedtls_ssl_handshake()
+    uint16_t tls_version;   // 0x0304 for TLS 1.3
+    uint16_t ciphersuite;   // IANA id
+    uint16_t group;         // IANA id, 0 when unknown
+    uint8_t state;          // tls_state_t
+    uint8_t sessions_open;
+    uint32_t stack_free;    // dispatcher stack high-water mark, bytes
+} rpc_tls_stats_resp;
+
+//----------------------------------
 // send raw packet
 typedef struct {
     rpc_header_t hdr;
@@ -190,6 +268,10 @@ typedef struct {
 #define CMD_CLEAR_APS         0x11
 #define CMD_WIFI_AUTOCONNECT  0x12
 #define CMD_GET_RANDOM        0x13
+#define CMD_TLS_OPEN          0x30
+#define CMD_TLS_STEP          0x31
+#define CMD_TLS_CLOSE         0x32
+#define CMD_TLS_STATS         0x33
 
 /*
 #define CMD_SOCKET          0x11
