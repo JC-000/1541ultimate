@@ -76,8 +76,8 @@ MODES = {
     "no-close": ("sends close_notify but leaves the TCP connection open",
                  {"a", "b", "c-x25519", "c-p256", "echo-flip", "echo-short", "d-mismatch",
                   "d-untrusted", "d-expired", "e-verify-off"}),
-    "no-alert": ("drops the ESP32's final ciphertext, so the server never sees the alert",
-                 set()),
+    "no-alert": ("drops the ESP32's final ciphertext, so the server never sees the alert; a "
+                 "FAIL since amendment 11 F", {"d-mismatch", "d-untrusted", "d-expired"}),
     "no-test-ca": ("ca=test loads nothing: every verify-on handshake fails",
                    {"a", "b", "c-x25519", "c-p256", "echo-flip", "echo-short",
                     "d-mismatch", "d-untrusted", "d-expired"}),
@@ -102,6 +102,16 @@ MODES = {
     "pre-a-shape": ("the route before amendment 9 A: a failed handshake reports time_source "
                     "none; now a contract FAIL, no longer called a fail-closed break",
                     {"d-mismatch", "d-untrusted", "d-expired"}),
+    "orphan-before": ("an earlier run's orphan: stats_before.sessions_open and "
+                      "sessions_open_after are both 1", {"a", "b", "c-x25519", "c-p256",
+                                                         "echo-flip", "echo-short",
+                                                         "d-mismatch", "d-untrusted",
+                                                         "d-expired", "e-verify-off"}),
+    "replay-hello": ("every connection after the first replays the first ClientHello",
+                     {"b", "c-x25519", "c-p256", "echo-flip", "echo-short", "d-mismatch",
+                      "d-untrusted", "d-expired", "e-verify-off", "a"}),
+    "witness-cross-run": ("sends one fixed ClientHello per run, on its first connection; the "
+                          "second run must see it in the first run's witness log", {"a"}),
     "fast-clock": ("reports handshake_ms of 1 while the server watched tens of ms; this is "
                    "a WARN by design, because a busy host inflates the server's window",
                    set()),
@@ -113,6 +123,10 @@ MODES = {
 # Modes whose failures must carry this text, where the set of failed scenarios
 # alone cannot tell two fakes apart.
 MUST_SAY = {
+    "no-alert": "no alert reached the server",
+    "orphan-before": "an earlier run left an ESP32 session open",
+    "replay-hello": "entropy witness: this ClientHello random",
+    "witness-cross-run": "was already sent in run",
     "slow-first-put": "no answer to PUT /v1/machine:tlsspike within",
     "stock": "this firmware has no TLS spike route",
     "stale-image": "a stale or wrong image",
@@ -127,7 +141,6 @@ MUST_SAY = {
 }
 
 MUST_WARN = {
-    "no-alert": {"d-mismatch", "d-untrusted", "d-expired"},
     "fast-clock": {"a", "b", "c-x25519", "c-p256", "e-verify-off"},
 }
 
@@ -155,10 +168,13 @@ class FakeSession:
             self.incoming, self.outgoing, server_hostname=sni)
         self.s2c = Direction()
         self.steps = 0
+        self.first_flight = b""
 
     def flush(self) -> None:
         data = self.outgoing.read()
         if data:
+            if not self.first_flight:
+                self.first_flight = data
             self.sock.sendall(data)
 
     def pull(self) -> bool:
@@ -234,6 +250,10 @@ class FakeSession:
 
 
 LEAKED: list[socket.socket] = []
+# The replay fakes' state, per mode; fake_device() resets a mode's entry, so
+# every suite run starts with a device that has sent nothing yet.
+REPLAY: dict[str, dict] = {}
+FIXED_HELLO = Path(tempfile.gettempdir()) / "tls-spike-sim-fixed-client-hello.bin"
 PUTS: dict[str, int] = {}
 PUT_LOCK = threading.Lock()
 # The suite's PUT timeout in the sim, so a fake that never answers costs
@@ -256,7 +276,7 @@ def run_spike(mode: str, query: dict) -> dict:
         cafile = pki.pki_dir() / "untrusted-root" / "root.pem"
     effective_verify = verify and mode != "verify-ignored"
     stats = {"heap_free": 180000, "heap_min_ever": 120000, "largest_block": 90000,
-             "stack_free": 2600}
+             "stack_free": 2600, "sessions_open": 0}
     no_time = mode.startswith("no-time")
     # Amendment 9 A: the time fields come from the STATS right after OPEN, so a
     # failed handshake still carries them; "none" only when OPEN failed.
@@ -265,9 +285,36 @@ def run_spike(mode: str, query: dict) -> dict:
               "esp_time": 0 if no_time else int(time.time()),
               "handshake_ms": 0, "handshake_us": 0, "tls_version": 0, "ciphersuite": 0,
               "group": 0, "echo_sent": 0, "echo_received": 0, "echo_ok": False,
-              "step_max_ms": 0, "sessions_open_after": 1 if mode == "session-leak" else 0,
+              "step_max_ms": 0, "open_ms": 0,
+              "sessions_open_after": 1 if mode in ("session-leak", "orphan-before") else 0,
               "stats_before": dict(stats), "stats_after": dict(stats),
               "stats_peak": dict(stats, heap_free=180000 - 46 * 1024)}
+    if mode == "orphan-before":
+        result["stats_before"]["sessions_open"] = 1
+    replay = REPLAY.setdefault(mode, {})
+    if mode == "replay-hello" and replay.get("hello"):
+        # Every connection after the first sends the first one's ClientHello
+        # again, byte for byte: a client whose RNG repeats, made visible.
+        with socket.create_connection((host, port), timeout=READ_TIMEOUT) as raw:
+            raw.sendall(replay["hello"])
+            try:
+                raw.recv(65536)
+            except OSError:
+                pass
+        result.update(stage="handshake", error="replayed ClientHello", open_ms=2,
+                      stats_peak=dict.fromkeys(stats, 0))
+        return result
+    if mode == "witness-cross-run" and not replay.get("used"):
+        replay["used"] = True
+        with socket.create_connection((host, port), timeout=READ_TIMEOUT) as raw:
+            raw.sendall(FIXED_HELLO.read_bytes())
+            try:
+                raw.recv(65536)
+            except OSError:
+                pass
+        result.update(stage="handshake", error="fixed ClientHello", open_ms=2,
+                      stats_peak=dict.fromkeys(stats, 0))
+        return result
     if mode == "no-time-correct" and verify:
         # The Nios opened the socket before OPEN refused; nothing is sent.
         socket.create_connection((host, port), timeout=READ_TIMEOUT).close()
@@ -277,6 +324,8 @@ def run_spike(mode: str, query: dict) -> dict:
     started = time.monotonic()
     session = FakeSession(mode, host, port, sni, effective_verify, cafile)
     reason = session.handshake()
+    if mode == "replay-hello" and not replay.get("hello"):
+        replay["hello"] = session.first_flight
     handshake_s = time.monotonic() - started
     result["steps"] = session.steps
     payload = payload_for(seed, n)
@@ -330,6 +379,7 @@ def fill_success(result: dict, session: FakeSession, n: int, echo_ok: bool,
         "echo_ok": echo_ok,
         "steps": session.steps,
         "step_max_ms": STEP_DELAY_MS,
+        "open_ms": 2,
     })
     if session.mode == "fast-clock":
         result["handshake_ms"] = result["handshake_us"] = 1
@@ -337,7 +387,23 @@ def fill_success(result: dict, session: FakeSession, n: int, echo_ok: bool,
         result["handshake_us"] = result["handshake_ms"] * 1000 + 20000
 
 
+def make_fixed_hello() -> None:
+    """One real ClientHello, kept in a file so two runs can send the same bytes."""
+    if FIXED_HELLO.exists():
+        return
+    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+    tls = client_context(True, pki.pki_dir() / "test-ca.pem").wrap_bio(
+        incoming, outgoing, server_hostname=pki.SNI)
+    try:
+        tls.do_handshake()
+    except ssl.SSLWantReadError:
+        pass
+    FIXED_HELLO.write_bytes(outgoing.read())
+
+
 def fake_device(mode: str) -> ThreadingHTTPServer:
+    REPLAY[mode] = {}
+    PUTS[mode] = 0
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args) -> None:
             pass
@@ -386,6 +452,18 @@ def scenario_key(label: str) -> str | None:
 
 
 def run_mode(mode: str, repeat: int, work: Path) -> dict:
+    """One suite run against the mode's fake, or two for the cross-run witness."""
+    witness = work / f"{mode}-witness.jsonl"
+    witness.unlink(missing_ok=True)
+    if mode == "witness-cross-run":
+        run_once(mode, repeat, work, witness, "-first")
+    return run_once(mode, repeat, work, witness, "")
+
+
+def run_once(mode: str, repeat: int, work: Path, witness: Path, suffix: str) -> dict:
+    results = work / f"{mode}{suffix}-results.json"
+    # The suite never overwrites a results file; these are the sim's own.
+    results.unlink(missing_ok=True)
     device = fake_device(mode)
     # The host running the sim is rarely quiet, so the load is faked: 9 for the
     # high-load fake, 0.5 for every other, which lets P2 be judged.
@@ -393,8 +471,8 @@ def run_mode(mode: str, repeat: int, work: Path) -> dict:
                TLS_SPIKE_FAKE_LOADAVG="9" if mode == "high-load" else "0.5")
     command = [sys.executable, str(HERE / "tls_spike_test.py"), "-H", "127.0.0.1",
                "--server-ip", "127.0.0.1", "--repeat", str(repeat), "--color", "never",
-               "--results", str(work / f"{mode}-results.json"),
-               "--log-dir", str(work / mode)]
+               "--results", str(results), "--witness-log", str(witness),
+               "--log-dir", str(work / f"{mode}{suffix}")]
     if mode == "stale-image":
         command.append("--expect-spike")
     if mode == "slow-first-put":
@@ -514,10 +592,43 @@ GOLDEN_ENV = "TLS_SPIKE_GOLDEN"
 # clock at recording time; it is moved to now only when it was nonzero.
 LIVE_FIELDS = ("tls_version", "ciphersuite")
 # What a stem's reply itself must show, beyond its verdict: (stage, error pattern).
+# Amendment 11 E: what every stem's reply itself must show, whatever the
+# judges then decide: (ok, stage, error pattern). A golden that claimed success
+# on a failure path would otherwise pass on the missing server record alone.
+# The bad-request stems carry no route JSON and must be HTTP 400 instead.
+TIMEOUT = r"time\s*-?\s*out|timed\s+out|no answer in time"
 GOLDEN_REPLY = {
-    "step_timeout": ("handshake", r"time\s*-?\s*out|timed\s+out|no answer in time"),
-    "close_fail": ("close", r"."),
+    "success_ecdsa": (True, "done", r"^$"),
+    "success_rsa": (True, "done", r"^$"),
+    "verify_off": (True, "done", r"^$"),
+    "mismatch": (False, "handshake", r"-9984|2700|verif"),
+    "untrusted": (False, "handshake", r"-9984|2700|verif"),
+    "expired": (False, "handshake", r"-9984|2700|verif"),
+    "no_time": (False, "open", r"trust\w*\s+time|clock"),
+    "no_entropy": (False, "open", r"entropy"),
+    "connect_fail": (False, "connect", r"connect"),
+    "connect_timeout": (False, "connect", TIMEOUT),
+    "memory_fail": (False, "connect", r"memory"),
+    "socket_fail": (False, "connect", r"socket"),
+    "socket_options_fail": (False, "connect", r"socket_options"),
+    "open_invalid": (False, "open", r"malformed|invalid"),
+    "open_timeout": (False, "open", TIMEOUT),
+    "step_timeout": (False, "handshake", TIMEOUT),
+    "handshake_send_fail": (False, "handshake", r"send"),
+    "handshake_closed": (False, "handshake", r"CLOSED"),
+    "handshake_eof": (False, "handshake", r"pipe|closed|eof|reset"),
+    "handshake_deadline": (False, "handshake", TIMEOUT),
+    "handshake_timeout": (False, "handshake", TIMEOUT),
+    "echo_recv_fail": (False, "echo", r"recv"),
+    "echo_send_fail": (False, "echo", r"send"),
+    "echo_silent": (False, "echo", TIMEOUT),
+    "echo_step_fail": (False, "echo", TIMEOUT),
+    "echo_closed": (False, "echo", r"CLOSED"),
+    "echo_mismatch": (False, "echo", r"differ|mismatch|compare"),
+    "close_fail": (False, "close", TIMEOUT),
 }
+_BAD_REQUEST = {stem for stem, entry in GOLDEN_EXPECT.items() if entry[4] == "bad-request"}
+assert set(GOLDEN_REPLY) | _BAD_REQUEST == set(GOLDEN_EXPECT), "every stem needs a reply check"
 
 
 def golden_case(stem: str, wrapped: dict, work: Path) -> tuple[bool, str, list[str]]:
@@ -535,15 +646,21 @@ def golden_case(stem: str, wrapped: dict, work: Path) -> tuple[bool, str, list[s
     elif int(request.get("verify", -1)) != verify:
         return False, (f"request verify={request.get('verify')!r}, but {stem} is a verify="
                        f"{verify} path"), notes
-    if stem in GOLDEN_REPLY:
-        stage, pattern = GOLDEN_REPLY[stem]
+    if stem in _BAD_REQUEST:
+        if wrapped.get("http_status") != 400:
+            return False, (f"{stem} is a bad-request path but answered HTTP "
+                           f"{wrapped.get('http_status')!r}"), notes
+    else:
+        want_ok, stage, pattern = GOLDEN_REPLY[stem]
         response = wrapped.get("response")
         response = response if isinstance(response, dict) else {}
-        if (response.get("stage") != stage
-                or not re.search(pattern, str(response.get("error", "")), re.IGNORECASE)):
-            return False, (f"the reply shows stage {response.get('stage')!r}, error "
-                           f"{response.get('error')!r}; {stem} must show stage {stage!r} "
-                           f"and an error matching {pattern!r}"), notes
+        error = str(response.get("error", ""))
+        if (response.get("ok") is not want_ok or response.get("stage") != stage
+                or not re.search(pattern, error, re.IGNORECASE)):
+            return False, (f"the reply shows ok={response.get('ok')!r}, stage "
+                           f"{response.get('stage')!r}, error {error!r}; {stem} must show "
+                           f"ok={want_ok}, stage {stage!r} and an error matching "
+                           f"{pattern!r}"), notes
     n = int(request.get("echo") or 0) or suite.DEFAULT_ECHO_BYTES
     seed = int(request.get("seed") or 0)
     manifest = pki.generate(pki.pki_dir())
@@ -658,6 +775,7 @@ def main() -> int:
     parser.add_argument("--golden-only", action="store_true")
     args = parser.parse_args()
     pki.generate(pki.pki_dir())
+    make_fixed_hello()
     work = Path(args.keep or tempfile.mkdtemp(prefix="tls-spike-sim-"))
     work.mkdir(parents=True, exist_ok=True)
     golden_ok = True
