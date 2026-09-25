@@ -165,6 +165,7 @@ SRCS_CC	 =  u2p_init.cc \
 			wifi_cmd.cc \
 			wifi_random.cc \
 			wifi_dedicated.cc \
+			wifi_tls.cc \
 			acia.cc \
 			modem.cc \
 			listener_socket.cc \

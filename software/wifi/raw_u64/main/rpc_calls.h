@@ -146,6 +146,82 @@ typedef struct {
 } rpc_get_random_resp;
 
 //----------------------------------
+// TLS sessions: the module holds the keys, the host carries the ciphertext
+#define TLS_FLAG_VERIFY     0x01 // verify the server's chain and name
+#define TLS_FLAG_CA_BUNDLE  0x02 // trust the CA bundle
+#define TLS_FLAG_TEST_CA    0x04 // trust the built in test CA
+#define TLS_SESSION_GLOBAL  0xFF // STATS for the module as a whole
+#define TLS_STEP_MAX_IN     1024 // ct_in_len + pt_in_len in one step
+#define TLS_STEP_MAX_OUT    1024 // ct_out_len + pt_out_len in one step
+
+typedef enum {
+    TLS_STATE_HANDSHAKING = 0,
+    TLS_STATE_ESTABLISHED = 1,
+    TLS_STATE_CLOSED      = 2,
+    TLS_STATE_FAILED      = 3, // esp_err holds the mbedTLS error
+} tls_state_t;
+
+typedef struct {
+    rpc_header_t hdr;
+    uint8_t flags; // TLS_FLAG_*
+    uint8_t sni_len;
+    char sni[]; // sni_len bytes, not terminated
+} rpc_tls_open_req;
+
+typedef struct {
+    rpc_header_t hdr;
+    int esp_err; // to be casted to esp_err_t
+    uint8_t session;
+} rpc_tls_open_resp;
+
+typedef struct {
+    rpc_header_t hdr;
+    uint8_t session;
+    uint8_t reserved;
+    uint16_t ct_in_len;
+    uint16_t pt_in_len;
+    uint8_t data[]; // ct_in, then pt_in
+} rpc_tls_step_req;
+
+typedef struct {
+    rpc_header_t hdr;
+    int esp_err; // to be casted to esp_err_t, or the mbedTLS error when FAILED
+    uint8_t state; // to be casted to tls_state_t
+    uint8_t reserved;
+    uint16_t ct_out_len;
+    uint16_t pt_out_len;
+    uint16_t reserved2; // so that data starts at sizeof()
+    uint8_t data[]; // ct_out, then pt_out
+} rpc_tls_step_resp;
+
+typedef struct {
+    rpc_header_t hdr;
+    uint8_t session;
+} rpc_tls_close_req; // answered with rpc_espcmd_resp
+
+typedef struct {
+    rpc_header_t hdr;
+    uint8_t session; // or TLS_SESSION_GLOBAL
+} rpc_tls_stats_req;
+
+typedef struct {
+    rpc_header_t hdr;
+    int esp_err; // to be casted to esp_err_t
+    uint32_t heap_free;
+    uint32_t heap_min_ever;
+    uint32_t largest_block;
+    uint32_t ct_in_bytes; // the session's counters; 0 for TLS_SESSION_GLOBAL
+    uint32_t ct_out_bytes;
+    uint32_t pt_in_bytes;
+    uint32_t pt_out_bytes;
+    uint32_t handshake_us;
+    uint16_t tls_version; // as on the wire: 0x0304 is TLS 1.3
+    uint16_t ciphersuite; // IANA number, e.g. 0x1301
+    uint16_t group; // IANA NamedGroup, e.g. 0x001D for X25519
+    uint16_t reserved;
+} rpc_tls_stats_resp;
+
+//----------------------------------
 // send raw packet
 typedef struct {
     rpc_header_t hdr;
@@ -190,6 +266,10 @@ typedef struct {
 #define CMD_CLEAR_APS         0x11
 #define CMD_WIFI_AUTOCONNECT  0x12
 #define CMD_GET_RANDOM        0x13
+#define CMD_TLS_OPEN          0x30
+#define CMD_TLS_STEP          0x31
+#define CMD_TLS_CLOSE         0x32
+#define CMD_TLS_STATS         0x33
 
 /*
 #define CMD_SOCKET          0x11
