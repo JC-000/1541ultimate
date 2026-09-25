@@ -45,6 +45,7 @@ HERE = Path(__file__).resolve().parent
 ROUTE = "/v1/machine:tlsspike"
 READ_TIMEOUT = 3.0
 STEP_DELAY = 0.03
+STEP_DELAY_MS = 30
 
 # mode -> (what it does wrong, the scenarios that must FAIL; None means the
 # suite must pass). A scenario named here has to fail, and every other has to
@@ -91,10 +92,16 @@ MODES = {
     "no-time-verifies": ("reports time_source none, but verifies and runs anyway",
                          {"a", "b", "c-x25519", "c-p256", "echo-flip", "echo-short",
                           "d-mismatch", "d-untrusted", "d-expired"}),
-    "nios-below-esp": ("reports an ESP32 handshake_us 10 ms longer than the Nios wall clock",
+    "nios-below-esp": ("reports an ESP32 handshake_us 20 ms longer than the Nios wall clock",
                        {"a", "b", "c-x25519", "c-p256", "e-verify-off"}),
     "high-load": ("a correct device, on a host whose load average is 9 (faked): P2 must be "
                   "held back as INCONCLUSIVE", None),
+    "session-leak": ("never CLOSEs its ESP32 session: sessions_open_after is 1",
+                     {"a", "b", "c-x25519", "c-p256", "echo-flip", "echo-short",
+                      "d-mismatch", "d-untrusted", "d-expired", "e-verify-off"}),
+    "pre-a-shape": ("the route before amendment 9 A: a failed handshake reports time_source "
+                    "none; now a contract FAIL, no longer called a fail-closed break",
+                    {"d-mismatch", "d-untrusted", "d-expired"}),
     "fast-clock": ("reports handshake_ms of 1 while the server watched tens of ms; this is "
                    "a WARN by design, because a busy host inflates the server's window",
                    set()),
@@ -113,7 +120,9 @@ MUST_SAY = {
     "high-load": "P2a INCONCLUSIVE (host load)",
     "nios-below-esp": "the Nios clock (handshake_ms=",
     "no-time-correct": "precondition: the device has no trusted time",
-    "no-time-verifies": "fail-closed rule broken",
+    "no-time-verifies": "time_source 'none' past OPEN",
+    "session-leak": "sessions_open_after=1",
+    "pre-a-shape": "its STATS after OPEN was not taken",
     "wrong-payload": "not the payload for seed",
 }
 
@@ -247,19 +256,23 @@ def run_spike(mode: str, query: dict) -> dict:
         cafile = pki.pki_dir() / "untrusted-root" / "root.pem"
     effective_verify = verify and mode != "verify-ignored"
     stats = {"heap_free": 180000, "heap_min_ever": 120000, "largest_block": 90000,
-             "state": 0, "sessions_open": 0, "stack_free": 2600}
+             "stack_free": 2600}
     no_time = mode.startswith("no-time")
+    # Amendment 9 A: the time fields come from the STATS right after OPEN, so a
+    # failed handshake still carries them; "none" only when OPEN failed.
     result = {"ok": False, "stage": "connect", "error": "", "steps": 0,
               "time_source": "none" if no_time else "nios",
               "esp_time": 0 if no_time else int(time.time()),
               "handshake_ms": 0, "handshake_us": 0, "tls_version": 0, "ciphersuite": 0,
               "group": 0, "echo_sent": 0, "echo_received": 0, "echo_ok": False,
+              "step_max_ms": 0, "sessions_open_after": 1 if mode == "session-leak" else 0,
               "stats_before": dict(stats), "stats_after": dict(stats),
               "stats_peak": dict(stats, heap_free=180000 - 46 * 1024)}
     if mode == "no-time-correct" and verify:
         # The Nios opened the socket before OPEN refused; nothing is sent.
         socket.create_connection((host, port), timeout=READ_TIMEOUT).close()
-        result.update(stage="open", error="TLS open refused: no trusted time for verification")
+        result.update(stage="open", error="TLS open refused: no trusted time for verification",
+                      stats_peak=dict.fromkeys(stats, 0))
         return result
     started = time.monotonic()
     session = FakeSession(mode, host, port, sni, effective_verify, cafile)
@@ -273,8 +286,14 @@ def run_spike(mode: str, query: dict) -> dict:
         session.close()
         error = ("X509 - Certificate verification failed (-0x2700)"
                  if reason.startswith("verify") else f"SSL - {reason}")
-        result.update(stage="handshake", error=error,
-                      handshake_ms=round(handshake_s * 1000))
+        # What the route sends on a FAILED handshake (m2-adversarial.md §1): no
+        # ESP32 figure and a zeroed stats_peak, which is only taken once the
+        # session is established.
+        result.update(stage="handshake", error=error, handshake_ms=round(handshake_s * 1000),
+                      handshake_us=0, step_max_ms=STEP_DELAY_MS,
+                      stats_peak=dict.fromkeys(stats, 0))
+        if mode == "pre-a-shape":
+            result.update(time_source="none", esp_time=0)
         if mode in ("fallback-retry", "fallback-reports-failed") and reason.startswith("verify"):
             retry = FakeSession(mode, host, port, sni, False, cafile)
             if retry.handshake() is None:
@@ -310,11 +329,12 @@ def fill_success(result: dict, session: FakeSession, n: int, echo_ok: bool,
         "echo_received": n if received is None else received,
         "echo_ok": echo_ok,
         "steps": session.steps,
+        "step_max_ms": STEP_DELAY_MS,
     })
     if session.mode == "fast-clock":
         result["handshake_ms"] = result["handshake_us"] = 1
     if session.mode == "nios-below-esp":
-        result["handshake_us"] = result["handshake_ms"] * 1000 + 10000
+        result["handshake_us"] = result["handshake_ms"] * 1000 + 20000
 
 
 def fake_device(mode: str) -> ThreadingHTTPServer:
@@ -424,16 +444,229 @@ def expected_ok(mode: str, result: dict) -> tuple[bool, str]:
             + (f", no WARN on {sorted(missing)}" if missing else "") + unsaid)
 
 
+# ------------------------------------------------------------ golden replies --
+#
+# Amendments 9 E and 10 (M2-SPEC.md sections 17 and 19): the Nios lane's host
+# harness records the route's REAL answer for every exit path, wrapped as
+#   {stem, exit_path, request{host, port, sni, verify, ca, echo, seed},
+#    http_status, response}
+# with response null for an empty body. Each file is classified by the suite's
+# own classify_reply and judged by its own judge_outcome, beside a real server
+# record for its chain, made by this host's TLS client against the suite's echo
+# server with the request's seed and echo count. Only fields that depend on the
+# live server are patched, and every patch is printed.
+#
+# stem -> (scenario kind, chain, verify, what the server sees, expected verdict)
+#   server: "tls" (a clean echo), "flip" (the server flips the last echoed
+#   byte), "reject" (the host client, verifying, refuses the chain), or "none"
+#   (no connection)
+#   verify: 0, 1, or None for a path that holds either way (the request's own
+#   value is then used)
+#   verdict: "pass" (no problems), "precondition" (a correct refusal the rig
+#   cannot run past), "bad-request" (the suite classified an HTTP 400), or
+#   "fail" (a FAIL that is none of those and never "fail-closed rule broken")
+#
+# The three must-fail replies may carry the same error (-0x2700, the one code
+# mbedTLS returns for every verification failure); their judge tells them apart
+# by the server-side alert, never by the device's error text.
+GOLDEN_EXPECT = {
+    # the twelve of amendment 10
+    "success_ecdsa": ("established", "ecdsa", 1, "tls", "pass"),
+    "success_rsa": ("established", "rsa", 1, "tls", "pass"),
+    "verify_off": ("established", "mismatch", 0, "tls", "pass"),
+    "mismatch": ("failed", "mismatch", 1, "reject", "pass"),
+    "untrusted": ("failed", "untrusted", 1, "reject", "pass"),
+    "expired": ("failed", "expired", 1, "reject", "pass"),
+    "no_time": ("established", "ecdsa", 1, "none", "precondition"),
+    "bad_param": ("established", "ecdsa", None, "none", "bad-request"),
+    "connect_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "open_timeout": ("established", "ecdsa", 1, "none", "fail"),
+    "handshake_timeout": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_mismatch": ("echo-broken", "ecdsa", 1, "flip", "pass"),
+    # the supervisor's three extra stems (amendment 10 follow-up; the name
+    # verify_without_sni is final)
+    "no_entropy": ("established", "ecdsa", None, "none", "precondition"),
+    "step_timeout": ("established", "ecdsa", 1, "none", "fail"),
+    "verify_without_sni": ("established", "ecdsa", None, "none", "bad-request"),
+    # one per further Nios exit-path row (m2-nios.md section 5)
+    "bad_param_host": ("established", "ecdsa", None, "none", "bad-request"),
+    "memory_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "socket_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "connect_timeout": ("established", "ecdsa", 1, "none", "fail"),
+    "socket_options_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "open_invalid": ("established", "ecdsa", 1, "none", "fail"),
+    "handshake_send_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "handshake_closed": ("established", "ecdsa", 1, "none", "fail"),
+    "handshake_eof": ("established", "ecdsa", 1, "none", "fail"),
+    "handshake_deadline": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_recv_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_send_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_silent": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_step_fail": ("established", "ecdsa", 1, "none", "fail"),
+    "echo_closed": ("established", "ecdsa", 1, "none", "fail"),
+    # exit 16: the run completed, CLOSE failed, and the session is left open;
+    # sessions_open_after=1 must FAIL it (amendment 9 D)
+    "close_fail": ("established", "ecdsa", 1, "tls", "fail"),
+}
+GOLDEN_ENV = "TLS_SPIKE_GOLDEN"
+# The fields of a golden reply that depend on the server it met, not on the
+# route's code, and so are taken from the live record instead. esp_time is the
+# clock at recording time; it is moved to now only when it was nonzero.
+LIVE_FIELDS = ("tls_version", "ciphersuite")
+# What a stem's reply itself must show, beyond its verdict: (stage, error pattern).
+GOLDEN_REPLY = {
+    "step_timeout": ("handshake", r"time\s*-?\s*out|timed\s+out|no answer in time"),
+    "close_fail": ("close", r"."),
+}
+
+
+def golden_case(stem: str, wrapped: dict, work: Path) -> tuple[bool, str, list[str]]:
+    import tls_spike_test as suite
+    kind, chain, verify, seen, want = GOLDEN_EXPECT[stem]
+    request = wrapped.get("request") or {}
+    notes: list[str] = []
+    if wrapped.get("stem") != stem:
+        return False, f"file {stem}.json says stem {wrapped.get('stem')!r}", notes
+    if verify is None:
+        # A bad-request row may carry an invalid or missing verify; it never
+        # reaches the judges that use it.
+        given = request.get("verify")
+        verify = given if isinstance(given, int) and given in (0, 1) else 1
+    elif int(request.get("verify", -1)) != verify:
+        return False, (f"request verify={request.get('verify')!r}, but {stem} is a verify="
+                       f"{verify} path"), notes
+    if stem in GOLDEN_REPLY:
+        stage, pattern = GOLDEN_REPLY[stem]
+        response = wrapped.get("response")
+        response = response if isinstance(response, dict) else {}
+        if (response.get("stage") != stage
+                or not re.search(pattern, str(response.get("error", "")), re.IGNORECASE)):
+            return False, (f"the reply shows stage {response.get('stage')!r}, error "
+                           f"{response.get('error')!r}; {stem} must show stage {stage!r} "
+                           f"and an error matching {pattern!r}"), notes
+    n = int(request.get("echo") or 0) or suite.DEFAULT_ECHO_BYTES
+    seed = int(request.get("seed") or 0)
+    manifest = pki.generate(pki.pki_dir())
+    records: list[dict] = []
+    if seen != "none":
+        mangle = "flip-last" if seen == "flip" else "none"
+        server = suite.Server(suite.ServerConfig(chain, mangle=mangle), pki.pki_dir(),
+                              work / f"golden-{stem}.jsonl", n)
+        server.start()
+        try:
+            suite.host_control(server, pki.SNI, bool(verify), None,
+                               suite.expected_payload(seed, n))
+            records = server.new_records(suite.RECORD_WAIT, stray=0.2)
+        finally:
+            server.stop()
+    response = wrapped.get("response")
+    if response is None:
+        body = b""
+    elif isinstance(response, str):
+        body = response.encode()
+    else:
+        body = json.dumps(response).encode()
+
+    class Args:
+        sni = pki.SNI
+        echo_bytes = n
+
+    scenario = suite.Scenario(stem, stem, suite.ServerConfig(chain), verify=verify, expect=kind)
+    try:
+        device = suite.classify_reply(suite.ROUTE, int(wrapped.get("http_status", 0)), body,
+                                      request)
+    except suite.Failure as exc:
+        problems, warning = [str(exc)], None
+    else:
+        device = dict(device)
+        if records and records[0]["handshake_ok"]:
+            live = {"tls_version": records[0]["negotiated"]["version"],
+                    "ciphersuite": records[0]["negotiated"]["cipher_suite"]}
+            for name in LIVE_FIELDS:
+                if device.get(name) not in (0, None) and device.get(name) != live[name]:
+                    notes.append(f"patched {name}: {device.get(name)!r} -> {live[name]!r}")
+                    device[name] = live[name]
+        if isinstance(device.get("esp_time"), int) and device["esp_time"]:
+            now = int(time.time())
+            notes.append(f"patched esp_time: {device['esp_time']} -> {now}")
+            device["esp_time"] = now
+        outcome = suite.Outcome(scenario, seed, int(wrapped["http_status"]), device, records)
+        problems, warning = suite.judge_outcome(Args, outcome, manifest, positives_ok=True)
+        # Whatever decides the verdict, the reply itself has to meet the
+        # section 7/9/17 contract on every exit path; that is the seam the
+        # adversarial review found untested (m2-adversarial.md §1).
+        contract = suite.contract_problems(device)
+        if contract:
+            return False, f"[{wrapped.get('exit_path')}] the reply breaks the contract: " \
+                          f"{contract}", notes
+    first = problems[0] if problems else ""
+    if want == "pass":
+        ok = not problems
+    elif want == "precondition":
+        ok = first.startswith("precondition")
+    elif want == "bad-request":
+        ok = "answered HTTP 400" in first
+    else:
+        # A plain FAIL: never a correct refusal, never a security break, never
+        # the "none past OPEN" contract FAIL, which is about OPEN having run.
+        ok = (bool(problems) and not first.startswith("precondition")
+              and not any(word in first for word in ("fail-closed rule", "past OPEN")))
+        if stem == "close_fail":
+            ok = ok and any("sessions_open_after=1" in problem for problem in problems)
+    said = first or warning or "no problems"
+    return ok, f"[{wrapped.get('exit_path')}] expected {want}: {said[:160]}", notes
+
+
+def run_golden(directory: Path, work: Path) -> bool:
+    found = {path.stem: path for path in sorted(directory.glob("*.json"))}
+    if not found:
+        print(f"GOLDEN NOT RUN  no files in {directory} (amendment 10 is not yet exercised)")
+        return False
+    all_ok = True
+    for stem in sorted(set(found) | set(GOLDEN_EXPECT)):
+        if stem not in GOLDEN_EXPECT:
+            print(f"UNEXPECTED   golden {stem:18} a file with no expected verdict in GOLDEN_EXPECT")
+            all_ok = False
+            continue
+        if stem not in found:
+            print(f"UNEXPECTED   golden {stem:18} a required stem with no file")
+            all_ok = False
+            continue
+        try:
+            ok, why, notes = golden_case(stem, json.loads(found[stem].read_text()), work)
+        except Exception as exc:  # noqa: BLE001
+            ok, why, notes = False, f"could not judge it: {exc!r}", []
+        all_ok &= ok
+        print(f"{'AS EXPECTED' if ok else 'UNEXPECTED '}  golden {stem:18} {why}")
+        for note in notes:
+            print(f"      {note}")
+    return all_ok
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--mode", action="append", choices=tuple(MODES))
     parser.add_argument("--repeat", type=int, default=2)
     parser.add_argument("--jobs", type=int, default=6)
     parser.add_argument("--keep", help="write every run's output under this directory")
+    parser.add_argument("--golden-dir",
+                        default=os.environ.get(GOLDEN_ENV) or str(HERE / "golden"),
+                        help=f"the Nios lane's golden route replies (amendment 10; default "
+                             f"${GOLDEN_ENV}, else golden/ beside this file)")
+    parser.add_argument("--no-golden", action="store_true",
+                        help="skip the golden contract test, and say so")
+    parser.add_argument("--golden-only", action="store_true")
     args = parser.parse_args()
     pki.generate(pki.pki_dir())
     work = Path(args.keep or tempfile.mkdtemp(prefix="tls-spike-sim-"))
     work.mkdir(parents=True, exist_ok=True)
+    golden_ok = True
+    if args.no_golden:
+        print("GOLDEN SKIPPED  --no-golden")
+    else:
+        golden_ok = run_golden(Path(args.golden_dir), work)
+    if args.golden_only:
+        return 0 if golden_ok else 1
     modes = args.mode or list(MODES)
     with ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda m: run_mode(m, args.repeat, work), modes))
@@ -450,7 +683,7 @@ def main() -> int:
             print(f"      {key:14} {'/'.join(shown):10} {first_fail[:150]}")
         print(f"      {result['suite_line'][:200]}")
     print(f"outputs in {work}")
-    return 0 if all_ok else 1
+    return 0 if all_ok and golden_ok else 1
 
 
 if __name__ == "__main__":
