@@ -624,6 +624,93 @@ int main(void)
     check(!r.ok && !strcmp(r.stage, "open") && strstr(r.error, "trustworthy time") && strstr(r.error, "INVALID_STATE)"),
           "verify without time: stage open, and says so (%s)", r.error);
 
+    // The route's parameters: every bound, each way.
+    struct {
+        const char *host, *port, *sni, *verify, *ca, *echo, *seed;
+        const char *invalid;
+    } cases[] = {
+        { "10.0.0.2", "4433", "tls-spike.test", NULL, NULL, NULL, NULL, NULL },
+        { "0.0.0.0", "1", "", "0", "none", "0", "0", NULL },
+        { "10.0.0.2", "4433", NULL, NULL, NULL, NULL, NULL, "sni" },
+        { "10.0.0.2", "4433", "", NULL, NULL, NULL, NULL, "sni" },
+        { "10.0.0.2", "4433", "", "1", NULL, NULL, NULL, "sni" },
+        { "10.0.0.2", "4433", NULL, "0", NULL, NULL, NULL, NULL },
+        { "255.255.255.255", "65535", "tls-spike.test", "1", "bundle", "4096", "4294967295", NULL },
+        { NULL, "4433", NULL, NULL, NULL, NULL, NULL, "host" },
+        { "", "4433", NULL, NULL, NULL, NULL, NULL, "host" },
+        { "10.0.0", "4433", NULL, NULL, NULL, NULL, NULL, "host" },
+        { "10.0.0.2.5", "4433", NULL, NULL, NULL, NULL, NULL, "host" },
+        { "10.0.0.256", "4433", NULL, NULL, NULL, NULL, NULL, "host" },
+        { "10.0.0.2 ", "4433", NULL, NULL, NULL, NULL, NULL, "host" },
+        { "0x0a.0.0.2", "4433", NULL, NULL, NULL, NULL, NULL, "host" },
+        { "10..0.2", "4433", NULL, NULL, NULL, NULL, NULL, "host" },
+        { "1000.0.0.2", "4433", NULL, NULL, NULL, NULL, NULL, "host" },
+        { "10.0.0.2", NULL, NULL, NULL, NULL, NULL, NULL, "port" },
+        { "10.0.0.2", "", NULL, NULL, NULL, NULL, NULL, "port" },
+        { "10.0.0.2", "0", NULL, NULL, NULL, NULL, NULL, "port" },
+        { "10.0.0.2", "65536", NULL, NULL, NULL, NULL, NULL, "port" },
+        { "10.0.0.2", "4294967297", NULL, NULL, NULL, NULL, NULL, "port" },
+        { "10.0.0.2", "-1", NULL, NULL, NULL, NULL, NULL, "port" },
+        { "10.0.0.2", "+80", NULL, NULL, NULL, NULL, NULL, "port" },
+        { "10.0.0.2", " 80", NULL, NULL, NULL, NULL, NULL, "port" },
+        { "10.0.0.2", "80x", NULL, NULL, NULL, NULL, NULL, "port" },
+        { "10.0.0.2", "0x50", NULL, NULL, NULL, NULL, NULL, "port" },
+        { "10.0.0.2", "4433", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", NULL, NULL, NULL, NULL, "sni" },
+        { "10.0.0.2", "4433", NULL, "2", NULL, NULL, NULL, "verify" },
+        { "10.0.0.2", "4433", NULL, "9", NULL, NULL, NULL, "verify" },
+        { "10.0.0.2", "4433", NULL, "19", NULL, NULL, NULL, "verify" },
+        { "10.0.0.2", "4433", NULL, "10", NULL, NULL, NULL, "verify" },
+        { "10.0.0.2", "4433", NULL, "", NULL, NULL, NULL, "verify" },
+        { "10.0.0.2", "4433", NULL, "yes", NULL, NULL, NULL, "verify" },
+        { "10.0.0.2", "4433", "x", NULL, "", NULL, NULL, "ca" },
+        { "10.0.0.2", "4433", "x", NULL, "TEST", NULL, NULL, "ca" },
+        { "10.0.0.2", "4433", "x", NULL, "tests", NULL, NULL, "ca" },
+        { "10.0.0.2", "4433", "x", NULL, NULL, "4097", NULL, "echo" },
+        { "10.0.0.2", "4433", "x", NULL, NULL, "5000", NULL, "echo" },
+        { "10.0.0.2", "4433", "x", NULL, NULL, "9", NULL, NULL },
+        { "10.0.0.2", "4433", "x", NULL, NULL, "-0", NULL, "echo" },
+        { "10.0.0.2", "4433", "x", NULL, NULL, "", NULL, "echo" },
+        { "10.0.0.2", "4433", "x", NULL, NULL, NULL, "4294967296", "seed" },
+        { "10.0.0.2", "4433", "x", NULL, NULL, NULL, "99999999999", "seed" },
+        { "10.0.0.2", "4433", "x", NULL, NULL, NULL, "", "seed" },
+        { "10.0.0.2", "4433", "x", NULL, NULL, NULL, "1e3", "seed" },
+    };
+    char sni253[254];
+    memset(sni253, 'a', 253);
+    sni253[253] = 0;
+    int parsed_right = 0;
+    int ncases = sizeof(cases) / sizeof(cases[0]);
+    for (int k = 0; k < ncases; k++) {
+        wifi_tls_spike_args_t a;
+        memset(&a, 0x5A, sizeof(a));
+        const char *got = wifi_tls_spike_parse(cases[k].host, cases[k].port, cases[k].sni, cases[k].verify,
+                                               cases[k].ca, cases[k].echo, cases[k].seed, &a);
+        size_t n = cases[k].invalid ? strlen(cases[k].invalid) : 0;
+        bool right = cases[k].invalid ? (got && !strncmp(got, cases[k].invalid, n) &&
+                                         ((got[n] == 0) || (got[n] == ' ')) && (a.port == 0x5A5A))
+                                      : (got == NULL);
+        if (!right) {
+            printf("        case %d: expected %s, got %s\n", k, cases[k].invalid ? cases[k].invalid : "valid",
+                   got ? got : "valid");
+        }
+        parsed_right += right;
+    }
+    check(parsed_right == ncases, "every parameter out of range or off its grammar is refused, each bound kept (%d of %d)",
+          parsed_right, ncases);
+    wifi_tls_spike_args_t a;
+    const char *got = wifi_tls_spike_parse("10.0.0.2", "4433", "x", NULL, NULL, NULL, NULL, &a);
+    bool defaults = !got && (a.port == 4433) && !strcmp(a.sni, "x") &&
+                    (a.flags == (WIFI_TLS_FLAG_VERIFY | WIFI_TLS_FLAG_TEST_CA)) && (a.echo == 0) && (a.seed == 0);
+    got = wifi_tls_spike_parse("255.255.255.255", "65535", sni253, "0", "none", "4096", "4294967295", &a);
+    bool limits = !got && (a.port == 65535) && (strlen(a.sni) == 253) && (a.flags == 0) && (a.echo == 4096) &&
+                  (a.seed == 4294967295u);
+    got = wifi_tls_spike_parse("10.0.0.2", "4433", NULL, "0", "bundle", NULL, NULL, &a);
+    bool bundle = !got && (a.flags == WIFI_TLS_FLAG_CA_BUNDLE);
+    check(defaults && limits && bundle, "defaults verify=1 ca=test echo=0 seed=0; the upper limits themselves are taken");
+    got = wifi_tls_spike_parse("10.0.0.2", "4433", NULL, NULL, NULL, NULL, NULL, &a);
+    check(got && strstr(got, "verify=1 needs a server name"),
+          "verify (the default) without sni is refused before any socket, and says why (%s)", got ? got : "valid");
+
     reset_world(-1, 0);
     wifi_tls_spike("not an address", 4433, "", 0, 10, seed, &r);
     std::string all;

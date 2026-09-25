@@ -142,10 +142,14 @@ int wifi_tls_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_t
     }
     bool has_state = result->state <= TLS_STATE_FAILED;
     bool failed = has_state && (result->state == TLS_STATE_FAILED);
-    // Input refused for want of room, output all the same, in a live session.
-    bool again = has_state && (result->esp_err == ESP_ERR_NO_MEM_VALUE) &&
-                 ((result->state == TLS_STATE_HANDSHAKING) || (result->state == TLS_STATE_ESTABLISHED));
-    if ((result->esp_err != 0) && !failed && !again) {
+    // Input refused for want of room, output all the same. In a live session
+    // the input goes again. Once the peer has closed, the refusal no longer
+    // matters: the output, the last plaintext included, is taken and the
+    // session reported CLOSED.
+    bool no_mem = has_state && (result->esp_err == ESP_ERR_NO_MEM_VALUE);
+    bool again = no_mem && ((result->state == TLS_STATE_HANDSHAKING) || (result->state == TLS_STATE_ESTABLISHED));
+    bool closed = no_mem && (result->state == TLS_STATE_CLOSED);
+    if ((result->esp_err != 0) && !failed && !again && !closed) {
         step->esp_err = result->esp_err;
         if (has_state) {
             step->state = result->state;
