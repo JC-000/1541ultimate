@@ -1,0 +1,9 @@
+{
+  "stem": "bad_param",
+  "exit_path": "parse (HTTP 400: verify out of range)",
+  "request": { "host": "10.0.0.2", "port": 4433, "sni": "tls-spike.test", "verify": 2, "ca": "test", "echo": 1024, "seed": 1 },
+  "http_status": 400,
+  "response": { 
+  "errors" : [ "Invalid verify" ]
+}
+}

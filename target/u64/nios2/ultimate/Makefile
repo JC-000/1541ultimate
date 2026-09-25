@@ -227,7 +227,7 @@ SRCS_CC +=  iec_drive.cc \
 # tools/openapi reads every -D in this file as unconditional, and would then
 # document a route that release builds do not have.
 ifeq ($(TLS_SPIKE),1)
-SRCS_CC +=  wifi_tls_spike.cc
+SRCS_CC +=  wifi_tls_spike.cc wifi_tls_json.cc
 SPIKE_DEFINES = TLS_SPIKE
 endif
 
