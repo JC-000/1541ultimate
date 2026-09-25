@@ -23,13 +23,17 @@ typedef struct {
     uint16_t ciphersuite;
     uint16_t group;
     uint8_t state;
+    uint8_t time_source;
+    uint32_t esp_time;
 } tls_session_stats_t;
 
 // All functions return ESP_OK, an esp_err_t, or a negative mbedTLS code.
 // A session ends (and is freed) on FAILED, on CLOSED, on tls_close(), and when
 // tls_open() finds the table full and evicts the least recently used session.
 
-int tls_open(uint8_t flags, const char *sni, int sni_len, uint8_t *session);
+// unix_time sets the ESP32 clock when it is later than the build date. Verifying needs a
+// trustworthy clock: without one OPEN fails with ESP_ERR_INVALID_STATE, reason NO_TIME.
+int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, uint8_t *session, uint8_t *reason);
 
 // Consumes all of ct_in (and pt_in, only when ESTABLISHED) or none of it, then
 // writes ct_out followed by pt_out to out, together at most TLS_STEP_OUT_MAX.

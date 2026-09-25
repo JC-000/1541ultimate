@@ -9,6 +9,8 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
+#include <sys/time.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -32,8 +34,11 @@
 #if !CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
 #error "The TLS spike is a TLS 1.3 client: enable CONFIG_MBEDTLS_SSL_PROTO_TLS1_3"
 #endif
+#if !CONFIG_MBEDTLS_HAVE_TIME_DATE
+#error "Without CONFIG_MBEDTLS_HAVE_TIME_DATE certificate dates are ignored: an expired certificate would verify"
+#endif
 
-// Drop the test lane's CA certificate (PEM) into main/tls_test_ca.pem.
+// The test lane's root CA (scratchpad/esp-tls/m2-test-ca/test-ca.pem, DER SHA-256 c3d5f61f...), embedded by CMakeLists.txt.
 extern const uint8_t tls_test_ca_pem_start[] asm("_binary_tls_test_ca_pem_start");
 extern const uint8_t tls_test_ca_pem_end[]   asm("_binary_tls_test_ca_pem_end");
 
@@ -64,6 +69,8 @@ static const char *TAG = "tls";
 static tls_session_t *sessions[TLS_MAX_SESSIONS];
 static uint8_t generation;
 static uint32_t use_count;
+static int psa_ready;
+static int clock_set_by_nios;
 
 static int tls_bio_send(void *ctx, const unsigned char *buf, size_t len)
 {
@@ -107,6 +114,42 @@ static int tls_accept_any(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t 
     return 0;
 }
 
+// 00:00 UTC on the day this file was compiled: a clock before it cannot be right
+static time_t tls_build_time(void)
+{
+    static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    const char *date = __DATE__; // "Mmm dd yyyy"
+    int m = 1;
+    while ((m < 12) && strncmp(months + 3 * (m - 1), date, 3)) {
+        m++;
+    }
+    int d = atoi(date + 4);
+    int y = atoi(date + 7) - (m <= 2);
+    // Days since 1970-01-01 in the proleptic Gregorian calendar (days_from_civil)
+    int era = y / 400;
+    int yoe = y - era * 400;
+    int doy = (153 * (m + ((m > 2) ? -3 : 9)) + 2) / 5 + d - 1;
+    int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return (time_t)(era * 146097 + doe - 719468) * 86400;
+}
+
+// Takes the Ultimate's clock when it is plausible, then says where the ESP32 clock came from
+static uint8_t tls_set_clock(uint32_t unix_time)
+{
+    time_t floor = tls_build_time();
+    if ((time_t)unix_time > floor) {
+        struct timeval tv = { .tv_sec = (time_t)unix_time, .tv_usec = 0 };
+        if (settimeofday(&tv, NULL) == 0) {
+            clock_set_by_nios = 1;
+            return TLS_TIME_NIOS;
+        }
+    }
+    if (time(NULL) > floor) {
+        return clock_set_by_nios ? TLS_TIME_NIOS : TLS_TIME_SNTP;
+    }
+    return TLS_TIME_NONE;
+}
+
 static tls_session_t *tls_find(uint8_t id)
 {
     tls_session_t *s = sessions[id % TLS_MAX_SESSIONS];
@@ -136,13 +179,14 @@ int tls_sessions_open(void)
     return n;
 }
 
-int tls_open(uint8_t flags, const char *sni, int sni_len, uint8_t *session)
+int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, uint8_t *session, uint8_t *reason)
 {
     char hostname[TLS_SNI_MAX_LEN + 1];
     int verify = flags & TLS_OPEN_VERIFY;
     int cas = flags & (TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST);
 
     *session = TLS_SESSION_GLOBAL;
+    *reason = TLS_OPEN_REASON_NONE;
     // Verifying without a host name would skip the name check, so it is refused
     if ((flags & ~(TLS_OPEN_VERIFY | TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST)) ||
         (verify && ((cas != TLS_OPEN_CA_BUNDLE) && (cas != TLS_OPEN_CA_TEST))) ||
@@ -151,6 +195,14 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint8_t *session)
         return ESP_ERR_INVALID_ARG;
     }
     if (entropy_source() == ENTROPY_NONE) {
+        *reason = TLS_OPEN_REASON_NO_ENTROPY;
+        return ESP_ERR_INVALID_STATE;
+    }
+    uint8_t time_source = tls_set_clock(unix_time);
+    if (verify && (time_source == TLS_TIME_NONE)) {
+        // Never verify against a 1970 clock: every validity check would be meaningless
+        ESP_LOGW(TAG, "Open refused: verify needs a clock, and neither unix_time nor SNTP gave one");
+        *reason = TLS_OPEN_REASON_NO_TIME;
         return ESP_ERR_INVALID_STATE;
     }
 #if !CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
@@ -158,12 +210,16 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint8_t *session)
         return ESP_ERR_NOT_SUPPORTED;
     }
 #endif
-    // TLS 1.3 key shares come from the PSA RNG, not from the session DRBG. It seeds itself
-    // from the hardware RNG on its first init, so that must not happen before the radio runs.
-    psa_status_t status = psa_crypto_init();
-    if (status != PSA_SUCCESS) {
-        ESP_LOGE(TAG, "psa_crypto_init: %d", (int)status);
-        return ESP_FAIL;
+    // TLS 1.3 key shares come from PSA's global RNG, not from the session DRBG, and PSA seeds it
+    // from the hardware RNG inside psa_crypto_init(). So the first init happens here, behind the
+    // entropy gate, and nowhere else (M2-SPEC section 8). mbedTLS needs it before any TLS 1.3 handshake.
+    if (!psa_ready) {
+        psa_status_t status = psa_crypto_init();
+        if (status != PSA_SUCCESS) {
+            ESP_LOGE(TAG, "psa_crypto_init: %d", (int)status);
+            return ESP_FAIL;
+        }
+        psa_ready = 1;
     }
     memcpy(hostname, sni, sni_len);
     hostname[sni_len] = 0;
@@ -199,6 +255,8 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint8_t *session)
     s->id = (generation * TLS_MAX_SESSIONS) + slot;
     generation = (generation + 1) % TLS_ID_GENERATIONS;
     s->stats.state = TLS_STATE_HANDSHAKING;
+    s->stats.time_source = time_source;
+    s->stats.esp_time = (uint32_t)time(NULL);
     s->last_used = ++use_count;
     mbedtls_ssl_init(&s->ssl);
     mbedtls_ssl_config_init(&s->conf);
@@ -348,7 +406,7 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
         } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) || (n == MBEDTLS_ERR_SSL_WANT_WRITE)) {
             break;
         } else if (n == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
-            continue;
+            continue; // a TLS 1.3 ticket after the handshake: no plaintext yet, read again (never FAILED)
         } else if ((n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) || (n == 0)) {
             s->stats.state = TLS_STATE_CLOSED;
         } else {
@@ -391,6 +449,9 @@ int tls_get_stats(uint8_t session, tls_session_stats_t *stats)
     memset(stats, 0, sizeof(tls_session_stats_t));
     stats->state = TLS_STATE_CLOSED;
     if (session == TLS_SESSION_GLOBAL) {
+        stats->esp_time = (uint32_t)time(NULL);
+        stats->time_source = (stats->esp_time > tls_build_time()) ?
+                             (clock_set_by_nios ? TLS_TIME_NIOS : TLS_TIME_SNTP) : TLS_TIME_NONE;
         return ESP_OK;
     }
     tls_session_t *s = tls_find(session);

@@ -270,13 +270,15 @@ void cmd_get_random(command_buf_t *buf)
 
 // TLS spike. Same rules as GET_RANDOM: the layout is part of the wire, the header is echoed,
 // and the fixed part of every reply is zeroed before it is filled.
-_Static_assert(sizeof(rpc_tls_open_req) == 6, "rpc_tls_open_req size");
+_Static_assert(sizeof(rpc_tls_open_req) == 12, "rpc_tls_open_req size");
 _Static_assert(offsetof(rpc_tls_open_req, flags) == 4, "rpc_tls_open_req.flags");
 _Static_assert(offsetof(rpc_tls_open_req, sni_len) == 5, "rpc_tls_open_req.sni_len");
-_Static_assert(offsetof(rpc_tls_open_req, sni) == 6, "rpc_tls_open_req.sni");
+_Static_assert(offsetof(rpc_tls_open_req, unix_time) == 8, "rpc_tls_open_req.unix_time");
+_Static_assert(offsetof(rpc_tls_open_req, sni) == 12, "rpc_tls_open_req.sni");
 _Static_assert(sizeof(rpc_tls_open_resp) == 12, "rpc_tls_open_resp size");
 _Static_assert(offsetof(rpc_tls_open_resp, esp_err) == 4, "rpc_tls_open_resp.esp_err");
 _Static_assert(offsetof(rpc_tls_open_resp, session) == 8, "rpc_tls_open_resp.session");
+_Static_assert(offsetof(rpc_tls_open_resp, reason) == 9, "rpc_tls_open_resp.reason");
 _Static_assert(sizeof(rpc_tls_step_req) == 10, "rpc_tls_step_req size");
 _Static_assert(offsetof(rpc_tls_step_req, session) == 4, "rpc_tls_step_req.session");
 _Static_assert(offsetof(rpc_tls_step_req, ct_in_len) == 6, "rpc_tls_step_req.ct_in_len");
@@ -292,7 +294,7 @@ _Static_assert(sizeof(rpc_tls_session_req) == 6, "rpc_tls_session_req size");
 _Static_assert(offsetof(rpc_tls_session_req, session) == 4, "rpc_tls_session_req.session");
 _Static_assert(sizeof(rpc_espcmd_resp) == 8, "rpc_espcmd_resp size");
 _Static_assert(offsetof(rpc_espcmd_resp, esp_err) == 4, "rpc_espcmd_resp.esp_err");
-_Static_assert(sizeof(rpc_tls_stats_resp) == 52, "rpc_tls_stats_resp size");
+_Static_assert(sizeof(rpc_tls_stats_resp) == 60, "rpc_tls_stats_resp size");
 _Static_assert(offsetof(rpc_tls_stats_resp, esp_err) == 4, "rpc_tls_stats_resp.esp_err");
 _Static_assert(offsetof(rpc_tls_stats_resp, heap_free) == 8, "rpc_tls_stats_resp.heap_free");
 _Static_assert(offsetof(rpc_tls_stats_resp, heap_min) == 12, "rpc_tls_stats_resp.heap_min");
@@ -308,6 +310,9 @@ _Static_assert(offsetof(rpc_tls_stats_resp, group) == 44, "rpc_tls_stats_resp.gr
 _Static_assert(offsetof(rpc_tls_stats_resp, state) == 46, "rpc_tls_stats_resp.state");
 _Static_assert(offsetof(rpc_tls_stats_resp, sessions_open) == 47, "rpc_tls_stats_resp.sessions_open");
 _Static_assert(offsetof(rpc_tls_stats_resp, stack_free) == 48, "rpc_tls_stats_resp.stack_free");
+_Static_assert(offsetof(rpc_tls_stats_resp, esp_time) == 52, "rpc_tls_stats_resp.esp_time");
+_Static_assert(offsetof(rpc_tls_stats_resp, time_source) == 56, "rpc_tls_stats_resp.time_source");
+_Static_assert((TLS_TIME_NONE == 0) && (TLS_TIME_NIOS == 1) && (TLS_TIME_SNTP == 2), "tls_time_source_t");
 _Static_assert((TLS_STATE_HANDSHAKING == 0) && (TLS_STATE_ESTABLISHED == 1) &&
                (TLS_STATE_CLOSED == 2) && (TLS_STATE_FAILED == 3), "tls_state_t");
 // Every request and reply must fit one command buffer
@@ -324,13 +329,15 @@ void cmd_tls_open(command_buf_t *buf)
 
     // tls_open() copies the host name before the response overwrites it
     uint8_t session = TLS_SESSION_GLOBAL;
+    uint8_t reason = TLS_OPEN_REASON_NONE;
     int err = ESP_ERR_INVALID_ARG;
     if ((buf->size >= (int)sizeof(rpc_tls_open_req)) && (buf->size == (int)sizeof(rpc_tls_open_req) + req->sni_len)) {
-        err = tls_open(req->flags, req->sni, req->sni_len, &session);
+        err = tls_open(req->flags, req->sni, req->sni_len, req->unix_time, &session, &reason);
     }
     memset(&resp->esp_err, 0, sizeof(rpc_tls_open_resp) - sizeof(rpc_header_t));
     resp->esp_err = err;
     resp->session = session;
+    resp->reason = reason;
     buf->size = sizeof(rpc_tls_open_resp);
     my_uart_transmit_packet(UART_CHAN, buf);
 }
@@ -407,6 +414,8 @@ void cmd_tls_stats(command_buf_t *buf)
     resp->state = stats.state;
     resp->sessions_open = tls_sessions_open();
     resp->stack_free = uxTaskGetStackHighWaterMark(NULL);
+    resp->esp_time = stats.esp_time;
+    resp->time_source = stats.time_source;
     buf->size = sizeof(rpc_tls_stats_resp);
     my_uart_transmit_packet(UART_CHAN, buf);
 }
