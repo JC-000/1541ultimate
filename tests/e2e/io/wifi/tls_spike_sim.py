@@ -112,6 +112,10 @@ MODES = {
                       "d-untrusted", "d-expired", "e-verify-off", "a"}),
     "witness-cross-run": ("sends one fixed ClientHello per run, on its first connection; the "
                           "second run must see it in the first run's witness log", {"a"}),
+    "echo-corrupt-once": ("flips a byte of the echo on its first run only, and says so; P4a "
+                          "must come out OUTSIDE (amendment 12 F1)", {"a"}),
+    "expect-prior-empty": ("a correct device on a 'second run' whose witness log is empty, "
+                           "under --expect-prior-hellos: the suite must FAIL", set()),
     "fast-clock": ("reports handshake_ms of 1 while the server watched tens of ms; this is "
                    "a WARN by design, because a busy host inflates the server's window",
                    set()),
@@ -123,6 +127,8 @@ MODES = {
 # Modes whose failures must carry this text, where the set of failed scenarios
 # alone cannot tell two fakes apart.
 MUST_SAY = {
+    "echo-corrupt-once": "P4a OUTSIDE",
+    "expect-prior-empty": "--expect-prior-hellos: the witness log",
     "no-alert": "no alert reached the server",
     "orphan-before": "an earlier run left an ESP32 session open",
     "replay-hello": "entropy witness: this ClientHello random",
@@ -139,6 +145,9 @@ MUST_SAY = {
     "pre-a-shape": "its STATS after OPEN was not taken",
     "wrong-payload": "not the payload for seed",
 }
+
+# Modes that fail the suite without failing a scenario.
+EXIT_1 = {"expect-prior-empty"}
 
 MUST_WARN = {
     "fast-clock": {"a", "b", "c-x25519", "c-p256", "e-verify-off"},
@@ -352,6 +361,9 @@ def run_spike(mode: str, query: dict) -> dict:
                 fill_success(result, retry, n, True, handshake_s)
         return result
     got = session.echo(payload)
+    if mode == "echo-corrupt-once" and got and not replay.get("corrupted"):
+        replay["corrupted"] = True
+        got = bytes([got[0] ^ 0x40]) + got[1:]
     if mode in ("echo-corrupt-honest", "echo-corrupt-liar") and got:
         got = bytes([got[0] ^ 0x40]) + got[1:]
     echo_ok = got == payload
@@ -477,6 +489,8 @@ def run_once(mode: str, repeat: int, work: Path, witness: Path, suffix: str) -> 
         command.append("--expect-spike")
     if mode == "slow-first-put":
         command += ["--spike-timeout", str(SLOW_PUT_TIMEOUT)]
+    if mode == "expect-prior-empty":
+        command.append("--expect-prior-hellos")
     started = time.monotonic()
     completed = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
     device.shutdown()
@@ -514,7 +528,7 @@ def expected_ok(mode: str, result: dict) -> tuple[bool, str]:
     if must_fail is None:
         return (result["exit"] == 0 and not failed and said,
                 f"exit {result['exit']}, failed {sorted(failed)}{unsaid}")
-    ok = result["exit"] != 0 if must_fail else result["exit"] == 0
+    ok = result["exit"] != 0 if must_fail or mode in EXIT_1 else result["exit"] == 0
     warned = {k for k, v in result["verdicts"].items() if any(x.startswith("WARN") for x in v)}
     missing = MUST_WARN.get(mode, set()) - warned
     return (ok and failed == must_fail and not missing and said,

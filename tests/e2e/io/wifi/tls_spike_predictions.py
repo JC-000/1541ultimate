@@ -25,15 +25,19 @@ and P4b are judged on the handshake after OPEN, handshake_ms - open_ms, and can
 be OUTSIDE like any other prediction. A run without open_ms does not count
 towards them.
 
-Runs (amendment 11 G): only runs whose scenario passed are measured; the suite
-drops a run with any problem before it gets here.
+Runs (amendment 12 F1, superseding amendment 11 G): every established a/b run
+reaches the judge with its scenario_ok flag. P2 and P3 use only runs whose
+scenario passed. P4a uses EVERY established run, because a broken echo is
+exactly what makes a scenario fail: filtering on scenario_ok made "100% intact"
+true by construction. Each judgement names the runs it used.
 
 P3a (amendment 9 F) is heap_free before minus stats_peak.heap_min_ever, the
 low-water mark since this OPEN, so the handshake's transient peak is counted.
 
 Registrations: f45d04dc (no host-load rule) was superseded by 4a60a005
 (amendment 7), then by f53c1a75 (amendment 9: F, H, the load samples), then by
-this one (amendment 11 C). None was used on a rig.
+c22c59ed (amendment 11 C), then by this one (amendment 12 F1). None was used on
+a rig.
 
 Units: 1 KB = 1024 bytes; times are milliseconds. Medians are taken over the
 repeated runs of one scenario, and a median of an even count is the mean of
@@ -118,8 +122,9 @@ def judge(measurements: dict) -> dict:
       p1: {base_bin_bytes, tls_bin_bytes, full_bin_bytes, app_partition_bytes}
           from the budget lane's builds; any may be missing.
       runs: one entry per established positive run (scenarios a and b), with
-          chain, handshake_us, handshake_ms, open_ms, heap_free_before, heap_min_ever_peak,
-          echo_ok (device), echo_intact_server (server log).
+          scenario, scenario_ok, chain, handshake_us, handshake_ms, open_ms,
+          heap_free_before, heap_min_ever_peak, echo_ok (device) and
+          echo_intact_server (server log).
       concurrent: {min_heap_free_two_sessions} if two sessions were measured.
       host_load: {start, end, samples}, this host's 1-minute load average, sampled
           at the start, after every scenario and at the end.
@@ -141,8 +146,20 @@ def judge(measurements: dict) -> dict:
     if tls is not None:
         values["P1d"] = tls <= partition
 
+    every_run = runs
+    runs = [r for r in every_run if r.get("scenario_ok") is True]
+    used: dict[str, list[str]] = {key: [] for key in BANDS}
+
     def of(chain: str, key: str) -> list[float]:
         return [r[key] for r in runs if r.get("chain") == chain and r.get(key) is not None]
+
+    def names(selected: list[dict]) -> list[str]:
+        return [r.get("scenario") for r in selected]
+
+    used["P2a"] = names([r for r in runs if r.get("chain") == "ecdsa"
+                         and r.get("handshake_us") is not None])
+    used["P2b"] = used["P2a"] + names([r for r in runs if r.get("chain") == "rsa"
+                                       and r.get("handshake_us") is not None])
 
     ecdsa_us = of("ecdsa", "handshake_us")
     rsa_us = of("rsa", "handshake_us")
@@ -150,24 +167,29 @@ def judge(measurements: dict) -> dict:
         values["P2a"] = _median(ecdsa_us) / 1000
     if ecdsa_us and rsa_us:
         values["P2b"] = (_median(rsa_us) - _median(ecdsa_us)) / 1000
-    paired = [(r["handshake_ms"] - r["open_ms"], r["handshake_us"] / 1000) for r in runs
-              if r.get("chain") == "ecdsa" and r.get("handshake_ms") is not None
-              and r.get("open_ms") is not None and r.get("handshake_us")]
+    paired_runs = [r for r in runs
+                   if r.get("chain") == "ecdsa" and r.get("handshake_ms") is not None
+                   and r.get("open_ms") is not None and r.get("handshake_us")]
+    paired = [(r["handshake_ms"] - r["open_ms"], r["handshake_us"] / 1000) for r in paired_runs]
+    used["P2c"] = used["P4b"] = names(paired_runs)
     if paired:
         values["P2c"] = _median([wall - esp for wall, esp in paired])
         values["P4b"] = _median([wall / esp for wall, esp in paired])
 
-    costs = [(r["heap_free_before"] - r["heap_min_ever_peak"]) / KB for r in runs
-             if r.get("heap_free_before") is not None
-             and r.get("heap_min_ever_peak") is not None]
+    cost_runs = [r for r in runs if r.get("heap_free_before") is not None
+                 and r.get("heap_min_ever_peak") is not None]
+    costs = [(r["heap_free_before"] - r["heap_min_ever_peak"]) / KB for r in cost_runs]
+    used["P3a"] = names(cost_runs)
     if costs:
         values["P3a"] = max(costs)
     if concurrent.get("min_heap_free_two_sessions") is not None:
         values["P3b"] = concurrent["min_heap_free_two_sessions"] / KB
 
-    if runs:
-        intact = [r for r in runs if r.get("echo_ok") is True and r.get("echo_intact_server")]
-        values["P4a"] = 100.0 * len(intact) / len(runs)
+    if every_run:
+        intact = [r for r in every_run
+                  if r.get("echo_ok") is True and r.get("echo_intact_server")]
+        values["P4a"] = 100.0 * len(intact) / len(every_run)
+        used["P4a"] = names(every_run)
 
     load = measurements.get("host_load") or {}
     samples = load.get("samples") or []
@@ -179,7 +201,7 @@ def judge(measurements: dict) -> dict:
         if key in HOST_LOAD_KEYS and status != NOT_MEASURED and not quiet:
             status = INCONCLUSIVE_LOAD
         judgement[key] = {"statement": statement, "unit": unit, "band": [low, high],
-                          "value": values[key], "status": status}
+                          "value": values[key], "status": status, "runs_used": used[key]}
     judgement["_informational"] = {
         "host_load": {"start": load.get("start"), "end": load.get("end"),
                       "max": max(samples) if samples else None, "samples": len(samples),
@@ -192,6 +214,7 @@ def judge(measurements: dict) -> dict:
              / KB - 2 * max(costs)) if costs else None),
         "p3b_projection_note": "free before one session minus twice the worst session cost; "
                                "a projection, never judged",
+        "runs_failed_scenario": names([r for r in every_run if r.get("scenario_ok") is not True]),
     }
     return judgement
 
@@ -254,7 +277,8 @@ def integrity(registry: dict) -> list[str]:
     return problems
 
 
-def open_results(path: Path, host_load_start: float | None = None) -> dict:
+def open_results(path: Path, host_load_start: float | None = None,
+                 provenance: dict | None = None) -> dict:
     """Write the results file before the first device call: bands, code and hashes.
 
     The file is created, never overwritten (amendment 11 I): a rerun must not
@@ -263,6 +287,9 @@ def open_results(path: Path, host_load_start: float | None = None) -> dict:
     """
     registry = load_registry()
     results = {
+        # Amendment 12 F6: what feeds the judge is not covered by its hash, so
+        # the run records the commit and the hashes of the files that do.
+        "provenance": provenance or {},
         "host_load_start": host_load_start,
         "registry": registry,
         "judge_sha256_at_start": file_sha256(),
