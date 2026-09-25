@@ -109,7 +109,9 @@ int wifi_tls_close(uint8_t session, int *esp_err);
 int wifi_tls_stats(uint8_t session, wifi_tls_stats_t *stats, int *esp_err);
 
 // The checks the calls above apply to the module's answer to request
-// sequence, apart so that the host can test them. Each returns 0 for the
+// sequence, apart so that the host can test them. An answer must have exactly
+// the size the module sends: 12 bytes for OPEN, 8 for CLOSE, 60 for STATS, and
+// for STEP 16 plus the bytes it counts. Each returns 0 for the
 // answer, WIFI_TLS_FOREIGN for a reply to something else, and REFUSED or
 // INVALID otherwise (and AGAIN for a step), and writes its outputs as described above.
 int wifi_tls_take_open(const uint8_t *reply, int size, uint16_t sequence, uint8_t *session, int *esp_err,

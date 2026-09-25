@@ -552,7 +552,11 @@ int main(void)
     std::map<std::string, int> stages;
     int runs = 0, bad = 0;
     for (int at = 0; at < fallible + 40; at++) {
-        for (int v = 0; v < 6; v++) {
+        int most = 0;
+        for (int k = 0; k < K_COUNT; k++) {
+            most = (variants[k] > most) ? variants[k] : most;
+        }
+        for (int v = 0; v < most; v++) {
             reset_world(at, v);
             // Which kind the call at this index is decides how many variants it has;
             // that is only known once it has been reached.

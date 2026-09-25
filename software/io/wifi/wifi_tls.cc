@@ -114,17 +114,15 @@ int wifi_tls_take_open(const uint8_t *reply, int size, uint16_t sequence, uint8_
     if (!is_answer(reply, size, CMD_TLS_OPEN, sequence)) {
         return WIFI_TLS_FOREIGN;
     }
-    if (size < (int)sizeof(rpc_espcmd_resp)) {
+    if (size != (int)sizeof(rpc_tls_open_resp)) {
         return WIFI_TLS_INVALID;
     }
     if (result->esp_err != 0) {
         *esp_err = result->esp_err;
-        if (size >= (int)offsetof(rpc_tls_open_resp, reason) + 1) {
-            *reason = result->reason;
-        }
+        *reason = result->reason;
         return WIFI_TLS_REFUSED;
     }
-    if ((size < (int)offsetof(rpc_tls_open_resp, session) + 1) || (result->session == TLS_SESSION_GLOBAL)) {
+    if (result->session == TLS_SESSION_GLOBAL) {
         return WIFI_TLS_INVALID;
     }
     *session = result->session;
@@ -138,10 +136,11 @@ int wifi_tls_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_t
     if (!is_answer(reply, size, CMD_TLS_STEP, sequence)) {
         return WIFI_TLS_FOREIGN;
     }
-    if (size < (int)sizeof(rpc_espcmd_resp)) {
+    // Exactly the header and the bytes it counts, no more and no less.
+    if ((size < header) || (size != header + result->ct_out_len + result->pt_out_len)) {
         return WIFI_TLS_INVALID;
     }
-    bool has_state = (size >= header) && (result->state <= TLS_STATE_FAILED);
+    bool has_state = result->state <= TLS_STATE_FAILED;
     bool failed = has_state && (result->state == TLS_STATE_FAILED);
     // Input refused for want of room, output all the same, in a live session.
     bool again = has_state && (result->esp_err == ESP_ERR_NO_MEM_VALUE) &&
@@ -158,7 +157,7 @@ int wifi_tls_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_t
     }
     uint16_t ct = result->ct_out_len;
     uint16_t pt = result->pt_out_len;
-    if ((ct > step->ct_out_room) || (pt > step->pt_out_room) || (size < header + ct + pt)) {
+    if ((ct > step->ct_out_room) || (pt > step->pt_out_room)) {
         return WIFI_TLS_INVALID;
     }
     // Plaintext only from a session that has finished its handshake. Records
@@ -184,7 +183,7 @@ int wifi_tls_take_close(const uint8_t *reply, int size, uint16_t sequence, int *
     if (!is_answer(reply, size, CMD_TLS_CLOSE, sequence)) {
         return WIFI_TLS_FOREIGN;
     }
-    if (size < (int)sizeof(rpc_espcmd_resp)) {
+    if (size != (int)sizeof(rpc_espcmd_resp)) {
         return WIFI_TLS_INVALID;
     }
     if (result->esp_err != 0) {
@@ -200,15 +199,12 @@ int wifi_tls_take_stats(const uint8_t *reply, int size, uint16_t sequence, wifi_
     if (!is_answer(reply, size, CMD_TLS_STATS, sequence)) {
         return WIFI_TLS_FOREIGN;
     }
-    if (size < (int)sizeof(rpc_espcmd_resp)) {
+    if (size != (int)sizeof(rpc_tls_stats_resp)) {
         return WIFI_TLS_INVALID;
     }
     if (result->esp_err != 0) {
         *esp_err = result->esp_err;
         return WIFI_TLS_REFUSED;
-    }
-    if (size < (int)offsetof(rpc_tls_stats_resp, time_source) + 1) {
-        return WIFI_TLS_INVALID;
     }
     stats->heap_free = result->heap_free;
     stats->heap_min_ever = result->heap_min;
