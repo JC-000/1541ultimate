@@ -23,6 +23,10 @@
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/entropy.h"
 #include "mbedtls/x509_crt.h"
+#include "mbedtls/bignum.h"
+#include "mbedtls/asn1.h"
+#include "mbedtls/pem.h"
+#include "mbedtls/pk.h"
 #include "psa/crypto.h"
 #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
 #include "esp_crt_bundle.h"
@@ -50,6 +54,9 @@ extern const uint8_t tls_test_ca_pem_end[]   asm("_binary_tls_test_ca_pem_end");
 // Step room kept free of plaintext for an alert that a failing read writes: header 5 + tag 16 +
 // alert padded to at most 32 (CONFIG_MBEDTLS_SSL_CID_PADDING_GRANULARITY range 0..32) = 53
 #define TLS_ALERT_ROOM   64
+// A session that nothing has touched (STEP, STATS, OPEN) for this long is an orphan: the Ultimate
+// timed out on it and will never CLOSE it. The next OPEN reclaims it.
+#define TLS_IDLE_RECLAIM_US (60LL * 1000 * 1000)
 #define TLS_ID_GENERATIONS (TLS_SESSION_GLOBAL / TLS_MAX_SESSIONS)
 
 _Static_assert(TLS_ID_GENERATIONS * TLS_MAX_SESSIONS <= TLS_SESSION_GLOBAL, "session ids must not reach 0xFF");
@@ -63,6 +70,7 @@ typedef struct {
     mbedtls_x509_crt ca;
     uint8_t id;
     uint32_t last_used;
+    int64_t last_touch_us; // esp_timer_get_time() at the last OPEN, STEP or STATS
     tls_session_stats_t stats;
     int in_off;
     int in_len;
@@ -193,81 +201,28 @@ int tls_sessions_open(void)
     return n;
 }
 
-int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, uint8_t *session, uint8_t *reason)
+// Set-up failures that another session's memory could cure
+static int tls_out_of_memory(int ret)
 {
-    char hostname[TLS_SNI_MAX_LEN + 1];
-    int verify = flags & TLS_OPEN_VERIFY;
-    int cas = flags & (TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST);
+    if (ret == ESP_ERR_NO_MEM) {
+        return 1;
+    }
+    if (ret >= 0) {
+        return 0;
+    }
+    // mbedTLS may add a low-level code (ASN.1, bignum) to a high-level one (X.509, PK, SSL)
+    int high = -ret & 0xFF80;
+    int low = -ret & 0x007F;
+    return (high == -MBEDTLS_ERR_SSL_ALLOC_FAILED) || (high == -MBEDTLS_ERR_X509_ALLOC_FAILED) ||
+           (high == -MBEDTLS_ERR_PK_ALLOC_FAILED) || (high == -MBEDTLS_ERR_PEM_ALLOC_FAILED) ||
+           (low == -MBEDTLS_ERR_MPI_ALLOC_FAILED) || (low == -MBEDTLS_ERR_ASN1_ALLOC_FAILED);
+}
 
-    *session = TLS_SESSION_GLOBAL;
-    *reason = TLS_OPEN_REASON_NONE;
-    // Verifying without a host name would skip the name check, so it is refused
-    if ((flags & ~(TLS_OPEN_VERIFY | TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST)) ||
-        (verify && ((cas != TLS_OPEN_CA_BUNDLE) && (cas != TLS_OPEN_CA_TEST))) ||
-        (verify && (sni_len == 0)) || (sni_len < 0) || (sni_len > TLS_SNI_MAX_LEN) ||
-        (memchr(sni, 0, sni_len) != NULL)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-#if !CONFIG_TLS_SPIKE
-    if (!verify) {
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-#endif
-    if (entropy_source() == ENTROPY_NONE) {
-        *reason = TLS_OPEN_REASON_NO_ENTROPY;
-        return ESP_ERR_INVALID_STATE;
-    }
-    uint8_t time_source = tls_set_clock(unix_time);
-    if (verify && (time_source == TLS_TIME_NONE)) {
-        // Never verify against a 1970 clock: every validity check would be meaningless
-        ESP_LOGW(TAG, "Open refused: verify needs a clock, and neither unix_time nor SNTP gave one");
-        *reason = TLS_OPEN_REASON_NO_TIME;
-        return ESP_ERR_INVALID_STATE;
-    }
-#if !CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
-    if (verify && (cas == TLS_OPEN_CA_BUNDLE)) {
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-#endif
-    // TLS 1.3 key shares come from PSA's global RNG, not from the session DRBG, and PSA seeds it
-    // from the hardware RNG inside psa_crypto_init(). So the first init happens here, behind the
-    // entropy gate, and nowhere else (M2-SPEC section 8). mbedTLS needs it before any TLS 1.3 handshake.
-    if (!psa_ready) {
-        psa_status_t status = psa_crypto_init();
-        if (status != PSA_SUCCESS) {
-            ESP_LOGE(TAG, "psa_crypto_init: %d", (int)status);
-            return ESP_FAIL;
-        }
-        psa_ready = 1;
-    }
-    memcpy(hostname, sni, sni_len);
-    hostname[sni_len] = 0;
-
-    // A full table evicts the least recently used session, so orphans cannot lock TLS out.
-    // The victim goes only once the new session is fully set up: a failed OPEN kills nothing.
-    int slot = -1;
-    for (int i = 0; i < TLS_MAX_SESSIONS; i++) {
-        if (!sessions[i]) {
-            slot = i;
-            break;
-        }
-    }
-    tls_session_t *victim = NULL;
-    if (slot < 0) {
-        slot = 0;
-        for (int i = 1; i < TLS_MAX_SESSIONS; i++) {
-            if (sessions[i]->last_used < sessions[slot]->last_used) {
-                slot = i;
-            }
-        }
-        victim = sessions[slot];
-    }
-    if (tls_sessions_open() == 0) {
-        // heap_min then reports the peak of this burst of sessions, not of the Wi-Fi start
-        heap_caps_monitor_local_minimum_free_size_stop();
-        heap_caps_monitor_local_minimum_free_size_start();
-    }
-
+// Builds a complete session for slot without putting it in the table; frees it on failure
+static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const char *hostname, int sni_len,
+                     uint8_t time_source)
+{
+    *out = NULL;
     tls_session_t *s = calloc(1, sizeof(tls_session_t));
     if (!s) {
         return ESP_ERR_NO_MEM;
@@ -278,6 +233,7 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
     s->stats.time_source = time_source;
     s->stats.esp_time = (time_source == TLS_TIME_NONE) ? 0 : (uint32_t)time(NULL);
     s->last_used = ++use_count;
+    s->last_touch_us = esp_timer_get_time();
     mbedtls_ssl_init(&s->ssl);
     mbedtls_ssl_config_init(&s->conf);
     mbedtls_x509_crt_init(&s->ca);
@@ -328,12 +284,113 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
         tls_free(s);
         return ret;
     }
+    mbedtls_ssl_set_bio(&s->ssl, s, tls_bio_send, tls_bio_recv, NULL);
+    *out = s;
+    return 0;
+}
+
+int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, uint8_t *session, uint8_t *reason)
+{
+    char hostname[TLS_SNI_MAX_LEN + 1];
+    int verify = flags & TLS_OPEN_VERIFY;
+    int cas = flags & (TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST);
+
+    *session = TLS_SESSION_GLOBAL;
+    *reason = TLS_OPEN_REASON_NONE;
+    // Verifying without a host name would skip the name check, so it is refused
+    if ((flags & ~(TLS_OPEN_VERIFY | TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST)) ||
+        (verify && ((cas != TLS_OPEN_CA_BUNDLE) && (cas != TLS_OPEN_CA_TEST))) ||
+        (verify && (sni_len == 0)) || (sni_len < 0) || (sni_len > TLS_SNI_MAX_LEN) ||
+        (memchr(sni, 0, sni_len) != NULL)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+#if !CONFIG_TLS_SPIKE
+    if (!verify) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+#endif
+    if (entropy_source() == ENTROPY_NONE) {
+        *reason = TLS_OPEN_REASON_NO_ENTROPY;
+        return ESP_ERR_INVALID_STATE;
+    }
+    uint8_t time_source = tls_set_clock(unix_time);
+    if (verify && (time_source == TLS_TIME_NONE)) {
+        // Never verify against a 1970 clock: every validity check would be meaningless
+        ESP_LOGW(TAG, "Open refused: verify needs a clock, and neither unix_time nor SNTP gave one");
+        *reason = TLS_OPEN_REASON_NO_TIME;
+        return ESP_ERR_INVALID_STATE;
+    }
+#if !CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+    if (verify && (cas == TLS_OPEN_CA_BUNDLE)) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+#endif
+    // TLS 1.3 key shares come from PSA's global RNG, not from the session DRBG, and PSA seeds it
+    // from the hardware RNG inside psa_crypto_init(). So the first init happens here, behind the
+    // entropy gate, and nowhere else (M2-SPEC section 8). mbedTLS needs it before any TLS 1.3 handshake.
+    if (!psa_ready) {
+        psa_status_t status = psa_crypto_init();
+        if (status != PSA_SUCCESS) {
+            ESP_LOGE(TAG, "psa_crypto_init: %d", (int)status);
+            return ESP_FAIL;
+        }
+        psa_ready = 1;
+    }
+    memcpy(hostname, sni, sni_len);
+    hostname[sni_len] = 0;
+
+    // Orphans (the Ultimate timed out on an OPEN or CLOSE) would otherwise live until a full table
+    int64_t now_us = esp_timer_get_time();
+    for (int i = 0; i < TLS_MAX_SESSIONS; i++) {
+        if (sessions[i] && (now_us - sessions[i]->last_touch_us > TLS_IDLE_RECLAIM_US)) {
+            ESP_LOGW(TAG, "Reclaiming session %d, idle for %lld s", sessions[i]->id,
+                     (long long)((now_us - sessions[i]->last_touch_us) / 1000000));
+            tls_free(sessions[i]);
+        }
+    }
+
+    // A full table evicts the least recently used session, so orphans cannot lock TLS out.
+    // The victim goes only once the new session is fully set up, so a failed OPEN kills nothing,
+    // except when the set-up ran out of memory: then the victim goes and the set-up runs once more.
+    int slot = -1;
+    for (int i = 0; i < TLS_MAX_SESSIONS; i++) {
+        if (!sessions[i]) {
+            slot = i;
+            break;
+        }
+    }
+    tls_session_t *victim = NULL;
+    if (slot < 0) {
+        slot = 0;
+        for (int i = 1; i < TLS_MAX_SESSIONS; i++) {
+            if (sessions[i]->last_used < sessions[slot]->last_used) {
+                slot = i;
+            }
+        }
+        victim = sessions[slot];
+    }
+    if (tls_sessions_open() == 0) {
+        // heap_min then reports the peak of this burst of sessions, not of the Wi-Fi start
+        heap_caps_monitor_local_minimum_free_size_stop();
+        heap_caps_monitor_local_minimum_free_size_start();
+    }
+
+    tls_session_t *s = NULL;
+    int ret = tls_setup(&s, slot, verify, cas, hostname, sni_len, time_source);
+    if ((ret != 0) && victim && tls_out_of_memory(ret)) {
+        ESP_LOGW(TAG, "No memory for a new session: evicting session %d and trying again", victim->id);
+        tls_free(victim);
+        victim = NULL;
+        ret = tls_setup(&s, slot, verify, cas, hostname, sni_len, time_source);
+    }
+    if (ret != 0) {
+        return ret;
+    }
     if (victim) {
         ESP_LOGW(TAG, "Table full, evicting session %d", victim->id);
         tls_free(victim);
     }
     sessions[slot] = s;
-    mbedtls_ssl_set_bio(&s->ssl, s, tls_bio_send, tls_bio_recv, NULL);
     *session = s->id;
     return ESP_OK;
 }
@@ -381,6 +438,7 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
         }
     }
     s->last_used = ++use_count;
+    s->last_touch_us = esp_timer_get_time();
 
     if (!refused && (ret == 0)) {
         if (s->in_off) {
@@ -499,6 +557,7 @@ int tls_get_stats(uint8_t session, tls_session_stats_t *stats)
     if (!s) {
         return ESP_ERR_NOT_FOUND;
     }
+    s->last_touch_us = esp_timer_get_time();
     *stats = s->stats;
     return ESP_OK;
 }
