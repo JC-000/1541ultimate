@@ -16,7 +16,8 @@
 #                             another mbedTLS: build_mbedtls.sh's overrides, passed on
 #
 # Needs: cc, python3, git, cmake, openssl (OPENSSL=, default brew's openssl@3),
-# and GnuTLS with pkg-config. mbedTLS is built by tests/crypto/build_mbedtls.sh
+# GnuTLS with pkg-config, and pip access for tlslite-ng (pinned by hash in
+# software/test/tls_interop/requirements-tlslite.txt, installed in output/venv). mbedTLS is built by tests/crypto/build_mbedtls.sh
 # (cached, so it runs every time) into a directory named after the hash of its
 # effective inputs; the engine, the pump and the run are named after it too.
 #
@@ -71,11 +72,17 @@ UNRESOLVED = -Wl,--unresolved-symbols=ignore-all
 CONST_SECTION = .rodata
 endif
 
-PKI = $(OUTPUT)/pki
+PKI  = $(OUTPUT)/pki
+VENV = $(OUTPUT)/venv
 
 .PHONY: all interop clean FORCE
 
-all: $(PUMP) $(RESULT)/gnutls_echo
+all: $(PUMP) $(RESULT)/gnutls_echo $(VENV)/installed
+
+$(VENV)/installed: $(PEERS)/requirements-tlslite.txt
+	$(PYTHON) -m venv $(VENV)
+	$(VENV)/bin/pip install -q --require-hashes -r $<
+	@touch $@
 
 # Always run: build_mbedtls.sh checks its inputs and is cached. The stamp only changes with the build.
 $(MBEDTLS)/stamp: FORCE
@@ -89,16 +96,19 @@ $(OUTPUT)/$(ENGINE_TAG)/tls_engine.c:
 	@mkdir -p $(dir $@)
 	git -C $(PATH_SW) show $(ENGINE_REV):software/wifi/raw_u64/main/tls_engine.c > $@
 
-# The throwaway PKI; the engine's compiled-in test CA is its two roots
-$(PKI)/trust.pem:
-	$(PYTHON) $(PEERS)/interop.py pki --openssl $(OPENSSL) --pki $(PKI)
+# The engine's compiled-in test CA is the PKI's two roots
+# The throwaway PKI: made once, and only extended (interop.py pki keeps what exists)
+$(PKI)/trust.pem: FORCE
+	@$(PYTHON) $(PEERS)/interop.py pki --openssl $(OPENSSL) --pki $(PKI) > /dev/null
 
 $(OUTPUT)/test_ca.S: $(PKI)/trust.pem
+	@mkdir -p $(OUTPUT)
 	printf '    .section $(CONST_SECTION)\n    .globl _binary_tls_test_ca_pem_start\n    .globl _binary_tls_test_ca_pem_end\n_binary_tls_test_ca_pem_start:\n    .incbin "$(abspath $<)"\n    .byte 0\n_binary_tls_test_ca_pem_end:\n' > $@
 
-$(OBJ)/$(ENGINE_TAG)/tls_engine.o: $(ENGINE_SRC) $(MAIN)/tls_engine.h $(MAIN)/rpc_calls.h $(MBEDTLS)/stamp
+$(OBJ)/$(ENGINE_TAG)/tls_engine.o: $(ENGINE_SRC) $(MAIN)/tls_engine.h $(MAIN)/rpc_calls.h $(MBEDTLS)/stamp Makefile
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -Dsettimeofday=harness_settimeofday -c -o $@ $<
+	$(CC) $(CFLAGS) -Dsettimeofday=harness_settimeofday -Dmbedtls_ssl_read=harness_ssl_read \
+	    -Dmbedtls_ssl_write=harness_ssl_write -c -o $@ $<
 
 $(OBJ)/rpc_dispatch.o: $(MAIN)/rpc_dispatch.c $(MAIN)/rpc_calls.h $(MBEDTLS)/stamp
 	@mkdir -p $(OBJ)
@@ -118,6 +128,7 @@ $(RESULT)/gnutls_echo: $(PEERS)/gnutls_echo.c
 
 interop: all
 	$(PYTHON) $(PEERS)/interop.py run --client $(PUMP) --gnutls $(RESULT)/gnutls_echo --openssl $(OPENSSL) \
+	    --tlslite-python $(VENV)/bin/python \
 	    --pki $(PKI) --out $(OUTPUT)/run_$(ENGINE_TAG)_$(MBEDTLS_KEY)$(if $(BAUD),_baud$(BAUD)) \
 	    --label "engine $(ENGINE_TAG), mbedTLS $$(tail -1 $(MBEDTLS)/stamp | cut -d' ' -f3), sdkconfig sha256 $(SDKCONFIG_SHA)" \
 	    $(if $(ONLY),--only '$(ONLY)') $(if $(BAUD),--client-arg=--baud --client-arg=$(BAUD))

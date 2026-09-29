@@ -86,6 +86,49 @@ esp_netif_t *my_sta_netif;
 // tls_engine.c is built with -Dsettimeofday=harness_settimeofday: the host clock is already right
 int harness_settimeofday(const struct timeval *tv, const void *tz) { return 0; }
 
+/* ---- tickets the engine's TLS layer stored ----
+ * tls_engine.c is built with -Dmbedtls_ssl_read=harness_ssl_read (and write): after each call the
+ * session's ticket is compared with the last one seen, so a ticket counts once it has been parsed
+ * and stored. mbedTLS 3.6.1 and later ignore tickets unless signalling is enabled, and store none. */
+static int tickets_taken;
+static unsigned char last_ticket[1024];
+static size_t last_ticket_len;
+
+static void note_ticket(const mbedtls_ssl_context *ssl)
+{
+#if defined(MBEDTLS_SSL_SESSION_TICKETS) && defined(MBEDTLS_SSL_CLI_C)
+    const mbedtls_ssl_session *s = ssl->MBEDTLS_PRIVATE(session);
+    if (!s || !s->MBEDTLS_PRIVATE(ticket) || !s->MBEDTLS_PRIVATE(ticket_len)) {
+        return;
+    }
+    size_t n = s->MBEDTLS_PRIVATE(ticket_len);
+    if (n > sizeof(last_ticket)) {
+        n = sizeof(last_ticket);
+    }
+    if ((n != last_ticket_len) || memcmp(last_ticket, s->MBEDTLS_PRIVATE(ticket), n)) {
+        memcpy(last_ticket, s->MBEDTLS_PRIVATE(ticket), n);
+        last_ticket_len = n;
+        tickets_taken++;
+    }
+#else
+    (void)ssl;
+#endif
+}
+
+int harness_ssl_read(mbedtls_ssl_context *ssl, unsigned char *buf, size_t len)
+{
+    int ret = mbedtls_ssl_read(ssl, buf, len);
+    note_ticket(ssl);
+    return ret;
+}
+
+int harness_ssl_write(mbedtls_ssl_context *ssl, const unsigned char *buf, size_t len)
+{
+    int ret = mbedtls_ssl_write(ssl, buf, len);
+    note_ticket(ssl);
+    return ret;
+}
+
 /* ---- the RPCs, as the Ultimate sends them ---- */
 static command_buf_t B;
 static uint16_t seq;
@@ -188,10 +231,11 @@ static void finish(const char *outcome, const char *detail)
 {
     R.echo_ok = expect && (R.echo_received == expect); // every byte was compared as it came
     printf("RESULT outcome=%s stage=%s detail=%s esp_err=%s0x%04x state=%d steps=%d resends=%d pt_delivered=%ld "
-           "echo_sent=%ld echo_received=%ld echo_ok=%d tcp_in=%ld tcp_out=%ld tcp_eof=%d sessions_open=%d\n",
+           "echo_sent=%ld echo_received=%ld echo_ok=%d tcp_in=%ld tcp_out=%ld tcp_eof=%d sessions_open=%d "
+           "tickets_taken=%d\n",
            outcome, R.stage, detail, (R.esp_err < 0) ? "-" : "", (unsigned)abs(R.esp_err), R.state, R.steps,
            R.resends, R.pt_delivered, R.echo_sent, R.echo_received, R.echo_ok, R.tcp_in, R.tcp_out, R.tcp_eof,
-           tls_sessions_open());
+           tls_sessions_open(), tickets_taken);
     fflush(stdout);
     exit(0);
 }

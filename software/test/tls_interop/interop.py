@@ -31,10 +31,12 @@ the main CPU over sockets, say) plugs in the same way:
       come; then with --after close waits for the server's close_notify, with
       --after eof for a TCP close without one. The last stdout line is
       "RESULT outcome=O pt_delivered=N echo_sent=N echo_received=N echo_ok=0|1
-      [esp_err=E] ...", O one of ECHO_OK, CLOSED (close_notify), PEER_CLOSED
+      [esp_err=E] [tickets_taken=T] ...", O one of ECHO_OK, CLOSED (close_notify), PEER_CLOSED
       (TCP closed first), FAILED (the TLS layer failed), TIMEOUT, ECHO_MISMATCH,
       CONNECT_FAILED, OPEN_FAILED. pt_delivered counts every plaintext byte the
-      TLS layer handed out, in any stage; E is the TLS library's error code.
+      TLS layer handed out, in any stage; E is the TLS library's error code; T,
+      if given, counts the NewSessionTickets the TLS layer parsed and kept, and
+      must equal what the server sent.
       Exit status 0; anything on stderr containing "Sanitizer" or "runtime
       error" fails the case.
   The chunking options describe the traffic shape (plaintext per write,
@@ -70,26 +72,38 @@ subjectKeyIdentifier = hash
 
 
 def make_pki(openssl, d):
-    """A throwaway PKI: an ECDSA P-256 and an RSA-2048 chain (root, intermediate, leaf), and the bad ones."""
+    """A throwaway PKI: an ECDSA P-256 and an RSA-2048 chain (root, intermediate, leaf), and the bad ones.
+    What exists is kept, so a PKI made by an older interop.py only gains the certificates it lacks."""
     os.makedirs(d, exist_ok=True)
+
+    def have(name):
+        return os.path.exists(os.path.join(d, name))
 
     def run(*a):
         subprocess.run([openssl] + list(a), cwd=d, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     def key(name, kind):
+        if have(name + ".key"):
+            return
         if kind == "ec":
             run("genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", name + ".key")
         else:
             run("genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", name + ".key")
 
     def write(name, text):
-        with open(os.path.join(d, name), "w") as f:
-            f.write(text)
+        p = os.path.join(d, name)
+        if not (os.path.exists(p) and open(p).read() == text):  # trust.pem is linked into the client
+            with open(p, "w") as f:
+                f.write(text)
 
     write("leaf.ext", LEAF_EXT)
     write("ca.ext", CA_EXT)
+    write("eku_client.ext", LEAF_EXT.replace("extendedKeyUsage = serverAuth", "extendedKeyUsage = clientAuth"))
+    write("ku_no_ds.ext", LEAF_EXT.replace("keyUsage = critical, digitalSignature", "keyUsage = critical, keyAgreement"))
 
     def root(name, kind, cn):
+        if have(name + ".pem"):
+            return
         key(name, kind)
         run("req", "-x509", "-new", "-key", name + ".key", "-subj", "/CN=" + cn, "-days", "3650",
             "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
@@ -97,6 +111,8 @@ def make_pki(openssl, d):
 
     def signed(name, issuer, ext, subj, keyname=None, dates=None, issuer_key=None):
         keyname = keyname or name
+        if have(name + ".pem"):
+            return
         run("req", "-new", "-key", keyname + ".key", "-subj", subj, "-out", name + ".csr")
         a = ["x509", "-req", "-in", name + ".csr", "-CA", issuer + ".pem", "-CAkey", (issuer_key or issuer) + ".key",
              "-set_serial", str(int.from_bytes(os.urandom(8), "big")), "-extfile", ext, "-out", name + ".pem"]
@@ -121,12 +137,16 @@ def make_pki(openssl, d):
     # Names the real intermediate as its issuer, signed by the rogue one: sent with the REAL intermediate
     signed("forged", "rogue_int", "leaf.ext", "/CN=localhost", keyname="leaf_ec")
     key("other", "ec")  # a key that matches no certificate
+    # A server certificate that is not one: for client authentication only, or not for signatures
+    signed("eku_client", "int_ec", "eku_client.ext", "/CN=localhost", keyname="leaf_ec")
+    signed("ku_no_ds", "int_ec", "ku_no_ds.ext", "/CN=localhost", keyname="leaf_ec")
 
     for kind in ("ec", "rsa"):
         write("chain_%s.pem" % kind, open(os.path.join(d, "int_%s.pem" % kind)).read())
     write("chain_rogue.pem", open(os.path.join(d, "rogue_int.pem")).read())
     for leaf, chain in (("leaf_ec", "int_ec"), ("leaf_rsa", "int_rsa"), ("expired", "int_ec"),
-                        ("notyet", "int_ec"), ("untrusted", "rogue_int"), ("forged", "int_ec")):
+                        ("notyet", "int_ec"), ("untrusted", "rogue_int"), ("forged", "int_ec"),
+                        ("eku_client", "int_ec"), ("ku_no_ds", "int_ec")):
         write("full_%s.pem" % leaf, open(os.path.join(d, leaf + ".pem")).read() +
               open(os.path.join(d, chain + ".pem")).read())
     write("trust.pem", open(os.path.join(d, "root_ec.pem")).read() + open(os.path.join(d, "root_rsa.pem")).read())
@@ -202,7 +222,7 @@ class OpenSSLServer:
         self.port = free_port()
         self.trace = os.path.join(out, name + ".server.trace")
         chain = {"leaf_ec": "int_ec", "leaf_rsa": "int_rsa", "expired": "int_ec", "notyet": "int_ec",
-                 "untrusted": "rogue_int", "forged": "int_ec"}[cert]
+                 "untrusted": "rogue_int", "forged": "int_ec", "eku_client": "int_ec", "ku_no_ds": "int_ec"}[cert]
         key = {"leaf_rsa": "leaf_rsa"}.get(cert, "leaf_ec")
         cmd = [openssl, "s_server", "-accept", "127.0.0.1:%d" % self.port, "-cert", os.path.join(pki, cert + ".pem"),
                "-cert_chain", os.path.join(pki, chain + ".pem"), "-key", os.path.join(pki, key + ".key"),
@@ -372,6 +392,26 @@ class GnuTLSServer:
             if ln.startswith("SERVER_HANDSHAKE_FAILED"):
                 f["handshake_error"] = ln.split(" ", 1)[1]
         return f
+
+
+class TLSLiteServer(GnuTLSServer):
+    """tlslite_echo.py: tlslite-ng, pure Python; it can break the protocol in one chosen place."""
+
+    def __init__(self, python, pki, out, name, cert="leaf_ec", tickets=0, brk=None):
+        self.port = free_port()
+        self.log = os.path.join(out, name + ".server.log")
+        key = {"leaf_rsa": "leaf_rsa"}.get(cert, "leaf_ec")
+        cmd = [python, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tlslite_echo.py"),
+               "--port", str(self.port), "--cert", os.path.join(pki, "full_%s.pem" % cert),
+               "--key", os.path.join(pki, key + ".key"), "--tickets", str(tickets)]
+        if brk:
+            cmd += ["--break=" + brk]
+        self.cmd = cmd
+        self.logf = open(self.log, "w")
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        first = self.proc.stdout.readline()
+        self.logf.write(first)
+        self.ready = first.startswith("SERVER_LISTENING")
 
 
 class TamperProxy:
@@ -561,6 +601,40 @@ class HRRPeer:
 
 # ---------------------------------------------------------------- cases
 
+# Known failures of the client's TLS library, recorded rather than hidden. Each applies to the named
+# library below the version given (None: every version so far). The case then passes as
+# DEVIATION or KNOWN-VULNERABLE, on its own summary line, only while the library still behaves so;
+# once a library in range gets it right the run FAILS with "remove this entry", so none outlives its cause.
+KNOWN = {
+    "tlslite/mustfail/certverify_rsa_pkcs1_sha256": (
+        "Mbed TLS", None, "DEVIATION",
+        "RFC 8446 section 4.4.3: \"RSA signatures MUST use an RSASSA-PSS algorithm, regardless of whether "
+        "RSASSA-PKCS1-v1_5 algorithms appear in signature_algorithms\". mbedTLS accepts an rsa_pkcs1_sha256 "
+        "CertificateVerify: library/ssl_tls13_generic.c checks only mbedtls_ssl_sig_alg_is_offered() "
+        "(line 260 at 72aa6873, 309 at 2b96dd8e); mbedtls_ssl_tls13_sig_alg_for_cert_verify_is_supported() "
+        "is called on the signing side only (1063 / 1001). OpenSSL 3.6.2 s_client rejects the same server "
+        "(tls12_check_peer_sigalg: wrong signature type). Low severity: the server must hold the key."),
+    "raw/hrr/unoffered_group": (
+        "Mbed TLS", (3, 6, 7), "KNOWN-VULNERABLE",
+        "CVE-2026-25832, fixed in mbedTLS 3.6.7: a TLS 1.3 client accepts a HelloRetryRequest for a group "
+        "it did not advertise. Here it then fails on its own (no key share for the group) without the "
+        "illegal_parameter alert RFC 8446 section 4.1.4 requires."),
+}
+
+
+def known_entry(name, info):
+    k = KNOWN.get(name)
+    if not k:
+        return None
+    lib, below, kind, text = k
+    m = re.search(re.escape(lib) + r" (\d+)\.(\d+)\.(\d+)", info)
+    if not m:
+        return None
+    if below and tuple(int(x) for x in m.groups()) >= below:
+        return None
+    return kind, text
+
+
 class Case:
     def __init__(self, name, server, sargs, client, expect, proxy=None):
         self.name, self.server, self.sargs, self.client, self.expect, self.proxy = \
@@ -573,7 +647,7 @@ CHUNKINGS = [("pt512", 512, 0), ("pt1024", 1024, 0), ("pt512-ct1", 512, 1), ("pt
 TICKETS = [0, 1, 2, 8]
 
 
-def matrix(suites, groups):
+def matrix(suites, groups, tlslite=True):
     cases = []
     first, second = GROUPS[groups[0]], "secp256r1"
     grouplist = [(first, 0), (second, 0 if first == second else 1)]
@@ -627,6 +701,8 @@ def matrix(suites, groups):
                ("not_yet_valid", dict(cert="notyet"), {}),
                ("tls12_only", dict(tls12=True), {}),
                ("forged_signature", dict(cert="forged"), {})]
+        bad += [("eku_client_only", dict(cert="eku_client"), {}),
+                ("ku_no_digital_signature", dict(cert="ku_no_ds"), {})]
         if srv == "gnutls":
             bad.append(("key_mismatch", dict(key="other"), {}))
         for label, sa, ca in bad:
@@ -651,15 +727,34 @@ def matrix(suites, groups):
                           dict(ok=False, after_hrr="alert:illegal_parameter")))
     cases.append(Case("raw/hrr/advertised_group", "hrr", dict(select="offered"), dict(echo=100),
                       dict(hrr_accept=True)))
+    if not tlslite:
+        return cases
+    # tlslite-ng: a third implementation, first as it is, then broken in one place each
+    for cert in ("leaf_ec", "leaf_rsa"):
+        for t, n, pt, ct in ((2, 3000, 512, 0), (2, 16500, 512, 0), (0, 1, 512, 1), (1, 1024, 1024, 0)):
+            cases.append(Case("tlslite/echo/%s/tickets%d/%dB/pt%d-ct%d" % (cert[5:], t, n, pt, ct), "tlslite",
+                              dict(cert=cert, tickets=t), dict(echo=n, pt=pt, ct=ct), dict(ok=True)))
+    # The server's Finished MAC is wrong; its CertificateVerify is signed over the client's context string,
+    # or with a scheme the client did not offer; or with RSASSA-PKCS1-v1_5, which the client offers for
+    # certificates only (RFC 8446 section 4.4.3: "RSA signatures MUST use an RSASSA-PSS algorithm")
+    for label, cert, brk in (("finished_wrong", "leaf_ec", "finished"),
+                             ("certverify_client_context", "leaf_ec", "cv-context"),
+                             ("certverify_not_offered_ecdsa_sha1", "leaf_ec", "cv-scheme:ecdsa_sha1"),
+                             ("certverify_not_offered_rsa_pkcs1_sha1", "leaf_rsa", "cv-scheme:rsa_pkcs1_sha1"),
+                             ("certverify_rsa_pkcs1_sha256", "leaf_rsa", "cv-scheme:rsa_pkcs1_sha256")):
+        cases.append(Case("tlslite/mustfail/%s" % label, "tlslite", dict(cert=cert, brk=brk), dict(echo=100),
+                          dict(ok=False)))
     return cases
 
 
-def run_case(c, a, out):
+def run_case(c, a, out, info=""):
     base = re.sub(r"[^\w.-]", "_", c.name)
     if c.server == "openssl":
         srv = OpenSSLServer(a.openssl, a.pki, out, base, **c.sargs)
     elif c.server == "gnutls":
         srv = GnuTLSServer(a.gnutls, a.pki, out, base, **c.sargs)
+    elif c.server == "tlslite":
+        srv = TLSLiteServer(a.tlslite_python, a.pki, out, base, **c.sargs)
     else:
         srv = HRRPeer(out, base, **c.sargs)
     if not srv.ready:
@@ -688,7 +783,13 @@ def run_case(c, a, out):
     for ln in out_.splitlines():
         if ln.startswith("RESULT "):
             res = dict(re.findall(r"(\w+)=(\S*)", ln))
-    return judge(c, res, facts, err, rc, proxy, seed)
+    verdict, detail = judge(c, res, facts, err, rc, proxy, seed)
+    known = known_entry(c.name, info)
+    if known and verdict == "FAIL" and "sanitizer" not in detail:
+        return known[0], detail + " || " + known[1]
+    if known and verdict != "FAIL":
+        return "FAIL", detail + " || the library now gets this right: remove this %s entry from KNOWN" % known[0]
+    return verdict, detail
 
 
 def judge(c, res, facts, err, rc, proxy, seed):
@@ -702,8 +803,9 @@ def judge(c, res, facts, err, rc, proxy, seed):
         return "FAIL", "; ".join(why)
     outcome = res.get("outcome")
     echo = c.client.get("echo", 0)
-    detail = "outcome=%s esp_err=%s pt_delivered=%s echo_received=%s steps=%s" % (
-        outcome, res.get("esp_err"), res.get("pt_delivered"), res.get("echo_received"), res.get("steps"))
+    detail = "outcome=%s esp_err=%s pt_delivered=%s echo_received=%s steps=%s tickets_taken=%s" % (
+        outcome, res.get("esp_err"), res.get("pt_delivered"), res.get("echo_received"), res.get("steps"),
+        res.get("tickets_taken", "-"))
     if c.server == "hrr":
         detail += " server: advertised %s, HRR selected %s, then %s" % (
             [hex(g) for g in facts.get("advertised", [])], hex(facts.get("selected", 0)), facts.get("after_hrr"))
@@ -748,7 +850,7 @@ def judge(c, res, facts, err, rc, proxy, seed):
                 why.append("server chose suite %s" % facts.get("suite"))
             if "group" in e and facts.get("group") != OPENSSL_TRACE_GROUP[e["group"]]:
                 why.append("server chose group %s" % facts.get("group"))
-        elif c.server == "gnutls":
+        elif c.server in ("gnutls", "tlslite"):
             if facts.get("version") != "TLS1.3":
                 why.append("server version %s" % facts.get("version"))
             if "suite" in e and not (facts.get("suite") or "").endswith(SUITES[e["suite"]][4:]):
@@ -759,6 +861,11 @@ def judge(c, res, facts, err, rc, proxy, seed):
             why.append("server HRR %s, want %s" % (facts.get("hrr"), e["hrr"]))
         if "tickets" in e and not killed and facts.get("tickets") != e["tickets"]:
             why.append("server sent %s tickets, want %s" % (facts.get("tickets"), e["tickets"]))
+        # The client's own count, where it reports one: every ticket the server sent was taken and kept,
+        # not dropped (mbedTLS 3.6.1+ drops them unless signalling is on), so the ticket paths ran
+        if "tickets_taken" in res and not killed and not xfail and isinstance(facts.get("tickets"), int) and \
+                res["tickets_taken"] != str(facts["tickets"]):
+            why.append("client took %s of the %s tickets the server sent" % (res["tickets_taken"], facts["tickets"]))
     else:
         if outcome not in ("FAILED", "PEER_CLOSED"):
             why.append("outcome %s, want FAILED" % outcome)
@@ -787,6 +894,7 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--only")
     ap.add_argument("--client-arg", action="append", help="passed to the client as it is (repeatable)")
+    ap.add_argument("--tlslite-python", help="a python with tlslite-ng, for the tlslite/ cases")
     ap.add_argument("--label", default="", help="what was built: printed with the summary line")
     a = ap.parse_args()
     if a.what == "pki":
@@ -796,22 +904,31 @@ def main():
     suites, groups, info = client_offer(a.client)
     ver_o = subprocess.run([a.openssl, "version"], capture_output=True, text=True).stdout.strip()
     ver_g = subprocess.run(["pkg-config", "--modversion", "gnutls"], capture_output=True, text=True).stdout.strip()
-    print("PEERS openssl: %s | gnutls: %s | raw HRR peer: interop.py" % (ver_o, ver_g))
+    ver_t = "not run (no --tlslite-python)"
+    if a.tlslite_python:
+        ver_t = subprocess.run([a.tlslite_python, "-c", "import tlslite, ecdsa; print('tlslite-ng', tlslite.__version__, "
+                                "'ecdsa', ecdsa.__version__)"], capture_output=True, text=True).stdout.strip()
+    print("PEERS openssl: %s | gnutls: %s | %s | raw HRR peer: interop.py" % (ver_o, ver_g, ver_t))
     print("CLIENT %s %s: %s" % (a.client, " ".join(a.client_arg or []), info))
     print("CLIENT offers suites %s; groups %s" % (
         ", ".join(SUITES.get(x, hex(x)) for x in suites), ", ".join(GROUPS.get(g, hex(g)) for g in groups)))
-    cases = matrix(suites, groups)
+    cases = matrix(suites, groups, tlslite=bool(a.tlslite_python))
     if a.only:
         cases = [c for c in cases if re.search(a.only, c.name)]
-    counts = {"PASS": 0, "XFAIL": 0, "FAIL": 0}
+    counts = {"PASS": 0, "XFAIL": 0, "DEVIATION": 0, "KNOWN-VULNERABLE": 0, "FAIL": 0}
+    recorded = []
     t0 = time.time()
     for c in cases:
-        verdict, detail = run_case(c, a, a.out)
+        verdict, detail = run_case(c, a, a.out, info)
         counts[verdict] += 1
+        if verdict in ("DEVIATION", "KNOWN-VULNERABLE"):
+            recorded.append("%s %s" % (verdict, c.name))
         print("%s %s %s" % (verdict, c.name, detail), flush=True)
-    good = counts["PASS"] + counts["XFAIL"]
+    good = len(cases) - counts["FAIL"]
     print("elapsed %.1f s; %d PASS, %d XFAIL (documented library limits), %d FAIL" % (
         time.time() - t0, counts["PASS"], counts["XFAIL"], counts["FAIL"]))
+    print("TLS_INTEROP_RECORDED %d deviation(s), %d known-vulnerable: %s" % (
+        counts["DEVIATION"], counts["KNOWN-VULNERABLE"], "; ".join(recorded) or "none"))
     print("TLS_INTEROP %s %d/%d (%s)" % ("PASS" if good == len(cases) and cases else "FAIL", good, len(cases),
                                        a.label or info))
     return 0 if good == len(cases) else 1
