@@ -1,0 +1,91 @@
+# Keeps the Mozilla root store the ESP32 modules trust (software/wifi/ca_store) current.
+#
+# Once a week it fetches curl's extract of Mozilla's certdata.txt, and when Mozilla's data has
+# changed it opens (or updates) one pull request from the branch ca-store/refresh with the new
+# cacert.pem, CA_PINS and the version bump of every module that builds its bundle from it. It
+# builds no firmware: before it opens the pull request it checks that ESP-IDF's own
+# gen_crt_bundle.py, at the release the modules build with, turns the new file into a bundle.
+#
+# On a GitHub-hosted runner, not the self-hosted build machine: it needs nothing from the
+# build image. A pull request opened with GITHUB_TOKEN does not start the Build workflow, so
+# the firmware is built when a maintainer pushes to the branch or merges it.
+#
+# Needs "Allow GitHub Actions to create and approve pull requests" under Settings, Actions,
+# General; without it the refresh still runs and the last step fails, saying so.
+name: CA store refresh
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ca-store-refresh
+  cancel-in-progress: false
+
+env:
+  BRANCH: ca-store/refresh
+  # ESP-IDF v5.3.1, the release the ESP32 modules build with, and the sha256 of its
+  # components/mbedtls/esp_crt_bundle/gen_crt_bundle.py.
+  ESP_IDF_COMMIT: c8fc5f643b7a7b0d3b182d3df610844e3dc9bd74
+  GEN_CRT_BUNDLE_SHA256: e8abcaf9bc077c3e4a18f7c350763eade39b926d90add6b27539ae12ad80eec7
+
+jobs:
+  refresh:
+    # Forks do not open weekly pull requests against themselves unless asked to.
+    if: github.repository == 'GideonZ/1541ultimate' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Test the refresh
+        run: python3 -m unittest discover -s tools/ca_store -p "test_*.py"
+
+      - name: Refresh the store
+        id: refresh
+        run: |
+          python3 tools/ca_store/ca_store.py refresh --summary "$RUNNER_TEMP/summary.md"
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+            cat "$RUNNER_TEMP/summary.md" >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build the bundle with ESP-IDF's generator
+        if: steps.refresh.outputs.changed == 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o gen_crt_bundle.py \
+            "https://raw.githubusercontent.com/espressif/esp-idf/$ESP_IDF_COMMIT/components/mbedtls/esp_crt_bundle/gen_crt_bundle.py"
+          echo "$GEN_CRT_BUNDLE_SHA256  gen_crt_bundle.py" | sha256sum -c -
+          # ESP-IDF v5.3's constraints file allows cryptography below 43.
+          python3 -m venv venv
+          venv/bin/pip install --quiet "cryptography<43"
+          venv/bin/python gen_crt_bundle.py -q --input "$GITHUB_WORKSPACE/software/wifi/ca_store/cacert.pem"
+          echo "ESP-IDF bundle: $(wc -c <x509_crt_bundle) bytes" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Check the store
+        if: steps.refresh.outputs.changed == 'true'
+        run: python3 tools/ca_store/ca_store.py check --release
+
+      - name: Open or update the pull request
+        if: steps.refresh.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          date=$(sed -n 's/^CA_MOZILLA_DATE="\(.*\)"$/\1/p' software/wifi/ca_store/CA_PINS)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          { echo "Update the Mozilla root store to $date"; echo; cat "$RUNNER_TEMP/summary.md"; } \
+            >"$RUNNER_TEMP/message"
+          git switch -C "$BRANCH"
+          git commit -a -q -F "$RUNNER_TEMP/message"
+          git push --force origin "$BRANCH"
+          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[]')" ]; then
+            gh pr create --head "$BRANCH" --base "${{ github.event.repository.default_branch }}" \
+              --title "Update the Mozilla root store to $date" --body-file "$RUNNER_TEMP/summary.md"
+          fi
