@@ -26,7 +26,7 @@ void start_dispatch(QueueHandle_t queue);
 void send_button_event(uint8_t button);
 void send_keepalive();
 
-#define IDENT_STRING "ESP32 WiFi Bridge V1.201"
+#define IDENT_STRING "ESP32 WiFi Bridge V1.202"
 #define IDENT_MAJOR   1
 // 1.6: the connector retries after a dropped link instead of idling in
 // Disconnected forever. The Ultimate's updater only reflashes the module
@@ -34,7 +34,9 @@ void send_keepalive();
 // does not bump it is silently never installed.
 // 1.100 (dev builds, 1.7 when released): CMD_GET_RANDOM.
 // 1.200 (dev builds of the TLS spike): CMD_TLS_OPEN/STEP/CLOSE/STATS.
-#define IDENT_MINOR   201
+// 1.201 (dev): a TLS 1.3 NewSessionTicket never fails the session.
+// 1.202 (dev): any number of tickets ahead of a reply; tickets signalled on every mbedTLS.
+#define IDENT_MINOR   202
 #define MULTITHREADED 0
 #define DISPATCHER_STACK 8192 // was 3072: the TLS handshake runs on this task
 

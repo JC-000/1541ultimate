@@ -54,7 +54,7 @@ extern const uint8_t tls_test_ca_pem_end[]   asm("_binary_tls_test_ca_pem_end");
 // Step room kept free of plaintext for an alert that a failing read writes: header 5 + tag 16 +
 // alert padded to at most 32 (CONFIG_MBEDTLS_SSL_CID_PADDING_GRANULARITY range 0..32) = 53
 #define TLS_ALERT_ROOM   64
-// NewSessionTickets one call may run into; each is taken on its own, so this only bounds a loop
+// NewSessionTickets one mbedtls_ssl_write() may run into; each is taken on its own, so this only bounds a loop
 #define TLS_TICKET_RETRIES 4
 // A session that nothing has touched (STEP, STATS, OPEN) for this long is an orphan: the Ultimate
 // timed out on it and will never CLOSE it. The next OPEN reclaims it.
@@ -253,6 +253,12 @@ static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const c
         mbedtls_ssl_conf_min_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
         mbedtls_ssl_conf_max_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
         mbedtls_ssl_conf_rng(&s->conf, mbedtls_ctr_drbg_random, &s->drbg);
+#if defined(MBEDTLS_SSL_TLS1_3_SIGNAL_NEW_SESSION_TICKETS_ENABLED) && defined(MBEDTLS_SSL_SESSION_TICKETS)
+        // mbedTLS 3.6.0 and 4.x always hand a TLS 1.3 ticket to the caller; 3.6.1 to 3.6.x only
+        // when asked. Ask, so every version takes the one ticket path tls_step() has.
+        mbedtls_ssl_conf_tls13_enable_signal_new_session_tickets(&s->conf,
+                                                                 MBEDTLS_SSL_TLS1_3_SIGNAL_NEW_SESSION_TICKETS_ENABLED);
+#endif
         mbedtls_ssl_conf_authmode(&s->conf, verify ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
 #if CONFIG_TLS_SPIKE
         if (!verify) {
@@ -492,16 +498,15 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
 
     int ct_len = (s->out_len < TLS_STEP_OUT_MAX) ? s->out_len : TLS_STEP_OUT_MAX;
     int pt_len = 0;
-    int tickets = 0;
     while ((ret == 0) && (s->stats.state == TLS_STATE_ESTABLISHED) &&
            (ct_len + pt_len + TLS_ALERT_ROOM < TLS_STEP_OUT_MAX)) {
         int n = mbedtls_ssl_read(&s->ssl, out + ct_len + pt_len, TLS_STEP_OUT_MAX - TLS_ALERT_ROOM - ct_len - pt_len);
         if (n > 0) {
             pt_len += n;
-        } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) && (s->ssl.MBEDTLS_PRIVATE(state) != MBEDTLS_SSL_HANDSHAKE_OVER) &&
-                   (++tickets <= TLS_TICKET_RETRIES)) {
+        } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) && mbedtls_ssl_check_pending(&s->ssl)) {
             // A complete ticket makes mbedtls_ssl_read() return WANT_READ with the ticket kept for the
-            // next call (ssl_msg.c:5582-5589). Take it now, or the next step's write runs into it.
+            // next call (ssl_msg.c:5583-5589 in mbedTLS 3.6.0), which takes it without new input.
+            // Take every one now, or the reply behind them waits for a step the Ultimate never sends.
             continue;
         } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) || (n == MBEDTLS_ERR_SSL_WANT_WRITE)) {
             break;
