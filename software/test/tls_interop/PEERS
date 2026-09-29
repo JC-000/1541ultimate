@@ -1,0 +1,6 @@
+# The peer versions the matrix and its expectations were made with (interop.py --peers). A peer that
+# differs stops the run unless PEER_DRIFT=1: a new version can change ticket sizes, record layout or
+# the alerts it can read, and every expectation should be looked at again.
+openssl=OpenSSL 3.6.2 7 Apr 2026 (Library: OpenSSL 3.6.2 7 Apr 2026)
+gnutls=3.8.13
+tlslite=tlslite-ng 0.8.2 ecdsa 0.19.2

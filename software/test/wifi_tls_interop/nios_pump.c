@@ -12,6 +12,7 @@
  *   nios_pump --port N --sni NAME [--verify 0|1] [--echo BYTES] [--push BYTES]
  *             [--pt-chunk BYTES] [--ct-chunk BYTES] [--after none|close|eof] [--seed N] [--baud N]
  *             [--settle-ms MS] [--settle-at STEP] [--ct-caps N,N,...] [--split SEED]
+ *             [--clock-offset SECONDS] [--esp-slowdown K]
  *
  * --echo: send that many bytes in steps of --pt-chunk and read the same back.
  * --push: send nothing, read that many bytes the server sends on its own.
@@ -28,11 +29,24 @@
  *   server's flight lands in the steps.
  * --split: cut what arrives from the server at pseudo-random points from SEED
  *   (arbitrary TCP segmentation, reproducible).
+ * --clock-offset: the Ultimate's clock in OPEN is the host's plus this (a
+ *   string, may be negative); "none" sends unix_time 0 (no clock).
+ * --esp-slowdown: after each call, wait K-1 times as long as the handler took
+ *   on the host: a crude model of the ESP32's slower CPU (default 0: off).
  * --after close: then step until the server's close_notify ends the session.
  * --after eof: then step until the server closes the TCP connection.
  *
  * --list: the TLS 1.3 cipher suites and the groups, in the order the client
  *   offers them, of the mbedTLS this was built with and the engine's preset.
+ *
+ * What the Ultimate takes from each STEP reply is decided by its own code:
+ * wifi_tls_take_step() from software/io/wifi/wifi_tls.cc (nios_take.cc). So a
+ * FAILED step's plaintext is withheld, and a refused step's ciphertext is not
+ * sent, as on the device. Every exit closes the session, as wifi_tls_spike()
+ * does, and then counts what mbedTLS and the engine left allocated.
+ *
+ * The device's clock is modelled: time(), for the engine and for mbedTLS's
+ * certificate checks, starts near 1970 and follows the engine's settimeofday().
  *
  * Every step is logged as a STEP line. The last line is "RESULT key=value ...". The engine's own claims (version,
  * suite) are printed as engine_*, for information only.
@@ -53,6 +67,11 @@
 #include "mbedtls/ssl.h"
 #include "mbedtls/ssl_ciphersuites.h"
 #include "mbedtls/build_info.h"
+#include "mbedtls/platform.h"
+#include "psa/crypto.h"
+#include "wifi_tls.h"
+
+int nios_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_tls_step_t *step);
 
 void cmd_tls_open(command_buf_t *buf);
 void cmd_tls_step(command_buf_t *buf);
@@ -83,8 +102,69 @@ esp_err_t esp_crt_bundle_attach(void *conf) { return ESP_ERR_NOT_SUPPORTED; }
 QueueHandle_t connect_commands; // data the other handlers in rpc_dispatch.c name
 SemaphoreHandle_t connect_semaphore;
 esp_netif_t *my_sta_netif;
-// tls_engine.c is built with -Dsettimeofday=harness_settimeofday: the host clock is already right
-int harness_settimeofday(const struct timeval *tv, const void *tz) { return 0; }
+/* ---- the device's clock ----
+ * tls_engine.c is built with -Dsettimeofday=harness_settimeofday. time() is defined here, so the
+ * engine's and mbedTLS's calls (certificate validity) come here rather than to libc. Like the
+ * ESP32 after boot it counts from 0 until the engine sets it. */
+static int64_t clock_base = 0;   // device time = clock_base + seconds since start
+static int64_t start_s;
+static int settime_calls;
+
+static int64_t uptime_s(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec - start_s;
+}
+
+time_t time(time_t *t)
+{
+    time_t now = (time_t)(clock_base + uptime_s());
+    if (t) {
+        *t = now;
+    }
+    return now;
+}
+
+int harness_settimeofday(const struct timeval *tv, const void *tz)
+{
+    clock_base = tv->tv_sec - uptime_s();
+    settime_calls++;
+    return 0;
+}
+
+static time_t host_time(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_REALTIME, &t);
+    return t.tv_sec;
+}
+
+/* ---- allocations ----
+ * Everything mbedTLS allocates (mbedtls_platform_set_calloc_free) and the engine's own session
+ * (tls_engine.c is built with -Dcalloc/-Dfree=harness_engine_*). What is live after the session
+ * is closed, beyond what was live before OPEN, was leaked. */
+static long live_allocs;
+
+static void *count_calloc(size_t n, size_t size)
+{
+    void *p = calloc(n, size);
+    if (p) {
+        live_allocs++;
+    }
+    return p;
+}
+
+static void count_free(void *p)
+{
+    if (p) {
+        live_allocs--;
+    }
+    free(p);
+}
+
+void *harness_engine_calloc(size_t n, size_t size) { return count_calloc(n, size); }
+void harness_engine_free(void *p) { count_free(p); }
 
 /* ---- tickets the engine's TLS layer stored ----
  * tls_engine.c is built with -Dmbedtls_ssl_read=harness_ssl_read (and write): after each call the
@@ -133,6 +213,7 @@ int harness_ssl_write(mbedtls_ssl_context *ssl, const unsigned char *buf, size_t
 static command_buf_t B;
 static uint16_t seq;
 static long baud = 5000000;
+static double esp_slowdown;
 
 // 10 bits a byte on the UART, SLIP's two frame ends, escapes left out
 static void link_delay(int bytes)
@@ -154,11 +235,17 @@ static void request(uint8_t cmd, int len)
     B.size = len;
     link_delay(len);
     int before = transmitted;
+    int64_t t0 = esp_timer_get_time();
     switch (cmd) {
     case CMD_TLS_OPEN: cmd_tls_open(&B); break;
     case CMD_TLS_STEP: cmd_tls_step(&B); break;
     case CMD_TLS_CLOSE: cmd_tls_close(&B); break;
     case CMD_TLS_STATS: cmd_tls_stats(&B); break;
+    }
+    if (esp_slowdown > 1) {
+        long ns = (long)((esp_timer_get_time() - t0) * 1000 * (esp_slowdown - 1));
+        struct timespec t = { ns / 1000000000L, ns % 1000000000L };
+        nanosleep(&t, NULL);
     }
     link_delay(B.size);
     if ((transmitted != before + 1) || (h->command != cmd) || (h->sequence != seq)) {
@@ -168,6 +255,7 @@ static void request(uint8_t cmd, int len)
 }
 
 typedef struct {
+    int take;     // wifi_tls_take_step(): 0, WIFI_TLS_AGAIN, WIFI_TLS_REFUSED or WIFI_TLS_INVALID
     int esp_err;
     uint8_t state;
     int ct_out_len;
@@ -188,13 +276,21 @@ static step_t step(uint8_t session, const uint8_t *ct, int ct_len, const uint8_t
     memcpy(req->data + ct_len, pt, pt_len);
     request(CMD_TLS_STEP, sizeof(rpc_tls_step_req) + ct_len + pt_len);
     rpc_tls_step_resp *r = (rpc_tls_step_resp *)B.data;
-    step_t s = { r->esp_err, r->state, r->ct_out_len, r->pt_out_len, r->data, r->data + r->ct_out_len };
-    printf("STEP ct_in=%d pt_in=%d -> esp_err=%s0x%04x state=%d ct_out=%d pt_out=%d\n", ct_len, pt_len,
-           (s.esp_err < 0) ? "-" : "", (unsigned)abs(s.esp_err), s.state, s.ct_out_len, s.pt_out_len);
-    if ((B.size != (int)sizeof(rpc_tls_step_resp) + s.ct_out_len + s.pt_out_len) ||
-        (s.ct_out_len + s.pt_out_len > TLS_STEP_OUT_MAX)) {
-        printf("RESULT outcome=HARNESS_ERROR detail=step_reply_size\n");
+    // The Ultimate's rooms: wifi_tls_spike.cc OUT_ROOM
+    static uint8_t ct_out[1536], pt_out[1536];
+    wifi_tls_step_t ws = { .ct_out = ct_out, .ct_out_room = sizeof(ct_out), .pt_out = pt_out,
+                           .pt_out_room = sizeof(pt_out), .state = WIFI_TLS_UNKNOWN };
+    int take = nios_take_step(B.data, B.size, seq, &ws);
+    printf("STEP ct_in=%d pt_in=%d -> esp_err=%s0x%04x state=%d ct_out=%d pt_out=%d take=%d\n", ct_len, pt_len,
+           (r->esp_err < 0) ? "-" : "", (unsigned)abs(r->esp_err), r->state, r->ct_out_len, r->pt_out_len, take);
+    if ((take == WIFI_TLS_INVALID) || (take == WIFI_TLS_FOREIGN)) {
+        printf("RESULT outcome=NIOS_INVALID detail=take_step_%d\n", take);
         exit(3);
+    }
+    step_t s = { take, r->esp_err, r->state, 0, 0, ct_out, pt_out };
+    if (take != WIFI_TLS_REFUSED) {
+        s.ct_out_len = ws.ct_out_len;
+        s.pt_out_len = ws.pt_out_len; // 0 from a FAILED step: withheld
     }
     return s;
 }
@@ -226,16 +322,25 @@ static uint32_t seed;
 static uint8_t payload(long i) { return (uint8_t)((i * 131 + (i >> 8) * 7 + seed) ^ (seed >> 8)); }
 
 static long expect;
+static int session_id = -1; // open on the module, as far as this side knows
+static long allocs_before_open;
+static int clock_ok = -1;
 
 static void finish(const char *outcome, const char *detail)
 {
     R.echo_ok = expect && (R.echo_received == expect); // every byte was compared as it came
+    // wifi_tls_spike(): the session is closed on every exit path (NOT_FOUND when the module ended it)
+    if (session_id >= 0) {
+        session_request(CMD_TLS_CLOSE, (uint8_t)session_id);
+        session_id = -1;
+    }
+    long leaked = live_allocs - allocs_before_open;
     printf("RESULT outcome=%s stage=%s detail=%s esp_err=%s0x%04x state=%d steps=%d resends=%d pt_delivered=%ld "
            "echo_sent=%ld echo_received=%ld echo_ok=%d tcp_in=%ld tcp_out=%ld tcp_eof=%d sessions_open=%d "
-           "tickets_taken=%d\n",
+           "tickets_taken=%d leaked=%ld clock_ok=%d\n",
            outcome, R.stage, detail, (R.esp_err < 0) ? "-" : "", (unsigned)abs(R.esp_err), R.state, R.steps,
            R.resends, R.pt_delivered, R.echo_sent, R.echo_received, R.echo_ok, R.tcp_in, R.tcp_out, R.tcp_eof,
-           tls_sessions_open(), tickets_taken);
+           tls_sessions_open(), tickets_taken, leaked, clock_ok);
     fflush(stdout);
     exit(0);
 }
@@ -336,6 +441,9 @@ static void failed_step(step_t s)
 {
     R.esp_err = s.esp_err;
     R.state = s.state;
+    if (s.take == WIFI_TLS_REFUSED) {
+        finish("REFUSED", "step"); // wifi_tls_spike.cc fail_call(): nothing of the reply is sent
+    }
     finish((s.state == TLS_STATE_FAILED) ? "FAILED" : (s.state == TLS_STATE_CLOSED) ? "CLOSED" : "STEP_ERROR",
            "step");
 }
@@ -372,7 +480,7 @@ int main(int argc, char **argv)
     int port = 0, verify = 1, pt_chunk = ECHO_CHUNK, ct_chunk = 0, settle_ms = 0, settle_at = 0;
     int caps[32], n_caps = 0;
     long echo = 0, push = 0;
-    const char *sni = "localhost", *after = "none";
+    const char *sni = "localhost", *after = "none", *clock_offset = "0";
     for (int i = 1; i + 1 < argc; i += 2) {
         const char *k = argv[i], *v = argv[i + 1];
         if (!strcmp(k, "--port")) port = atoi(v);
@@ -396,6 +504,8 @@ int main(int argc, char **argv)
             }
         }
         else if (!strcmp(k, "--split")) split_state = (uint32_t)strtoul(v, NULL, 0);
+        else if (!strcmp(k, "--clock-offset")) clock_offset = v;
+        else if (!strcmp(k, "--esp-slowdown")) esp_slowdown = atof(v);
         else { fprintf(stderr, "unknown option %s\n", k); return 2; }
     }
     if (!port || pt_chunk <= 0 || pt_chunk >= TLS_STEP_IN_MAX) {
@@ -403,6 +513,13 @@ int main(int argc, char **argv)
         return 2;
     }
     setvbuf(stdout, NULL, _IOLBF, 0);
+    {
+        struct timespec t;
+        clock_gettime(CLOCK_MONOTONIC, &t);
+        start_s = t.tv_sec;
+    }
+    mbedtls_platform_set_calloc_free(count_calloc, count_free);
+    psa_crypto_init(); // the module's lasting state: taken before the count starts
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(port) };
@@ -417,15 +534,19 @@ int main(int argc, char **argv)
     memset(&o->flags, 0, sizeof(rpc_tls_open_req) - sizeof(rpc_header_t));
     o->flags = verify ? (TLS_OPEN_VERIFY | TLS_OPEN_CA_TEST) : 0;
     o->sni_len = (uint8_t)strlen(sni);
-    o->unix_time = (uint32_t)time(NULL);
+    uint32_t unix_time = strcmp(clock_offset, "none") ? (uint32_t)(host_time() + atol(clock_offset)) : 0;
+    o->unix_time = unix_time;
     memcpy(o->sni, sni, o->sni_len);
+    allocs_before_open = live_allocs;
     request(CMD_TLS_OPEN, sizeof(rpc_tls_open_req) + o->sni_len);
     rpc_tls_open_resp *or = (rpc_tls_open_resp *)B.data;
     if (or->esp_err != ESP_OK) {
         R.esp_err = or->esp_err;
+        printf("open_reason=%u\n", or->reason);
         finish("OPEN_FAILED", "open");
     }
     uint8_t session = or->session;
+    session_id = session;
 
     uint8_t in[TLS_STEP_IN_MAX], pt_in[TLS_STEP_IN_MAX];
     int in_room = TLS_STEP_IN_MAX;
@@ -433,8 +554,16 @@ int main(int argc, char **argv)
         in_room = ct_chunk;
     }
 
-    // wifi_tls_spike.cc reads the session's STATS before the handshake and again after it
+    // wifi_tls_spike.cc reads the session's STATS before the handshake and again after it. The
+    // module's clock at OPEN must be the one the Ultimate gave it.
     session_request(CMD_TLS_STATS, session);
+    {
+        rpc_tls_stats_resp *st = (rpc_tls_stats_resp *)B.data;
+        long skew = (long)st->esp_time - (long)unix_time;
+        clock_ok = (st->time_source == TLS_TIME_NIOS) && (skew >= 0) && (skew <= 2) && (settime_calls > 0);
+        printf("module_clock esp_time=%u sent=%u time_source=%u settimeofday_calls=%d\n", st->esp_time, unix_time,
+               st->time_source, settime_calls);
+    }
 
     // The handshake: a step answered NO_MEM goes again as it is
     R.stage = "handshake";
@@ -443,18 +572,19 @@ int main(int argc, char **argv)
     for (;;) {
         step_t s = step(session, in, in_len, NULL, 0);
         R.steps++;
-        int resend = (s.esp_err == ESP_ERR_NO_MEM);
+        int resend = (s.take == WIFI_TLS_AGAIN);
         if (resend) {
             R.resends++;
-        } else if (s.esp_err != ESP_OK) {
-            send_all(fd, s.ct_out, s.ct_out_len); // the alert of a failed handshake goes to the server too
+        } else if (s.take == WIFI_TLS_REFUSED) {
             failed_step(s);
         } else {
             in_len = 0;
         }
+        // The alert of a failed handshake goes to the server too
         send_all(fd, s.ct_out, s.ct_out_len);
         R.pt_delivered += s.pt_out_len;
         R.state = s.state;
+        R.esp_err = s.esp_err;
         if (s.state == TLS_STATE_ESTABLISHED) {
             if (!resend) {
                 break;
@@ -510,13 +640,15 @@ int main(int argc, char **argv)
         step_t s = step(session, in, in_len, pt_in, chunk);
         R.steps++;
         echo_steps++;
-        resend = (s.esp_err == ESP_ERR_NO_MEM);
+        resend = (s.take == WIFI_TLS_AGAIN);
         if (resend) {
             R.resends++;
+        } else if (s.take == WIFI_TLS_REFUSED) {
+            failed_step(s);
         } else if (s.esp_err == ESP_OK) {
             R.echo_sent += chunk;
         }
-        // A failing step still hands out what came before the failure: it is checked like the rest
+        // A FAILED step's plaintext is withheld (wifi_tls_take_step); its alert is sent
         send_all(fd, s.ct_out, s.ct_out_len);
         R.pt_delivered += s.pt_out_len;
         for (int i = 0; i < s.pt_out_len; i++) {
@@ -528,9 +660,6 @@ int main(int argc, char **argv)
         }
         R.echo_received += s.pt_out_len;
         R.state = s.state;
-        if (!resend && (s.esp_err != ESP_OK)) {
-            failed_step(s);
-        }
         if (s.state != TLS_STATE_ESTABLISHED) {
             R.esp_err = s.esp_err;
             finish((s.state == TLS_STATE_CLOSED) ? "CLOSED" : "FAILED", "echo_state");
@@ -553,6 +682,9 @@ int main(int argc, char **argv)
             }
             step_t s = step(session, in, in_len, NULL, 0);
             R.steps++;
+            if (s.take == WIFI_TLS_REFUSED) {
+                failed_step(s);
+            }
             send_all(fd, s.ct_out, s.ct_out_len);
             R.pt_delivered += s.pt_out_len;
             R.state = s.state;
@@ -572,7 +704,6 @@ int main(int argc, char **argv)
     rpc_tls_stats_resp *st = (rpc_tls_stats_resp *)B.data;
     printf("engine_version=0x%04x engine_suite=0x%04x engine_pt_in=%u engine_pt_out=%u\n", st->tls_version,
            st->ciphersuite, st->pt_in_bytes, st->pt_out_bytes);
-    session_request(CMD_TLS_CLOSE, session);
     close(fd);
     finish("ECHO_OK", "done");
 }

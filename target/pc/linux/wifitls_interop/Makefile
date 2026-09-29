@@ -10,8 +10,13 @@
 #                             TLS_INTEROP PASS|FAIL n/m (mbedTLS commit, sdkconfig sha256)
 #   make interop ENGINE_REV=<commit>
 #                             the same against tls_engine.c as it was at <commit>
+#   make interop ENGINE_FILE=<path> ENGINE_NAME=<name>
+#                             the same against that tls_engine.c (a mutant, say)
 #   make interop ONLY=<regex> only the cases whose name matches
 #   make interop BAUD=0       without the serial link's delay per step (nios_pump.c --baud)
+#   make interop ESP_SLOWDOWN=<k>
+#                             each call takes k times as long as on the host (nios_pump.c --esp-slowdown)
+#   make interop PEER_DRIFT=1 run although a peer's version differs from software/test/tls_interop/PEERS
 #   make interop CRYPTO_PINS=<file> CRYPTO_SDKCONFIG=<file> CRYPTO_MACROS=<file>
 #                             another mbedTLS: build_mbedtls.sh's overrides, passed on
 #
@@ -44,14 +49,19 @@ MBEDTLS       = $(OUTPUT)/mbedtls-$(MBEDTLS_KEY)
 MBEDTLS_LIB   = $(MBEDTLS)/build/library
 SDKCONFIG_SHA := $(shell shasum -a 256 < $(EFF_SDKCONFIG) | cut -c1-16)
 
-# tls_engine.c from another commit, for red/green runs
-ENGINE_REV ?=
-ifeq ($(ENGINE_REV),)
-ENGINE_SRC = $(MAIN)/tls_engine.c
-ENGINE_TAG = tree
-else
+# tls_engine.c from another commit, or another file, for red/green runs. Only tls_engine.c changes:
+# rpc_dispatch.c and the headers are the tree's.
+ENGINE_REV  ?=
+ENGINE_FILE ?=
+ifneq ($(ENGINE_FILE),)
+ENGINE_TAG = $(or $(ENGINE_NAME),$(notdir $(basename $(ENGINE_FILE))))
+ENGINE_SRC = $(OUTPUT)/$(ENGINE_TAG)/tls_engine.c
+else ifneq ($(ENGINE_REV),)
 ENGINE_TAG = $(ENGINE_REV)
 ENGINE_SRC = $(OUTPUT)/$(ENGINE_TAG)/tls_engine.c
+else
+ENGINE_SRC = $(MAIN)/tls_engine.c
+ENGINE_TAG = tree
 endif
 OBJ  = $(OUTPUT)/$(MBEDTLS_KEY)
 PUMP = $(RESULT)/nios_pump_$(ENGINE_TAG)_$(MBEDTLS_KEY)
@@ -85,16 +95,22 @@ $(VENV)/installed: $(PEERS)/requirements-tlslite.txt
 	@touch $@
 
 # Always run: build_mbedtls.sh checks its inputs and is cached. The stamp only changes with the build.
+# A lock directory keeps two makes in this tree from building into the same place at once.
 $(MBEDTLS)/stamp: FORCE
-	@mkdir -p $(MBEDTLS)
-	@CRYPTO_PINS=$(EFF_PINS) CRYPTO_SDKCONFIG=$(EFF_SDKCONFIG) CRYPTO_MACROS=$(EFF_MACROS) \
-	    $(BUILD_MBEDTLS) $(MBEDTLS) > $(MBEDTLS)/build_mbedtls.log 2>&1 || { tail -20 $(MBEDTLS)/build_mbedtls.log; exit 1; }
-	@tail -1 $(MBEDTLS)/build_mbedtls.log | grep '^MBEDTLS_BUILD_OK '
-	@cmp -s $(MBEDTLS)/build_mbedtls.log $(MBEDTLS)/stamp || cp $(MBEDTLS)/build_mbedtls.log $(MBEDTLS)/stamp
+	@mkdir -p $(OUTPUT)
+	@until mkdir $(MBEDTLS).lock 2>/dev/null; do echo "waiting for $(MBEDTLS).lock"; sleep 2; done; \
+	trap 'rmdir $(MBEDTLS).lock' EXIT INT TERM; \
+	mkdir -p $(MBEDTLS) && \
+	{ CRYPTO_PINS=$(EFF_PINS) CRYPTO_SDKCONFIG=$(EFF_SDKCONFIG) CRYPTO_MACROS=$(EFF_MACROS) \
+	    $(BUILD_MBEDTLS) $(MBEDTLS) > $(MBEDTLS)/build_mbedtls.log 2>&1 || { tail -20 $(MBEDTLS)/build_mbedtls.log; exit 1; }; } && \
+	tail -1 $(MBEDTLS)/build_mbedtls.log | grep '^MBEDTLS_BUILD_OK ' && \
+	{ cmp -s $(MBEDTLS)/build_mbedtls.log $(MBEDTLS)/stamp || cp $(MBEDTLS)/build_mbedtls.log $(MBEDTLS)/stamp; }
 
-$(OUTPUT)/$(ENGINE_TAG)/tls_engine.c:
+# Fetched every time and replaced only if it changed, so a branch name follows the branch
+$(OUTPUT)/$(ENGINE_TAG)/tls_engine.c: FORCE
 	@mkdir -p $(dir $@)
-	git -C $(PATH_SW) show $(ENGINE_REV):software/wifi/raw_u64/main/tls_engine.c > $@
+	@$(if $(ENGINE_FILE),cat $(ENGINE_FILE),git -C $(PATH_SW) show $(ENGINE_REV):software/wifi/raw_u64/main/tls_engine.c) > $@.new
+	@cmp -s $@.new $@ && rm $@.new || mv $@.new $@
 
 # The engine's compiled-in test CA is the PKI's two roots
 # The throwaway PKI: made once, and only extended (interop.py pki keeps what exists)
@@ -108,7 +124,7 @@ $(OUTPUT)/test_ca.S: $(PKI)/trust.pem
 $(OBJ)/$(ENGINE_TAG)/tls_engine.o: $(ENGINE_SRC) $(MAIN)/tls_engine.h $(MAIN)/rpc_calls.h $(MBEDTLS)/stamp Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -Dsettimeofday=harness_settimeofday -Dmbedtls_ssl_read=harness_ssl_read \
-	    -Dmbedtls_ssl_write=harness_ssl_write -c -o $@ $<
+	    -Dmbedtls_ssl_write=harness_ssl_write -Dcalloc=harness_engine_calloc -Dfree=harness_engine_free -c -o $@ $<
 
 $(OBJ)/rpc_dispatch.o: $(MAIN)/rpc_dispatch.c $(MAIN)/rpc_calls.h $(MBEDTLS)/stamp
 	@mkdir -p $(OBJ)
@@ -116,11 +132,23 @@ $(OBJ)/rpc_dispatch.o: $(MAIN)/rpc_dispatch.c $(MAIN)/rpc_calls.h $(MBEDTLS)/sta
 
 $(OBJ)/nios_pump.o: $(TEST)/nios_pump.c $(MAIN)/rpc_calls.h $(MBEDTLS)/stamp
 	@mkdir -p $(OBJ)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -I$(PATH_SW)/io/wifi -c -o $@ $<
 
-$(PUMP): $(OBJ)/$(ENGINE_TAG)/tls_engine.o $(OBJ)/rpc_dispatch.o $(OBJ)/nios_pump.o $(OUTPUT)/test_ca.S
+# The Ultimate's own checks of a STEP reply (wifi_tls_take_step), linked as they are
+NIOS_CXXFLAGS = -std=gnu++11 -g -O1 -Wall -DNIOS=1 -DU64=1 -fsanitize=address,undefined -fno-omit-frame-pointer \
+                -I$(PATH_SW)/test/wifi_tls/stub -I$(PATH_SW)/io/wifi -I$(MAIN) -I$(PATH_SW)/io/uart
+$(OUTPUT)/nios/%.o: $(PATH_SW)/io/wifi/%.cc
+	@mkdir -p $(dir $@)
+	$(CXX) $(NIOS_CXXFLAGS) -c -o $@ $<
+
+$(OUTPUT)/nios/nios_take.o: $(TEST)/nios_take.cc
+	@mkdir -p $(dir $@)
+	$(CXX) $(NIOS_CXXFLAGS) -c -o $@ $<
+
+$(PUMP): $(OBJ)/$(ENGINE_TAG)/tls_engine.o $(OBJ)/rpc_dispatch.o $(OBJ)/nios_pump.o $(OUTPUT)/nios/wifi_tls.o \
+         $(OUTPUT)/nios/nios_take.o $(OUTPUT)/test_ca.S
 	@mkdir -p $(RESULT)
-	$(CC) -fsanitize=address,undefined $(UNRESOLVED) -o $@ $^ $(LIBS)
+	$(CXX) -fsanitize=address,undefined $(UNRESOLVED) -o $@ $^ $(LIBS)
 
 $(RESULT)/gnutls_echo: $(PEERS)/gnutls_echo.c
 	@mkdir -p $(RESULT)
@@ -131,7 +159,9 @@ interop: all
 	    --tlslite-python $(VENV)/bin/python \
 	    --pki $(PKI) --out $(OUTPUT)/run_$(ENGINE_TAG)_$(MBEDTLS_KEY)$(if $(BAUD),_baud$(BAUD)) \
 	    --label "engine $(ENGINE_TAG), mbedTLS $$(tail -1 $(MBEDTLS)/stamp | cut -d' ' -f3), sdkconfig sha256 $(SDKCONFIG_SHA)" \
-	    $(if $(ONLY),--only '$(ONLY)') $(if $(BAUD),--client-arg=--baud --client-arg=$(BAUD))
+	    $(if $(ONLY),--only '$(ONLY)') $(if $(BAUD),--client-arg=--baud --client-arg=$(BAUD)) \
+	    $(if $(ESP_SLOWDOWN),--client-arg=--esp-slowdown --client-arg=$(ESP_SLOWDOWN)) \
+	    --peers $(PEERS)/PEERS $(if $(PEER_DRIFT),--allow-peer-drift)
 
 clean:
 	@rm -rf $(OUTPUT) $(RESULT)

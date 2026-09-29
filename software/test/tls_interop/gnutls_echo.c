@@ -9,6 +9,7 @@
  *   gnutls_echo --port N --cert CHAIN --key KEY --prio STRING [--tickets N]
  *               [--keyupdate-after BYTES] [--close-after BYTES] [--eof-after BYTES]
  *               [--skip-key-check]
+ *   gnutls_echo --version
  *
  * --tickets: NewSessionTickets sent right after the handshake (default 0).
  * --keyupdate-after: send a KeyUpdate once this many bytes were echoed.
@@ -16,7 +17,9 @@
  *   close_notify, or with a bare TCP close.
  * --skip-key-check: load a key that does not match the certificate.
  *
- * SERVER_DONE carries the SHA-256 of every byte it received.
+ * SERVER_NEGOTIATED names the server_name the client sent; SERVER_DONE carries
+ * the SHA-256 of every byte it received. A handshake that fails on an alert
+ * names it. It gives up after 30 s without a connection.
  */
 
 #include <arpa/inet.h>
@@ -25,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -55,6 +59,10 @@ static void check(int ret, const char *what)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--version")) {
+        printf("%s\n", gnutls_check_version(NULL));
+        return 0;
+    }
     int port = 0, tickets = 0, skip_key_check = 0;
     long keyupdate_after = -1, close_after = -1, eof_after = -1;
     const char *cert = NULL, *key = NULL, *prio = NULL;
@@ -99,7 +107,9 @@ int main(int argc, char **argv)
         return 1;
     }
     printf("SERVER_LISTENING gnutls %s\n", gnutls_check_version(NULL));
+    alarm(30); // nobody came: do not wait for ever
     int fd = accept(ls, NULL, NULL);
+    alarm(0);
     close(ls);
 
     gnutls_session_t s;
@@ -119,16 +129,26 @@ int main(int argc, char **argv)
     do {
         ret = gnutls_handshake(s);
     } while (ret < 0 && !gnutls_error_is_fatal(ret));
+    char sni[256] = "-";
+    size_t sni_len = sizeof(sni) - 1;
+    unsigned int sni_type;
+    if (gnutls_server_name_get(s, sni, &sni_len, &sni_type, 0) != 0) {
+        strcpy(sni, "-");
+    }
+    printf("SERVER_SNI %s\n", sni);
     if (ret < 0) {
         gnutls_alert_send_appropriate(s, ret);
+        if (ret == GNUTLS_E_FATAL_ALERT_RECEIVED || ret == GNUTLS_E_WARNING_ALERT_RECEIVED) {
+            printf("SERVER_ALERT_RECEIVED %d\n", (int)gnutls_alert_get(s));
+        }
         printf("SERVER_HANDSHAKE_FAILED %s hrr=%d\n", gnutls_strerror(ret), hrr_sent);
         printf("SERVER_DONE received=0 echoed=0 tickets_sent=0 keyupdates_sent=0 end=handshake_failed\n");
         close(fd);
         return 0;
     }
-    printf("SERVER_NEGOTIATED version=%s suite=%s group=%s hrr=%d\n",
+    printf("SERVER_NEGOTIATED version=%s suite=%s group=%s hrr=%d sni=%s\n",
            gnutls_protocol_get_name(gnutls_protocol_get_version(s)), gnutls_ciphersuite_get(s),
-           gnutls_group_get_name(gnutls_group_get(s)), hrr_sent);
+           gnutls_group_get_name(gnutls_group_get(s)), hrr_sent, sni);
     for (int i = 0; i < tickets; i++) {
         check(gnutls_session_ticket_send(s, 1, 0), "ticket_send"); // many in one call fail with an internal error
     }

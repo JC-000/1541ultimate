@@ -191,6 +191,52 @@ def client_offer(client):
     return suites, groups, info
 
 
+# ---------------------------------------------------------------- processes
+
+# Every server and client this run starts: killed on any exit, SIGTERM and SIGINT included, and each
+# PID recorded in <out>/pids.txt
+LIVE = []
+PIDS = []
+
+
+def track(proc, what):
+    LIVE.append(proc)
+    PIDS.append("%d %s" % (proc.pid, what))
+    return proc
+
+
+def untrack(proc):
+    if proc in LIVE:
+        LIVE.remove(proc)
+
+
+def reap():
+    for p in list(LIVE):
+        if p.poll() is None:
+            p.kill()
+            try:
+                p.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+        untrack(p)
+
+
+PIDS_FILE = []
+
+
+def write_pids():
+    for path in PIDS_FILE:
+        with open(path, "w") as f:
+            f.write("\n".join(PIDS) + "\n")
+
+
+def on_signal(signum, frame):
+    reap()
+    write_pids()
+    print("INTERRUPTED by signal %d: servers and client killed" % signum, flush=True)
+    os._exit(128 + signum)
+
+
 # ---------------------------------------------------------------- servers
 
 def free_port():
@@ -242,7 +288,8 @@ class OpenSSLServer:
         self.end = end
         self.relayed = 0
         self.hash = hashlib.sha256()
-        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.proc = track(subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE),
+                          "openssl s_server " + name)
         self.ready = wait_listening(self.port, self.proc)
         self.relay = threading.Thread(target=self._relay, daemon=True)
         self.relay.start()
@@ -276,12 +323,15 @@ class OpenSSLServer:
             self.proc.wait()
         self.relay.join(timeout=2)
         self.stderr = self.proc.stderr.read().decode(errors="replace")
+        untrack(self.proc)
         return self.facts()
 
     def facts(self):
-        """What s_server's trace says it SENT: ServerHello (or HRR) contents, tickets, key updates, alerts."""
-        f = {"server": "openssl", "relayed": self.relayed, "sha256": self.hash.hexdigest(), "tickets": 0, "hrr": 0, "version": None, "suite": None,
-             "group": None, "keyupdates": 0, "alerts_sent": [], "handshake_done": False}
+        """What s_server's trace says it SENT (ServerHello or HRR contents, tickets, key updates), and what it
+        RECEIVED: the server_name in the ClientHello, and the client's alert."""
+        f = {"server": "openssl", "relayed": self.relayed, "sha256": self.hash.hexdigest(), "tickets": 0, "hrr": 0,
+             "version": None, "suite": None, "group": None, "keyupdates": 0, "alerts_sent": [],
+             "handshake_done": False, "alert_received": None}
         try:
             lines = open(self.trace, errors="replace").read().splitlines()
         except OSError:
@@ -289,7 +339,25 @@ class OpenSSLServer:
         sent = False
         msg = None
         in_versions = False
+        sni_hex = None
+        saw_client_hello = False
         for ln in lines:
+            if re.match(r"\s+ClientHello, Length=", ln):
+                saw_client_hello = True
+            if sni_hex is not None:
+                m = re.match(r"\s+[0-9a-f]{4} - ((?:[0-9a-f]{2}[ -])+)", ln)
+                if m:
+                    sni_hex += m.group(1).replace("-", " ").split()
+                    continue
+                f["sni"] = self._server_name(sni_hex)
+                sni_hex = None
+            if not sent and "extension_type=server_name(0)" in ln and "sni" not in f:
+                sni_hex = []
+                continue
+            if not sent:
+                m = re.search(r"Level=fatal\(2\), description=[\w ]+\((\d+)\)", ln)
+                if m and f["alert_received"] is None:
+                    f["alert_received"] = int(m.group(1))
             if ln.startswith("Sent TLS Record") or ln.startswith("Sent Record"):
                 sent = True
                 msg = None
@@ -328,11 +396,24 @@ class OpenSSLServer:
             m = re.search(r"Level=\w+\(\d+\), description=([\w ]+)\(\d+\)", ln)
             if m:
                 f["alerts_sent"].append(m.group(1).strip())
+        if saw_client_hello and "sni" not in f:
+            f["sni"] = ""  # a ClientHello without server_name
         f["trace_lines"] = len(lines)
         return f
 
+    @staticmethod
+    def _server_name(hexbytes):
+        # ServerNameList: length(2), then entries: type(1), length(2), name
+        b = bytes(int(x, 16) for x in hexbytes)
+        if len(b) >= 5 and b[2] == 0:
+            n = int.from_bytes(b[3:5], "big")
+            return b[5:5 + n].decode(errors="replace")
+        return "?"
+
 
 class GnuTLSServer:
+    KIND = "gnutls"
+
     def __init__(self, gnutls, pki, out, name, cert="leaf_ec", suite=None, group=None, tickets=0, tls12=False,
                  keyupdate_after=None, end_after=None, end="none", key=None):
         self.port = free_port()
@@ -359,7 +440,8 @@ class GnuTLSServer:
             cmd += ["--skip-key-check"]
         self.cmd = cmd
         self.logf = open(self.log, "w")
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.proc = track(subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True),
+                          "gnutls_echo " + name)
         first = self.proc.stdout.readline()
         self.logf.write(first)
         self.ready = first.startswith("SERVER_LISTENING")
@@ -372,16 +454,28 @@ class GnuTLSServer:
             out, _ = self.proc.communicate()
         self.logf.write(out)
         self.logf.close()
+        untrack(self.proc)
         return self.facts()
 
     def facts(self):
-        f = {"server": "gnutls", "tickets": 0, "hrr": 0, "version": None, "suite": None, "group": None,
-             "keyupdates": 0, "received": 0, "handshake_done": False}
+        f = {"server": self.KIND, "tickets": 0, "hrr": 0, "version": None, "suite": None, "group": None,
+             "keyupdates": 0, "received": 0, "handshake_done": False, "alert_received": None}
         for ln in open(self.log).read().splitlines():
             if ln.startswith("SERVER_NEGOTIATED"):
                 kv = dict(x.split("=", 1) for x in ln.split()[1:])
-                f.update(version=kv["version"], suite=kv["suite"], group=kv["group"], hrr=int(kv["hrr"]))
+                f.update(version=kv["version"], suite=kv["suite"], group=kv["group"],
+                         hrr=int(kv["hrr"]) if kv["hrr"].isdigit() else None)
+                if "sni" in kv:
+                    f["sni"] = "" if kv["sni"] == "-" else kv["sni"]
                 f["handshake_done"] = True
+            if ln.startswith("SERVER_SNI "):
+                v = ln.split(" ", 1)[1]
+                f["sni"] = "" if v == "-" else v
+            if ln.startswith("SERVER_ALERT_RECEIVED "):
+                f["alert_received"] = int(ln.split()[1])
+            m = re.search(r"TLSRemoteAlert\(Alert\(level=2, description=(\d+)\)\)", ln)
+            if m:
+                f["alert_received"] = int(m.group(1))
             if ln.startswith("SERVER_DONE"):
                 head, _, end = ln.partition(" end=")  # the end may be an error message with spaces
                 kv = dict(x.split("=", 1) for x in head.split()[1:])
@@ -396,8 +490,9 @@ class GnuTLSServer:
 
 class TLSLiteServer(GnuTLSServer):
     """tlslite_echo.py: tlslite-ng, pure Python; it can break the protocol in one chosen place."""
+    KIND = "tlslite"
 
-    def __init__(self, python, pki, out, name, cert="leaf_ec", tickets=0, brk=None):
+    def __init__(self, python, pki, out, name, cert="leaf_ec", tickets=0, brk=None, empty=0, empty_where="before"):
         self.port = free_port()
         self.log = os.path.join(out, name + ".server.log")
         key = {"leaf_rsa": "leaf_rsa"}.get(cert, "leaf_ec")
@@ -406,9 +501,12 @@ class TLSLiteServer(GnuTLSServer):
                "--key", os.path.join(pki, key + ".key"), "--tickets", str(tickets)]
         if brk:
             cmd += ["--break=" + brk]
+        if empty:
+            cmd += ["--empty", str(empty), "--empty-where", empty_where]
         self.cmd = cmd
         self.logf = open(self.log, "w")
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.proc = track(subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True),
+                          "tlslite_echo " + name)
         first = self.proc.stdout.readline()
         self.logf.write(first)
         self.ready = first.startswith("SERVER_LISTENING")
@@ -494,10 +592,13 @@ class HRRPeer:
     """Raw records, no TLS library: answers the ClientHello with a HelloRetryRequest that selects a group
     chosen from what the client ADVERTISED (RFC 8446 section 4.1.4), and logs what the client does next."""
 
-    ALERTS = {40: "handshake_failure", 47: "illegal_parameter", 80: "internal_error", 50: "decode_error"}
+    ALERTS = {40: "handshake_failure", 47: "illegal_parameter", 80: "internal_error", 50: "decode_error",
+              70: "protocol_version", 10: "unexpected_message"}
 
     def __init__(self, out, name, select):
-        self.select = select  # "unoffered", "share" (the group of the key share sent), or "offered"
+        # "unoffered", "share" (the group of the key share sent), "offered", or "tls12": answer with a
+        # TLS 1.2 ServerHello instead, which a TLS 1.3-only client must refuse itself
+        self.select = select
         self.log = os.path.join(out, name + ".server.log")
         self.ls = socket.socket()
         self.ls.bind(("127.0.0.1", 0))
@@ -536,9 +637,12 @@ class HRRPeer:
         end = p + 2 + struct.unpack(">H", body[p:p + 2])[0]
         p += 2
         groups, shares = [], []
+        sni = None
         while p < end:
             t, ln = struct.unpack(">HH", body[p:p + 4])
             d = body[p + 4:p + 4 + ln]
+            if t == 0 and len(d) >= 5 and d[2] == 0:
+                sni = d[5:5 + int.from_bytes(d[3:5], "big")].decode(errors="replace")
             if t == 10:
                 groups = [struct.unpack(">H", d[2 + i:4 + i])[0] for i in range(0, struct.unpack(">H", d[:2])[0], 2)]
             if t == 51:
@@ -548,16 +652,32 @@ class HRRPeer:
                     shares.append(g)
                     q += 4 + kl
             p += 4 + ln
-        return sid, groups, shares
+        return sid, groups, shares, sni
 
     def _run(self):
         f = self.f
-        c, _ = self.ls.accept()
+        self.ls.settimeout(30)
+        try:
+            c, _ = self.ls.accept()
+        except OSError:
+            f["after_hrr"] = "no connection"
+            self.ls.close()
+            return
         c.settimeout(10)
         try:
             t, b = self._record(c)
-            sid, groups, shares = self._client_hello(b[4:])
+            sid, groups, shares, sni = self._client_hello(b[4:])
+            f["sni"] = sni or ""
             f["advertised"], f["shares"] = groups, shares
+            if self.select == "tls12":
+                # TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, no supported_versions: a TLS 1.2 server's answer
+                f["selected"] = 0
+                body = struct.pack(">H", 0x0303) + os.urandom(32) + bytes([len(sid)]) + sid + \
+                    struct.pack(">HB", 0xc02b, 0) + struct.pack(">H", 0)
+                msg = bytes([2]) + len(body).to_bytes(3, "big") + body
+                c.sendall(bytes([22, 3, 3]) + struct.pack(">H", len(msg)) + msg)
+                self._after(c, f)
+                return
             if self.select == "unoffered":
                 # x448, ffdhe2048, secp384r1, a GREASE value: the first the client did not advertise
                 g = next(x for x in (0x001e, 0x0100, 0x0018, 0x0a0a) if x not in groups)
@@ -571,26 +691,32 @@ class HRRPeer:
                 struct.pack(">H", len(ext)) + ext
             msg = bytes([2]) + len(body).to_bytes(3, "big") + body
             c.sendall(bytes([22, 3, 3]) + struct.pack(">H", len(msg)) + msg)
-            while True:
-                r = self._record(c)
-                if r is None:
-                    f["after_hrr"] = "eof"
-                    break
-                t, b = r
-                if t == 20:
-                    continue  # the compatibility-mode ChangeCipherSpec
-                if t == 21:
-                    f["after_hrr"] = "alert:" + self.ALERTS.get(b[1], str(b[1]))
-                elif t == 22 and b[0] == 1:
-                    f["after_hrr"] = "client_hello2"
-                    f["shares2"] = self._client_hello(b[4:])[2]
-                else:
-                    f["after_hrr"] = "record:%d" % t
-                break
+            self._after(c, f)
         except (OSError, TypeError, StopIteration) as e:
             f["after_hrr"] = f["after_hrr"] or "error:%r" % e
-        c.close()
-        self.ls.close()
+        finally:
+            c.close()
+            self.ls.close()
+
+    def _after(self, c, f):
+        """What the client sends back: an alert, a second ClientHello, or nothing."""
+        while True:
+            r = self._record(c)
+            if r is None:
+                f["after_hrr"] = "eof"
+                break
+            t, b = r
+            if t == 20:
+                continue  # the compatibility-mode ChangeCipherSpec
+            if t == 21:
+                f["after_hrr"] = "alert:" + self.ALERTS.get(b[1], str(b[1]))
+                f["alert_received"] = b[1]
+            elif t == 22 and b[0] == 1:
+                f["after_hrr"] = "client_hello2"
+                f["shares2"] = self._client_hello(b[4:])[2]
+            else:
+                f["after_hrr"] = "record:%d" % t
+            break
 
     def stop(self):
         self.t.join(timeout=15)
@@ -601,13 +727,35 @@ class HRRPeer:
 
 # ---------------------------------------------------------------- cases
 
-# Known failures of the client's TLS library, recorded rather than hidden. Each applies to the named
-# library below the version given (None: every version so far). The case then passes as
-# DEVIATION or KNOWN-VULNERABLE, on its own summary line, only while the library still behaves so;
-# once a library in range gets it right the run FAILS with "remove this entry", so none outlives its cause.
+# Known failures of the client's TLS library, recorded rather than hidden. Each names the library, the
+# versions it applies to (below the given one; None: every version so far), what it is, and the exact
+# signature of the failure. The case is then printed as that kind (DEVIATION, KNOWN-VULNERABLE or XFAIL)
+# and listed on the TLS_INTEROP_RECORDED line, but only when the failure matches the signature: any
+# other failure is a FAIL. Once a library in range gets the case right, the run FAILS with "remove this
+# entry", so none outlives its cause.
+def _sig_deviation_pkcs1(res, facts):
+    return res.get("outcome") == "ECHO_OK" and res.get("echo_ok") == "1"
+
+
+def _sig_hrr_unoffered(res, facts):
+    return res.get("outcome") == "FAILED" and res.get("esp_err") == "-0x6e00" and facts.get("after_hrr") == "eof"
+
+
+def _sig_keyupdate(res, facts):
+    # Fails on the KeyUpdate; what came before arrived intact (compared byte by byte as it came, and the
+    # FAILED step's plaintext withheld, as the Ultimate does); the server did send exactly one KeyUpdate
+    return res.get("outcome") == "FAILED" and res.get("esp_err") == "-0x7700" and \
+        int(res.get("echo_received", "0")) > 0 and facts.get("keyupdates") == 1 and \
+        res.get("tickets_taken") == str(facts.get("tickets"))
+
+
+def _sig_empty4(res, facts):
+    return res.get("outcome") == "FAILED" and res.get("esp_err") == "-0x7180"
+
+
 KNOWN = {
     "tlslite/mustfail/certverify_rsa_pkcs1_sha256": (
-        "Mbed TLS", None, "DEVIATION",
+        "Mbed TLS", None, "DEVIATION", _sig_deviation_pkcs1, "the handshake and the echo succeed",
         "RFC 8446 section 4.4.3: \"RSA signatures MUST use an RSASSA-PSS algorithm, regardless of whether "
         "RSASSA-PKCS1-v1_5 algorithms appear in signature_algorithms\". mbedTLS accepts an rsa_pkcs1_sha256 "
         "CertificateVerify: library/ssl_tls13_generic.c checks only mbedtls_ssl_sig_alg_is_offered() "
@@ -615,10 +763,24 @@ KNOWN = {
         "is called on the signing side only (1063 / 1001). OpenSSL 3.6.2 s_client rejects the same server "
         "(tls12_check_peer_sigalg: wrong signature type). Low severity: the server must hold the key."),
     "raw/hrr/unoffered_group": (
-        "Mbed TLS", (3, 6, 7), "KNOWN-VULNERABLE",
+        "Mbed TLS", (3, 6, 7), "KNOWN-VULNERABLE", _sig_hrr_unoffered,
+        "FAILED -0x6e00 and the peer sees no alert (EOF)",
         "CVE-2026-25832, fixed in mbedTLS 3.6.7: a TLS 1.3 client accepts a HelloRetryRequest for a group "
         "it did not advertise. Here it then fails on its own (no key share for the group) without the "
         "illegal_parameter alert RFC 8446 section 4.1.4 requires."),
+    "gnutls/keyupdate/after1024": (
+        "Mbed TLS", (3, 6, 8), "XFAIL", _sig_keyupdate,
+        "FAILED -0x7700 after some echo, one KeyUpdate sent, every ticket taken",
+        "mbedTLS 3.6.0-3.6.7 have no KeyUpdate: ssl_tls13_handle_hs_message_post_handshake() returns "
+        "MBEDTLS_ERR_SSL_UNEXPECTED_MESSAGE for anything but a NewSessionTicket (ssl_msg.c:5594-5610 at "
+        "72aa6873, 5789-5820 at 2b96dd8e). The session fails; the bytes before the KeyUpdate that the "
+        "Ultimate took are intact, and the FAILED step's own plaintext is withheld. Gated to below 3.6.8: "
+        "a later version must be checked again."),
+    "tlslite/empty/4x/before": (
+        "Mbed TLS", None, "XFAIL", _sig_empty4, "FAILED -0x7180",
+        "mbedTLS takes at most 3 empty records in a row (ssl_msg.c:4079-4092 at 72aa6873: nb_zero > 3 is "
+        "MBEDTLS_ERR_SSL_INVALID_MAC), a limit against a flood of them. RFC 8446 section 5.1 allows empty "
+        "application data records without a number."),
 }
 
 
@@ -626,13 +788,13 @@ def known_entry(name, info):
     k = KNOWN.get(name)
     if not k:
         return None
-    lib, below, kind, text = k
+    lib, below, kind, sig, sig_text, text = k
     m = re.search(re.escape(lib) + r" (\d+)\.(\d+)\.(\d+)", info)
     if not m:
         return None
     if below and tuple(int(x) for x in m.groups()) >= below:
         return None
-    return kind, text
+    return kind, sig, sig_text, text
 
 
 class Case:
@@ -646,8 +808,14 @@ PAYLOADS = [1, 511, 512, 1024, 3000, 16500]
 CHUNKINGS = [("pt512", 512, 0), ("pt1024", 1024, 0), ("pt512-ct1", 512, 1), ("pt512-ct1500", 512, 1500)]
 TICKETS = [0, 1, 2, 8]
 
+# TLS alert descriptions (RFC 8446 section 6)
+BAD_RECORD_MAC, UNEXPECTED_MESSAGE, BAD_CERTIFICATE, CERTIFICATE_EXPIRED, CERTIFICATE_UNKNOWN = 20, 10, 42, 45, 46
+ILLEGAL_PARAMETER, UNKNOWN_CA, DECRYPT_ERROR, PROTOCOL_VERSION = 47, 48, 51, 70
 
-def matrix(suites, groups, tlslite=True):
+TWENTY_YEARS = 20 * 365 * 86400
+
+
+def matrix(suites, groups):
     cases = []
     first, second = GROUPS[groups[0]], "secp256r1"
     grouplist = [(first, 0), (second, 0 if first == second else 1)]
@@ -674,51 +842,86 @@ def matrix(suites, groups, tlslite=True):
             for n in (1, 100, 3000):
                 cases.append(Case("%s/tickets-many/tickets%d/%dB" % (srv, t, n), srv, dict(tickets=t),
                                   dict(echo=n, pt=512, ct=0), dict(ok=True, tickets=t)))
-        # A burst: every ticket (and the echo behind them) already in the socket at the first echo step
+        # A burst: the tickets already in the socket when the first write goes out
         for t in (2, 4, 5, 8):
             for n in (1, 3000):
                 cases.append(Case("%s/burst/tickets%d/%dB" % (srv, t, n), srv, dict(tickets=t),
                                   dict(echo=n, pt=512, ct=0, settle=100), dict(ok=True, tickets=t)))
         # Scripted: the echo's one write goes out with no ciphertext; 150 ms later the next read takes
         # the start of the server's flight (one byte, or with more than five tickets all but about the
-        # last five, a ticket record being about 250 bytes from both servers), and the read after it
-        # all the rest: five tickets and the echo in one step, and nothing left to send
+        # last five, a ticket record being about 234-250 bytes from both servers), and the reads after it
+        # the rest (at most a step, 1536 bytes, each): tickets and the echo together, nothing to send
         for t in (1, 2, 4, 5, 8, 10, 40):
             first = 1 if t <= 5 else (t - 5) * 250 - 50
             for n in (1, 100):
                 cases.append(Case("%s/burst-after-write/tickets%d/%dB" % (srv, t, n), srv, dict(tickets=t),
                                   dict(echo=n, pt=512, ct=0, settle=150, settle_at=1, caps="0,%d" % first),
                                   dict(ok=True, tickets=t)))
-        # Endings
+        # Endings. PEER_CLOSED is the Ultimate's own finding (its socket read 0): the engine is never told.
         cases.append(Case("%s/end/close_notify" % srv, srv, dict(tickets=2, end_after=3000, end="close"),
                           dict(echo=3000, pt=512, ct=0, after="close"), dict(ok=True, outcome="CLOSED", tickets=2)))
         cases.append(Case("%s/end/bare_tcp_close" % srv, srv, dict(tickets=2, end_after=3000, end="eof"),
                           dict(echo=3000, pt=512, ct=0, after="eof"), dict(ok=True, outcome="PEER_CLOSED", tickets=2)))
-        # Must fail: nothing may come through
-        bad = [("hostname_mismatch", dict(), dict(sni="wrong.example.net")),
-               ("untrusted_root", dict(cert="untrusted"), {}),
-               ("expired", dict(cert="expired"), {}),
-               ("not_yet_valid", dict(cert="notyet"), {}),
-               ("tls12_only", dict(tls12=True), {}),
-               ("forged_signature", dict(cert="forged"), {})]
-        bad += [("eku_client_only", dict(cert="eku_client"), {}),
-                ("ku_no_digital_signature", dict(cert="ku_no_ds"), {})]
+        # Must fail, by the client's own check: nothing may come through, the engine's error is the one
+        # that check gives, and (from s_server, which can read it) the client's alert is the one mbedTLS
+        # maps the failure to (ssl_tls13_generic.c:757-779 at 72aa6873). GnuTLS cannot read these alerts:
+        # the client sends them before its handshake keys are on (RFC 8446 appendix A.1), and gnutls-serv
+        # reports "Decryption has failed".
+        bad = [("hostname_mismatch", dict(), dict(sni="wrong.example.net"), "-0x2700", BAD_CERTIFICATE),
+               ("untrusted_root", dict(cert="untrusted"), {}, "-0x2700", UNKNOWN_CA),
+               ("expired", dict(cert="expired"), {}, "-0x2700", CERTIFICATE_EXPIRED),
+               ("not_yet_valid", dict(cert="notyet"), {}, "-0x2700", CERTIFICATE_UNKNOWN),
+               ("forged_signature", dict(cert="forged"), {}, "-0x2700", UNKNOWN_CA),
+               ("eku_client_only", dict(cert="eku_client"), {}, "-0x7a00", CERTIFICATE_UNKNOWN)]
+        if srv == "openssl":
+            bad.append(("ku_no_digital_signature", dict(cert="ku_no_ds"), {}, "-0x7a00", CERTIFICATE_UNKNOWN))
         if srv == "gnutls":
-            bad.append(("key_mismatch", dict(key="other"), {}))
-        for label, sa, ca in bad:
+            bad.append(("key_mismatch", dict(key="other"), {}, "-0x6e00", None))
+        for label, sa, ca, err, alert in bad:
             cases.append(Case("%s/mustfail/%s" % (srv, label), srv, dict(tickets=2, **sa), dict(echo=3000, **ca),
-                              dict(ok=False)))
-    # KeyUpdate from the server, mid-stream (GnuTLS; s_server -quiet cannot be told to)
+                              dict(ok=False, err=err, alert=alert if srv == "openssl" else None)))
+        # The device's clock (the Ultimate's unix_time, through the engine's settimeofday) is what the
+        # certificates are checked against: 20 years ahead, the good chain has expired
+        cases.append(Case("%s/clock/ahead_20_years" % srv, srv, dict(tickets=2),
+                          dict(echo=100, clock="+%d" % TWENTY_YEARS),
+                          dict(ok=False, err="-0x2700", alert=CERTIFICATE_EXPIRED if srv == "openssl" else None)))
+        # Refused by the SERVER, not by the client's check: the client only reads the server's alert.
+        # (TLS 1.2 is not even compiled into the client; raw/tls12_serverhello tests the client's side.)
+        refused = [("tls12_only", dict(tls12=True))]
+        if srv == "gnutls":
+            refused.append(("ku_no_digital_signature", dict(cert="ku_no_ds")))  # gnutls-serv will not use it
+        for label, sa in refused:
+            cases.append(Case("%s/server-refuses/%s" % (srv, label), srv, dict(tickets=2, **sa), dict(echo=3000),
+                              dict(ok=False, err="-0x7780", refused=True)))
+    # No clock at all: OPEN refuses to verify (reason NO_TIME), before any byte goes out
+    cases.append(Case("openssl/clock/none", "openssl", dict(tickets=2), dict(echo=100, clock="none"),
+                      dict(ok=False, open_refused=True)))
+    # KeyUpdate from the server, mid-stream (GnuTLS; s_server -quiet cannot be told to). A positive case:
+    # a client that implements KeyUpdate passes it; mbedTLS 3.6 is an XFAIL in KNOWN.
     cases.append(Case("gnutls/keyupdate/after1024", "gnutls", dict(tickets=2, keyupdate_after=1024),
-                      dict(echo=3000, pt=512, ct=0), dict(ok=True, keyupdate=True, tickets=2)))
+                      dict(echo=3000, pt=512, ct=0), dict(ok=True, tickets=2, keyupdates=1)))
     # Tampering on the wire, by the server's record number: 0 ServerHello, 1 ChangeCipherSpec, then the
-    # encrypted EncryptedExtensions 2, Certificate 3, CertificateVerify 4, Finished 5 (s_server sends
-    # one record per message, as its -trace shows)
-    for label, mode, idx in (("serverhello_flip", "flip", 0), ("serverhello_shortened", "shorten", 0),
-                             ("serverhello_truncated", "truncate", 0), ("certificate_flip", "flip", 3),
-                             ("certverify_flip", "flip", 4), ("finished_flip", "flip", 5)):
+    # encrypted EncryptedExtensions 2, Certificate 3, CertificateVerify 4, Finished 5 (s_server sends one
+    # record per message, as its -trace shows). A flip inside an encrypted record tests the record
+    # protection (bad_record_mac), not the message in it: tlslite/mustfail/* break the messages themselves.
+    for label, mode, idx, err, alert in (
+            ("serverhello_flip", "flip", 0, "-0x6600", ILLEGAL_PARAMETER),
+            ("serverhello_shortened", "shorten", 0, "-0x7080", None),
+            ("record_flip_certificate", "flip", 3, "-0x7180", BAD_RECORD_MAC),
+            ("record_flip_certificateverify", "flip", 4, "-0x7180", BAD_RECORD_MAC),
+            ("record_flip_finished", "flip", 5, "-0x7180", BAD_RECORD_MAC)):
         cases.append(Case("openssl/tamper/%s" % label, "openssl", dict(tickets=2), dict(echo=3000),
-                          dict(ok=False), proxy=(mode, idx)))
+                          dict(ok=False, err=err, alert=alert), proxy=(mode, idx)))
+    # Cut off inside the ServerHello: the Ultimate sees the TCP close (PEER_CLOSED); the engine is not told
+    cases.append(Case("openssl/tamper/serverhello_truncated", "openssl", dict(tickets=2), dict(echo=3000),
+                      dict(ok=False, peer_closed=True), proxy=("truncate", 0)))
+    # A record of echo data damaged late in a long echo, when steps are full of plaintext: the session
+    # must fail with bad_record_mac, and that alert must still reach the server (TLS_ALERT_ROOM). What
+    # came before is intact; the failing step's plaintext is withheld.
+    for idx in (14, 20, 26):
+        cases.append(Case("openssl/tamper-late/appdata_flip_record%d" % idx, "openssl", dict(tickets=2),
+                          dict(echo=16500, pt=512, ct=0),
+                          dict(ok=False, late=True, err="-0x7180", alert=BAD_RECORD_MAC), proxy=("flip", idx)))
     # HelloRetryRequest from a raw peer (RFC 8446 section 4.1.4): a group the client did not advertise
     # (CVE-2026-25832, fixed in mbedTLS 3.6.7), or the group of the key share it already sent, must be
     # answered with an illegal_parameter alert; an advertised group with a second ClientHello
@@ -727,13 +930,23 @@ def matrix(suites, groups, tlslite=True):
                           dict(ok=False, after_hrr="alert:illegal_parameter")))
     cases.append(Case("raw/hrr/advertised_group", "hrr", dict(select="offered"), dict(echo=100),
                       dict(hrr_accept=True)))
-    if not tlslite:
-        return cases
+    # A TLS 1.2 ServerHello to the TLS 1.3-only client: the client itself must refuse it with an alert
+    cases.append(Case("raw/tls12_serverhello", "hrr", dict(select="tls12"), dict(echo=100),
+                      dict(ok=False, after_hrr="alert:*")))
     # tlslite-ng: a third implementation, first as it is, then broken in one place each
     for cert in ("leaf_ec", "leaf_rsa"):
         for t, n, pt, ct in ((2, 3000, 512, 0), (2, 16500, 512, 0), (0, 1, 512, 1), (1, 1024, 1024, 0)):
             cases.append(Case("tlslite/echo/%s/tickets%d/%dB/pt%d-ct%d" % (cert[5:], t, n, pt, ct), "tlslite",
-                              dict(cert=cert, tickets=t), dict(echo=n, pt=pt, ct=ct), dict(ok=True)))
+                              dict(cert=cert, tickets=t), dict(echo=n, pt=pt, ct=ct), dict(ok=True, tickets=t)))
+    # Empty application data records (RFC 8446 section 5.1), 1 to 4 in a row, before or after each piece
+    # of the echo: data before them and after them must arrive, and the session stay open
+    for k in (1, 2, 3, 4):
+        for where in ("before", "after"):
+            if k == 4 and where == "after":
+                continue
+            cases.append(Case("tlslite/empty/%dx/%s" % (k, where), "tlslite",
+                              dict(tickets=2, empty=k, empty_where=where), dict(echo=3000, pt=512, ct=0),
+                              dict(ok=True, tickets=2)))
     # The server's Finished MAC is wrong; its CertificateVerify is signed over the client's context string,
     # or with a scheme the client did not offer; or with RSASSA-PKCS1-v1_5, which the client offers for
     # certificates only (RFC 8446 section 4.4.3: "RSA signatures MUST use an RSASSA-PSS algorithm")
@@ -743,7 +956,7 @@ def matrix(suites, groups, tlslite=True):
                              ("certverify_not_offered_rsa_pkcs1_sha1", "leaf_rsa", "cv-scheme:rsa_pkcs1_sha1"),
                              ("certverify_rsa_pkcs1_sha256", "leaf_rsa", "cv-scheme:rsa_pkcs1_sha256")):
         cases.append(Case("tlslite/mustfail/%s" % label, "tlslite", dict(cert=cert, brk=brk), dict(echo=100),
-                          dict(ok=False)))
+                          dict(ok=False, err="-0x6e00", alert=DECRYPT_ERROR)))
     return cases
 
 
@@ -770,12 +983,17 @@ def run_case(c, a, out, info=""):
     cmd = [a.client, "--port", str(port), "--sni", p.get("sni", "localhost"), "--echo", str(p.get("echo", 0)),
            "--pt-chunk", str(p.get("pt", 512)), "--ct-chunk", str(p.get("ct", 0)), "--after", p.get("after", "none"),
            "--seed", str(seed), "--settle-ms", str(p.get("settle", 0)), "--settle-at", str(p.get("settle_at", 0))]
-    cmd += (["--ct-caps", p["caps"]] if "caps" in p else []) + (a.client_arg or [])
+    cmd += (["--ct-caps", p["caps"]] if "caps" in p else [])
+    cmd += (["--clock-offset", p["clock"]] if "clock" in p else []) + (a.client_arg or [])
+    proc = track(subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True), "client " + base)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        out_, err, rc = r.stdout, r.stderr, r.returncode
-    except subprocess.TimeoutExpired as e:
-        out_, err, rc = (e.stdout or b"").decode(), (e.stderr or b"").decode(), -1
+        out_, err = proc.communicate(timeout=60)
+        rc = proc.returncode
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out_, err = proc.communicate()
+        rc = -1
+    untrack(proc)
     facts = srv.stop()
     with open(os.path.join(out, base + ".client.log"), "w") as f:
         f.write(" ".join(cmd) + "\n" + out_ + err)
@@ -783,32 +1001,55 @@ def run_case(c, a, out, info=""):
     for ln in out_.splitlines():
         if ln.startswith("RESULT "):
             res = dict(re.findall(r"(\w+)=(\S*)", ln))
-    verdict, detail = judge(c, res, facts, err, rc, proxy, seed)
+    verdict, detail, generic_clean = judge(c, res, facts, err, rc, proxy, seed)
     known = known_entry(c.name, info)
-    if known and verdict == "FAIL" and "sanitizer" not in detail:
-        return known[0], detail + " || " + known[1]
-    if known and verdict != "FAIL":
-        return "FAIL", detail + " || the library now gets this right: remove this %s entry from KNOWN" % known[0]
-    return verdict, detail
+    if not known:
+        return verdict, detail
+    kind, sig, sig_text, text = known
+    if verdict != "FAIL":
+        return "FAIL", detail + " || the library now gets this right: remove this %s entry from KNOWN" % kind
+    if generic_clean and sig(res, facts):
+        return kind, detail + " || " + text
+    return "FAIL", detail + " || not the recorded %s failure (%s)" % (kind, sig_text)
 
 
 def judge(c, res, facts, err, rc, proxy, seed):
     why = []
-    xfail = ""
     e = c.expect
     if rc != 0 or "Sanitizer" in err or "runtime error" in err:
         why.append("client exit %d / sanitizer: %s" % (rc, err.strip().splitlines()[-1:] or ""))
     if not res:
         why.append("no RESULT line")
-        return "FAIL", "; ".join(why)
+        return "FAIL", "; ".join(why), False
     outcome = res.get("outcome")
     echo = c.client.get("echo", 0)
     detail = "outcome=%s esp_err=%s pt_delivered=%s echo_received=%s steps=%s tickets_taken=%s" % (
         outcome, res.get("esp_err"), res.get("pt_delivered"), res.get("echo_received"), res.get("steps"),
         res.get("tickets_taken", "-"))
+    if facts.get("alert_received") is not None:
+        detail += " alert=%d" % facts["alert_received"]
+
+    # Checks for every case, where the client or the server reports the fact. A failure here is never
+    # excused by a KNOWN entry.
+    if res.get("leaked", "0") not in ("0",):
+        why.append("the client left %s allocations after the session was closed" % res["leaked"])
+    if res.get("clock_ok") == "0":
+        why.append("the module's clock is not the unix_time the Ultimate sent")
+    want_sni = c.client.get("sni", "localhost")
+    # (A server that refuses early, gnutls-serv on its own certificate, may not have stored the name)
+    if "sni" in facts and facts["sni"] != want_sni and not e.get("open_refused") and not e.get("refused"):
+        why.append("server_name at the server %r, want %r" % (facts["sni"], want_sni))
+    if facts.get("sha256") and isinstance(facts.get("received", facts.get("relayed")), int):
+        got = facts.get("relayed") if facts.get("server") == "openssl" else facts.get("received")
+        if hashlib.sha256(payload(seed, got)).hexdigest() != facts["sha256"]:
+            why.append("the %d bytes the server received are not the payload's first %d" % (got, got))
+    if outcome == "FAILED" and res.get("esp_err") == "-0x7780" and e.get("err") != "-0x7780":
+        why.append("the client failed on the SERVER's alert (-0x7780): nothing of the client was tested")
+    generic_clean = not why
+
     if c.server == "hrr":
-        detail += " server: advertised %s, HRR selected %s, then %s" % (
-            [hex(g) for g in facts.get("advertised", [])], hex(facts.get("selected", 0)), facts.get("after_hrr"))
+        detail += " server: advertised %s, selected %s, then %s" % (
+            [hex(g) for g in facts.get("advertised", [])], hex(facts.get("selected") or 0), facts.get("after_hrr"))
         if res.get("pt_delivered") != "0":
             why.append("plaintext delivered")
         if e.get("hrr_accept"):
@@ -817,32 +1058,26 @@ def judge(c, res, facts, err, rc, proxy, seed):
         else:
             if outcome != "FAILED":
                 why.append("outcome %s, want FAILED" % outcome)
-            if facts.get("after_hrr") != e["after_hrr"]:
-                why.append("server saw %s after its HRR, want %s" % (facts.get("after_hrr"), e["after_hrr"]))
+            want = e["after_hrr"]
+            if not (facts.get("after_hrr") == want or (want == "alert:*" and
+                                                       str(facts.get("after_hrr")).startswith("alert:"))):
+                why.append("server saw %s after its message, want %s" % (facts.get("after_hrr"), want))
+    elif e.get("open_refused"):
+        if outcome != "OPEN_FAILED" or res.get("esp_err") != "0x0103":
+            why.append("outcome %s %s, want OPEN_FAILED 0x0103 (reason NO_TIME)" % (outcome, res.get("esp_err")))
     elif e.get("ok", True):
         want = e.get("outcome", "ECHO_OK")
-        if e.get("keyupdate") and outcome == "FAILED" and res.get("esp_err") == "-0x7700":
-            # mbedTLS 3.6 has no KeyUpdate (ssl_msg.c, "Fail in all other cases"): acceptable only as a
-            # clean failure with every byte before it intact
-            xfail = "mbedTLS 3.6 does not implement KeyUpdate (-0x7700 UNEXPECTED_MESSAGE)"
-            if int(res.get("echo_received", -1)) < 1024:
-                why.append("bytes before the KeyUpdate lost")
-        else:
-            if outcome != want:
-                why.append("outcome %s, want %s" % (outcome, want))
-            if res.get("echo_ok") != "1" or res.get("echo_received") != str(echo):
-                why.append("echo not intact")
-        if e.get("keyupdate") and facts.get("keyupdates") != 1:
-            why.append("server sent %s KeyUpdates" % facts.get("keyupdates"))
+        if outcome != want:
+            why.append("outcome %s, want %s" % (outcome, want))
+        if res.get("echo_ok") != "1" or res.get("echo_received") != str(echo):
+            why.append("echo not intact")
         # A killed s_server loses the end of its trace: then the echo it relayed is the witness
         killed = c.server == "openssl" and c.sargs.get("end") == "eof"
         if not facts.get("handshake_done") and not killed:
             why.append("server saw no completed handshake")
-        if not xfail and not e.get("keyupdate"):
-            want_hash = hashlib.sha256(payload(seed, echo)).hexdigest()
-            if facts.get("relayed") != echo or facts.get("sha256") != want_hash:
-                why.append("server echoed %s bytes, sha256 %s, want %d with %s" % (
-                    facts.get("relayed"), (facts.get("sha256") or "")[:16], echo, want_hash[:16]))
+        got = facts.get("relayed") if facts.get("server") == "openssl" else facts.get("received")
+        if outcome == want and got != echo:
+            why.append("server received %s of the %d bytes" % (got, echo))
         if c.server == "openssl" and not killed:
             if facts.get("version") != 0x0304:
                 why.append("server version %s" % facts.get("version"))
@@ -859,29 +1094,51 @@ def judge(c, res, facts, err, rc, proxy, seed):
                 why.append("server chose group %s" % facts.get("group"))
         if "hrr" in e and facts.get("hrr") != e["hrr"]:
             why.append("server HRR %s, want %s" % (facts.get("hrr"), e["hrr"]))
+        if "keyupdates" in e and facts.get("keyupdates") != e["keyupdates"]:
+            why.append("server sent %s KeyUpdates" % facts.get("keyupdates"))
         if "tickets" in e and not killed and facts.get("tickets") != e["tickets"]:
             why.append("server sent %s tickets, want %s" % (facts.get("tickets"), e["tickets"]))
         # The client's own count, where it reports one: every ticket the server sent was taken and kept,
         # not dropped (mbedTLS 3.6.1+ drops them unless signalling is on), so the ticket paths ran
-        if "tickets_taken" in res and not killed and not xfail and isinstance(facts.get("tickets"), int) and \
-                res["tickets_taken"] != str(facts["tickets"]):
+        if "tickets_taken" in res and not killed and outcome == want and isinstance(facts.get("tickets"), int) \
+                and res["tickets_taken"] != str(facts["tickets"]):
             why.append("client took %s of the %s tickets the server sent" % (res["tickets_taken"], facts["tickets"]))
     else:
-        if outcome not in ("FAILED", "PEER_CLOSED"):
+        if e.get("peer_closed"):
+            if outcome != "PEER_CLOSED" or res.get("state") != "0":
+                why.append("outcome %s state %s, want PEER_CLOSED while handshaking" % (outcome, res.get("state")))
+        elif outcome != "FAILED":
             why.append("outcome %s, want FAILED" % outcome)
-        if outcome == "PEER_CLOSED" and not (proxy and proxy.mode == "truncate"):
-            why.append("ended by the server, not by the client")
-        if res.get("pt_delivered") != "0" or res.get("echo_sent") != "0":
-            why.append("plaintext moved: delivered %s, sent %s" % (res.get("pt_delivered"), res.get("echo_sent")))
-        if facts.get("relayed", 0) or facts.get("received", 0):
-            why.append("server received application data")
+        if e.get("err") and outcome == "FAILED" and res.get("esp_err") != e["err"]:
+            why.append("esp_err %s, want %s" % (res.get("esp_err"), e["err"]))
+        if e.get("alert") is not None and facts.get("alert_received") != e["alert"]:
+            why.append("the server received alert %s, want %d" % (facts.get("alert_received"), e["alert"]))
+        if e.get("late"):
+            # Data before the damage arrived intact (compared as it came); the failure came after some
+            if int(res.get("echo_received", "0")) <= 0:
+                why.append("nothing arrived before the damaged record")
+        else:
+            if res.get("pt_delivered") != "0" or res.get("echo_sent") != "0":
+                why.append("plaintext moved: delivered %s, sent %s" % (res.get("pt_delivered"),
+                                                                       res.get("echo_sent")))
+            if facts.get("relayed", 0) or facts.get("received", 0):
+                why.append("server received application data")
         if proxy and not proxy.done:
             why.append("proxy never tampered")
     if proxy:
         detail += " proxy: " + proxy.done
     if why:
-        return "FAIL", detail + " || " + "; ".join(why)
-    return ("XFAIL", detail + " || " + xfail) if xfail else ("PASS", detail)
+        return "FAIL", detail + " || " + "; ".join(why), generic_clean
+    return "PASS", detail, generic_clean
+
+
+def peer_versions(a):
+    v = {}
+    v["openssl"] = subprocess.run([a.openssl, "version"], capture_output=True, text=True).stdout.strip()
+    v["gnutls"] = subprocess.run([a.gnutls, "--version"], capture_output=True, text=True).stdout.strip()
+    v["tlslite"] = subprocess.run([a.tlslite_python, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "tlslite_echo.py"), "--version"], capture_output=True, text=True).stdout.strip()
+    return v
 
 
 def main():
@@ -891,46 +1148,69 @@ def main():
     ap.add_argument("--pki", required=True)
     ap.add_argument("--client")
     ap.add_argument("--gnutls")
+    ap.add_argument("--tlslite-python", help="a python with tlslite-ng (requirements-tlslite.txt)")
     ap.add_argument("--out")
     ap.add_argument("--only")
     ap.add_argument("--client-arg", action="append", help="passed to the client as it is (repeatable)")
-    ap.add_argument("--tlslite-python", help="a python with tlslite-ng, for the tlslite/ cases")
+    ap.add_argument("--peers", help="the peer versions the matrix was made with (KEY=VALUE lines)")
+    ap.add_argument("--allow-peer-drift", action="store_true", help="run although a peer's version differs")
     ap.add_argument("--label", default="", help="what was built: printed with the summary line")
     a = ap.parse_args()
     if a.what == "pki":
         make_pki(a.openssl, a.pki)
         return 0
+    if not (a.client and a.gnutls and a.tlslite_python and a.out):
+        ap.error("run needs --client, --gnutls, --tlslite-python and --out")
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGHUP, on_signal)
     os.makedirs(a.out, exist_ok=True)
+    PIDS_FILE.append(os.path.join(a.out, "pids.txt"))
     suites, groups, info = client_offer(a.client)
-    ver_o = subprocess.run([a.openssl, "version"], capture_output=True, text=True).stdout.strip()
-    ver_g = subprocess.run(["pkg-config", "--modversion", "gnutls"], capture_output=True, text=True).stdout.strip()
-    ver_t = "not run (no --tlslite-python)"
-    if a.tlslite_python:
-        ver_t = subprocess.run([a.tlslite_python, "-c", "import tlslite, ecdsa; print('tlslite-ng', tlslite.__version__, "
-                                "'ecdsa', ecdsa.__version__)"], capture_output=True, text=True).stdout.strip()
-    print("PEERS openssl: %s | gnutls: %s | %s | raw HRR peer: interop.py" % (ver_o, ver_g, ver_t))
+    versions = peer_versions(a)
+    print("PEERS openssl: %s | gnutls: %s | %s | raw peer: interop.py" % (
+        versions["openssl"], versions["gnutls"], versions["tlslite"]))
+    drift = []
+    if a.peers:
+        for ln in open(a.peers):
+            ln = ln.split("#", 1)[0].strip()
+            if "=" in ln:
+                k, v = ln.split("=", 1)
+                if versions.get(k.strip()) != v.strip():
+                    drift.append("%s is %r, PEERS says %r" % (k.strip(), versions.get(k.strip()), v.strip()))
+    for d in drift:
+        print("PEER_DRIFT %s" % d)
+    if drift and not a.allow_peer_drift:
+        print("TLS_INTEROP FAIL 0/0 (a peer differs from %s; PEER_DRIFT=1 runs anyway)" % a.peers)
+        return 2
     print("CLIENT %s %s: %s" % (a.client, " ".join(a.client_arg or []), info))
     print("CLIENT offers suites %s; groups %s" % (
         ", ".join(SUITES.get(x, hex(x)) for x in suites), ", ".join(GROUPS.get(g, hex(g)) for g in groups)))
-    cases = matrix(suites, groups, tlslite=bool(a.tlslite_python))
+    cases = matrix(suites, groups)
     if a.only:
         cases = [c for c in cases if re.search(a.only, c.name)]
+    if not cases:
+        print("TLS_INTEROP FAIL 0/0 (no case matches --only %r)" % a.only)
+        return 2
     counts = {"PASS": 0, "XFAIL": 0, "DEVIATION": 0, "KNOWN-VULNERABLE": 0, "FAIL": 0}
     recorded = []
     t0 = time.time()
-    for c in cases:
-        verdict, detail = run_case(c, a, a.out, info)
-        counts[verdict] += 1
-        if verdict in ("DEVIATION", "KNOWN-VULNERABLE"):
-            recorded.append("%s %s" % (verdict, c.name))
-        print("%s %s %s" % (verdict, c.name, detail), flush=True)
+    try:
+        for c in cases:
+            verdict, detail = run_case(c, a, a.out, info)
+            counts[verdict] += 1
+            if verdict in ("DEVIATION", "KNOWN-VULNERABLE", "XFAIL"):
+                recorded.append("%s %s" % (verdict, c.name))
+            print("%s %s %s" % (verdict, c.name, detail), flush=True)
+    finally:
+        reap()
+        write_pids()
     good = len(cases) - counts["FAIL"]
-    print("elapsed %.1f s; %d PASS, %d XFAIL (documented library limits), %d FAIL" % (
-        time.time() - t0, counts["PASS"], counts["XFAIL"], counts["FAIL"]))
-    print("TLS_INTEROP_RECORDED %d deviation(s), %d known-vulnerable: %s" % (
-        counts["DEVIATION"], counts["KNOWN-VULNERABLE"], "; ".join(recorded) or "none"))
-    print("TLS_INTEROP %s %d/%d (%s)" % ("PASS" if good == len(cases) and cases else "FAIL", good, len(cases),
-                                       a.label or info))
+    print("elapsed %.1f s; %d PASS, %d FAIL" % (time.time() - t0, counts["PASS"], counts["FAIL"]))
+    print("TLS_INTEROP_RECORDED %d xfail, %d deviation, %d known-vulnerable: %s" % (
+        counts["XFAIL"], counts["DEVIATION"], counts["KNOWN-VULNERABLE"], "; ".join(recorded) or "none"))
+    print("TLS_INTEROP %s %d/%d (%s%s)" % ("PASS" if good == len(cases) else "FAIL", good, len(cases),
+                                         a.label or info, "; PEER DRIFT ALLOWED" if drift else ""))
     return 0 if good == len(cases) else 1
 
 
