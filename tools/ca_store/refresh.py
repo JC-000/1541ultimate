@@ -12,8 +12,7 @@ curl.se publishes the file and its sum from the same server, so the sum proves o
 download is whole. The second copy is made from certdata.txt on Firefox's release branch (the
 revision whose sha256 curl's header names) with curl's own mk-ca-bundle.pl, pinned by commit and
 sha256, and curl's file is taken only if the two are the same byte for byte. That revision must
-also be the newest certdata.txt on the branch, or at most GRACE old behind it (curl's own lag),
-and a descendant of the committed CA_CERTDATA_REF, so a server serving an older conversion under
+also be the newest certdata.txt on the branch (see GRACE), and a descendant of the committed CA_CERTDATA_REF, so a server serving an older conversion under
 a new date is refused too. Changing the store then takes both curl.se and GitHub.
 
 Needs Perl for mk-ca-bundle.pl, and the network; nothing else beyond the standard library.
@@ -47,8 +46,12 @@ CERTDATA_REPO = "mozilla-firefox/firefox"
 CERTDATA_BRANCH = "release"
 CERTDATA_PATH = "security/nss/lib/ckfw/builtins/certdata.txt"
 CERTDATA_COMMITS = 10
-# How long curl may lag behind a newer certdata.txt on the release branch before its file counts
-# as an old one served as new.
+# When curl's file matches an older certdata.txt than the newest on the release branch: how old
+# (by its commit date) that newest revision may be for curl's file still to be taken. Mozilla's
+# changes reach `release` weeks after they are committed, and curl has shipped each 17 to 36
+# days after its commit date, so in practice a newer revision is already older than this when
+# it arrives, and only the newest revision is ever taken. That refuses every rollback; the cost
+# is a red run when `release` moves between curl's daily run and ours, healed the next week.
 GRACE = datetime.timedelta(days=14)
 MK_CA_BUNDLE_COMMIT = "d48f2f4ec867783e611beeb2ad53fbabcb94aa6f"
 MK_CA_BUNDLE_SHA256 = "8e278f4982210b37e4f9a048bd6ed23df41e4a054085bd73f8242628f03d09ca"
@@ -152,7 +155,7 @@ def fetch_json(url):
 def find_certdata(wanted, now):
     """(CA_CERTDATA_REF, contents, commit date) of the certdata.txt revision on Firefox's
     release branch whose sha256 is the one curl's file names. It must be the newest revision,
-    or the newest must be less than GRACE old."""
+    or the newest must have been committed less than GRACE ago."""
     url = API_URL % (CERTDATA_REPO, CERTDATA_BRANCH, CERTDATA_PATH, CERTDATA_COMMITS)
     try:
         commits = [(c["sha"], c["commit"]["committer"]["date"]) for c in fetch_json(url)]
@@ -167,10 +170,11 @@ def find_certdata(wanted, now):
             since = now - datetime.datetime.strptime(newest_date, ca_store.ISO_FORMAT)
             if since > GRACE:
                 raise StoreError(
-                    "curl's file is certdata.txt from %s (%s), but %s@%s changed it again on %s, "
-                    "%d days ago: curl is behind Mozilla by more than %d days, or this is an old "
-                    "file served as new" % (commit[:12], date, CERTDATA_REPO, newest[:12],
-                                            newest_date, since.days, GRACE.days))
+                    "curl's file is certdata.txt from %s (committed %s), but the release branch "
+                    "now carries a newer one, %s@%s, committed %s (%d days ago). Either the "
+                    "branch moved after curl's last daily run, which the next run heals once "
+                    "curl publishes it, or this is an old file served as new"
+                    % (commit[:12], date, CERTDATA_REPO, newest[:12], newest_date, since.days))
         return "%s@%s" % (CERTDATA_REPO, commit), data, date
     raise StoreError("none of the last %d revisions of %s in %s is the certdata.txt curl's file "
                      "names (sha256 %s)" % (len(commits), CERTDATA_PATH, CERTDATA_REPO, wanted))
@@ -185,6 +189,8 @@ def descends(old_ref, new_ref):
     if old_repo != new_repo:
         return False
     result = fetch_json(COMPARE_URL % (new_repo, old, new))
+    if not isinstance(result, dict):
+        raise StoreError("GitHub's compare of %s...%s did not return an object" % (old, new))
     return result.get("status") == "ahead" and result.get("behind_by") == 0
 
 
@@ -255,7 +261,8 @@ def refresh(repo_root, source=None, summary=None, now=None, regenerate=regenerat
                          % (url, ref, MK_CA_BUNDLE_COMMIT, detail))
     if not descends(pins["CA_CERTDATA_REF"], ref):
         raise StoreError("%s comes from %s, which is not the committed %s or a later commit on "
-                         "top of it: an older certdata.txt under a newer date"
+                         "top of it: an older certdata.txt under a newer date, or the branch's "
+                         "history was rewritten (then move CA_CERTDATA_REF by hand after a look)"
                          % (url, ref, pins["CA_CERTDATA_REF"]))
 
     old_text = pem_path.read_text() if pem_path.exists() else ""

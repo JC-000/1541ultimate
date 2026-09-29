@@ -372,7 +372,7 @@ class FindCertdataTest(unittest.TestCase):
                                               datetime.datetime(2026, 10, 4))
         self.assertTrue(ref.endswith("b" * 40))
         with self.serve(commits, blobs):
-            with self.assertRaisesRegex(ca_store.StoreError, "behind Mozilla by more than 14"):
+            with self.assertRaisesRegex(ca_store.StoreError, "now carries a newer one"):
                 refresh.find_certdata(hashlib.sha256(old).hexdigest(),
                                       datetime.datetime(2026, 10, 4, 0, 0, 1))
 
@@ -389,6 +389,9 @@ class FindCertdataTest(unittest.TestCase):
             with mock.patch.object(refresh, "fetch_json", lambda url: answer) as _:
                 self.assertEqual(refresh.descends(OLD_REF, NEW_REF), expected, name)
         self.assertTrue(refresh.descends(OLD_REF, OLD_REF))
+        with mock.patch.object(refresh, "fetch_json", lambda url: []):
+            with self.assertRaisesRegex(ca_store.StoreError, "did not return an object"):
+                refresh.descends(OLD_REF, NEW_REF)
         self.assertFalse(refresh.descends(OLD_REF, "someone/firefox@" + "2" * 40))
 
 

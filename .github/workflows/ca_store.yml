@@ -9,10 +9,11 @@
 # Two jobs: `refresh` does all the fetching and checking with a read-only token and hands a
 # patch on; `pull-request` only applies it and runs git and gh. It never force-pushes. Each
 # Mozilla date gets its own branch, ca-store/refresh-<date>, and one pull request. A branch
-# that has had a pull request is left alone, so a maintainer's commits on it are never
-# overwritten; a branch the bot pushed but could not open a pull request for (the setting
-# below was off, or GitHub failed) gets its pull request on the next run. A newer pull request
-# closes the older ones with a comment and leaves their branches in place.
+# that has had a pull request from this repository is left alone, so a maintainer's commits on
+# it are never overwritten; a branch the bot pushed but could not open a pull request for (the
+# setting below was off, or GitHub failed) gets its pull request on the next run, if it holds
+# exactly what that run's refresh produced. Pull requests from forks are never counted or
+# closed. A newer pull request closes the older ones with a comment and leaves their branches.
 #
 # A pull request opened with GITHUB_TOKEN does not start the Build workflow, so the firmware
 # is built when a maintainer pushes to the branch or merges it.
@@ -108,31 +109,44 @@ jobs:
         run: |
           branch="ca-store/refresh-${DATE//:/}"
           bot="41898282+github-actions[bot]@users.noreply.github.com"
+          patch="$RUNNER_TEMP/ca-store/ca-store.patch"
           gh auth setup-git
-          if [ -n "$(gh pr list --head "$branch" --state all --json number --jq '.[]')" ]; then
+          # Pull requests from this repository only: `gh pr list --head` matches the branch name
+          # alone, so without the filter anyone could silence a date, or have the bot close their
+          # pull request, from a fork with a branch of the same name.
+          ours='.[] | select(.isCrossRepository | not)
+                    | select(.headRepositoryOwner.login == env.GITHUB_REPOSITORY_OWNER)'
+          fields=number,headRefName,isCrossRepository,headRepositoryOwner
+          if [ -n "$(gh pr list --head "$branch" --state all --json "$fields" --jq "$ours | .number")" ]; then
             echo "$branch has had a pull request already; leaving it alone"
             exit 0
           fi
+          adopt=
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            # Pushed by an earlier run that could not open the pull request.
+            # Pushed by an earlier run that could not open the pull request. It is taken only if
+            # it holds exactly what this run's refresh produced, checked below.
             git fetch -q origin "$branch"
-            authors=$(git log --format=%ae HEAD..FETCH_HEAD | sort -u)
-            if [ "$authors" != "$bot" ]; then
-              echo "::error::$branch exists with commits not made by this workflow and no pull request"
+            adopt=$(git rev-parse FETCH_HEAD)
+            git switch -q --detach "$(git merge-base HEAD FETCH_HEAD)"
+          else
+            git switch -c "$branch"
+          fi
+          git apply --index "$patch"
+          # Only what refresh.py writes; anything else in the patch is refused.
+          unexpected=$(git diff --cached --name-only | grep -vxE \
+            'software/wifi/ca_store/(cacert\.pem|CA_PINS)|software/[a-z0-9_/]+/main/rpc_dispatch\.h' || true)
+          if [ -n "$unexpected" ]; then
+            echo "::error::the patch touches files refresh.py never writes: $unexpected"
+            exit 1
+          fi
+          if [ -n "$adopt" ]; then
+            if ! git diff --cached --quiet "$adopt"; then
+              echo "::error::$branch exists without a pull request, and differs from what this run's refresh produced"
               exit 1
             fi
           else
             git config user.name "github-actions[bot]"
             git config user.email "$bot"
-            git switch -c "$branch"
-            git apply --index "$RUNNER_TEMP/ca-store/ca-store.patch"
-            # Only what refresh.py writes; anything else in the patch is refused.
-            unexpected=$(git diff --cached --name-only | grep -vxE \
-              'software/wifi/ca_store/(cacert\.pem|CA_PINS)|software/[a-z0-9_/]+/main/rpc_dispatch\.h' || true)
-            if [ -n "$unexpected" ]; then
-              echo "::error::the patch touches files refresh.py never writes: $unexpected"
-              exit 1
-            fi
             { echo "Update the Mozilla root store to $DATE"; echo; cat "$RUNNER_TEMP/ca-store/summary.md"; } \
               >"$RUNNER_TEMP/message"
             git commit -q -F "$RUNNER_TEMP/message"
@@ -145,8 +159,8 @@ jobs:
           url=$(gh pr create --base "$base" --head "$branch" \
             --title "Update the Mozilla root store to $DATE" \
             --body-file "$RUNNER_TEMP/ca-store/summary.md")
-          gh pr list --state open --json number,headRefName \
-            --jq ".[] | select(.headRefName | startswith(\"ca-store/refresh-\")) | select(.headRefName != \"$branch\") | .number" |
+          gh pr list --state open --json "$fields" \
+            --jq "$ours | select(.headRefName | startswith(\"ca-store/refresh-\")) | select(.headRefName != \"$branch\") | .number" |
             while read -r stale; do
               gh pr close "$stale" --comment "Superseded by $url."
             done
