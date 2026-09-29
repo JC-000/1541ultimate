@@ -363,7 +363,8 @@ static int offer(void)
     return 0;
 }
 
-// What a certificate chain may use: the profile ssl_config_defaults() sets (PRESET_DEFAULT)
+// What a certificate chain may use: the profile ssl_config_defaults() sets (PRESET_DEFAULT), as
+// far as this build has the algorithms (mbedTLS 3.6.7 added SHA-3 to the profile)
 static int profile(void)
 {
     static const struct {
@@ -376,7 +377,8 @@ static int profile(void)
                 { "ripemd160", MBEDTLS_MD_RIPEMD160 } };
     const mbedtls_x509_crt_profile *p = &mbedtls_x509_crt_profile_default;
     for (size_t i = 0; i < sizeof(mds) / sizeof(mds[0]); i++) {
-        if (p->allowed_mds & MBEDTLS_X509_ID_FLAG(mds[i].md)) {
+        // A hash the profile allows but this build does not have cannot be used in a chain
+        if ((p->allowed_mds & MBEDTLS_X509_ID_FLAG(mds[i].md)) && mbedtls_md_info_from_type(mds[i].md)) {
             printf("md %s\n", mds[i].name);
         }
     }

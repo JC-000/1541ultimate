@@ -1,5 +1,6 @@
 /* Stand-in for ESP-IDF's esp_err.h, for the host build of esp_crt_bundle.c (limbo.c) */
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 typedef int esp_err_t;
