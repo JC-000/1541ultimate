@@ -41,6 +41,7 @@ PIN_KEYS = ("CA_SOURCE_URL", "CA_MOZILLA_DATE", "CA_SHA256", "CA_MAX_AGE_DAYS")
 DATE_PREFIX = "## Certificate data from Mozilla as of: "
 BEGIN = "-----BEGIN CERTIFICATE-----"
 END = "-----END CERTIFICATE-----"
+ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 FETCH_TIMEOUT = 60
 
@@ -54,7 +55,8 @@ def store_paths(repo_root):
     return store / PEM_NAME, store / PINS_NAME
 
 
-# CA_PINS: KEY=VALUE lines and # comments, shell-sourceable, so a value with spaces is quoted.
+# CA_PINS: KEY=VALUE lines and # comments, parsed like tests/crypto/PINS and shell-sourceable,
+# so no value has quotes or spaces.
 
 
 def read_pins(path):
@@ -63,8 +65,6 @@ def read_pins(path):
         line = line.split("#", 1)[0].strip()
         if line:
             key, value = line.split("=", 1)
-            if len(value) >= 2 and value[0] == value[-1] == '"':
-                value = value[1:-1]
             pins[key] = value
     missing = [key for key in PIN_KEYS if key not in pins]
     if missing:
@@ -78,8 +78,7 @@ def write_pins(path, updates):
     for line in pathlib.Path(path).read_text().split("\n"):
         key = line.split("=", 1)[0]
         if "=" in line and not line.startswith("#") and key in updates:
-            value = updates[key]
-            line = '%s="%s"' % (key, value) if " " in value else "%s=%s" % (key, value)
+            line = "%s=%s" % (key, updates[key])
         out.append(line)
     pathlib.Path(path).write_text("\n".join(out))
 
@@ -102,6 +101,18 @@ def parse_date(stamp):
     month, day, hour, minute, second, year = match.groups()
     return datetime.datetime(int(year), MONTHS.index(month) + 1, int(day),
                              int(hour), int(minute), int(second))
+
+
+def iso(stamp):
+    """The header's date as CA_PINS holds it: 2026-09-25T03:12:01Z."""
+    return parse_date(stamp).strftime(ISO_FORMAT)
+
+
+def parse_iso(value):
+    try:
+        return datetime.datetime.strptime(value, ISO_FORMAT)
+    except ValueError:
+        raise StoreError("CA_MOZILLA_DATE=%s is not of the form 2026-09-25T03:12:01Z" % value)
 
 
 def certificates(text):
@@ -262,10 +273,10 @@ def refresh(repo_root, source=None, summary=None):
 
     old_text = pem_path.read_text() if pem_path.exists() else ""
     old_date = pins["CA_MOZILLA_DATE"]
-    if parse_date(date) < parse_date(old_date):
+    if parse_date(date) < parse_iso(old_date):
         raise StoreError("%s is older than the committed store (%s, committed %s)"
-                         % (url, date, old_date))
-    if date == old_date:
+                         % (url, iso(date), old_date))
+    if iso(date) == old_date:
         if old_text and set(ders) != set(certificates(old_text)):
             raise StoreError("the certificates changed but the Mozilla date did not (%s)" % date)
         return []
@@ -282,7 +293,7 @@ def refresh(repo_root, source=None, summary=None):
     bumps = [(project, *bump_ident(project, day)) for project, _ in using]
 
     pem_path.write_bytes(data)
-    write_pins(pins_path, {"CA_MOZILLA_DATE": date,
+    write_pins(pins_path, {"CA_MOZILLA_DATE": iso(date),
                            "CA_SHA256": hashlib.sha256(data).hexdigest()})
     written = [pem_path, pins_path]
     bumped = []
@@ -295,7 +306,7 @@ def refresh(repo_root, source=None, summary=None):
         old_names = set(names(old_text)) if old_text else set()
         new_names = set(names(text))
         lines = ["Mozilla root store from %s as of %s (was %s), %d certificates."
-                 % (url, date, old_date, len(ders)), ""]
+                 % (url, iso(date), old_date, len(ders)), ""]
         lines += ["Added: %s" % name for name in sorted(new_names - old_names)]
         lines += ["Removed: %s" % name for name in sorted(old_names - new_names)]
         lines += [""] + ["%s now reports %s." % (os.path.relpath(p, repo_root), v)
@@ -314,9 +325,9 @@ def check(repo_root, release=False, today=None):
         errors.append("%s does not match CA_SHA256 in %s" % (pem_path.name, PINS_NAME))
     text = data.decode("utf-8", "replace")
     try:
-        if mozilla_date(text) != pins["CA_MOZILLA_DATE"]:
+        if iso(mozilla_date(text)) != pins["CA_MOZILLA_DATE"]:
             errors.append("%s is from %s, CA_MOZILLA_DATE says %s"
-                          % (pem_path.name, mozilla_date(text), pins["CA_MOZILLA_DATE"]))
+                          % (pem_path.name, iso(mozilla_date(text)), pins["CA_MOZILLA_DATE"]))
         count = len(certificates(text))
     except StoreError as error:
         errors.append("%s: %s" % (pem_path.name, error))
@@ -330,7 +341,7 @@ def check(repo_root, release=False, today=None):
 
     warnings = []
     today = today or datetime.datetime.now(datetime.timezone.utc).date()
-    age = (today - parse_date(pins["CA_MOZILLA_DATE"]).date()).days
+    age = (today - parse_iso(pins["CA_MOZILLA_DATE"]).date()).days
     limit = int(pins["CA_MAX_AGE_DAYS"])
     if age > limit:
         message = ("the Mozilla root store is %d days old (as of %s), over CA_MAX_AGE_DAYS=%d: "

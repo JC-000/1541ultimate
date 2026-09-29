@@ -77,7 +77,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          date=$(sed -n 's/^CA_MOZILLA_DATE="\(.*\)"$/\1/p' software/wifi/ca_store/CA_PINS)
+          date=$(sed -n 's/^CA_MOZILLA_DATE=//p' software/wifi/ca_store/CA_PINS)
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           { echo "Update the Mozilla root store to $date"; echo; cat "$RUNNER_TEMP/summary.md"; } \

@@ -4,8 +4,8 @@
 # from it at every build. `python3 tools/ca_store/ca_store.py refresh` rewrites the first three
 # values; the build checks them with `ca_store.py check`.
 CA_SOURCE_URL=https://curl.se/ca/cacert.pem
-# The "Certificate data from Mozilla as of:" line of cacert.pem, verbatim.
-CA_MOZILLA_DATE="Fri Sep 25 03:12:01 2026 GMT"
+# The "Certificate data from Mozilla as of:" line of cacert.pem, in UTC as ISO 8601.
+CA_MOZILLA_DATE=2026-09-25T03:12:01Z
 CA_SHA256=a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
 # The ESP32 build warns when CA_MOZILLA_DATE is older than this, and `make RELEASE=1` fails.
 # Mozilla's data changed at most 107 days apart in the ten updates to 2026-09-25.

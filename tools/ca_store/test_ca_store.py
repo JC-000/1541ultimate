@@ -8,6 +8,7 @@ import hashlib
 import io
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -22,6 +23,8 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 COMMITTED = (REPO_ROOT / ca_store.STORE_DIR / ca_store.PEM_NAME).read_text()
 OLD_DATE = "Tue Jul 14 03:12:01 2026 GMT"
 NEW_DATE = "Fri Sep 25 03:12:01 2026 GMT"
+OLD_ISO = "2026-07-14T03:12:01Z"
+NEW_ISO = "2026-09-25T03:12:01Z"
 
 SDKCONFIG = """\
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
@@ -63,8 +66,8 @@ class Tree:
         self.pem.write_text(text)
         self.pins.write_text(
             "# comment kept\nCA_SOURCE_URL=https://curl.se/ca/cacert.pem\n"
-            'CA_MOZILLA_DATE="%s"\nCA_SHA256=%s\nCA_MAX_AGE_DAYS=180\n'
-            % (date, hashlib.sha256(text.encode()).hexdigest()))
+            "CA_MOZILLA_DATE=%s\nCA_SHA256=%s\nCA_MAX_AGE_DAYS=180\n"
+            % (ca_store.iso(date), hashlib.sha256(text.encode()).hexdigest()))
         self.project("software/wifi/raw_a", "../ca_store/cacert.pem", 6, max_certs)
         self.project("software/u64ctrl", "../wifi/ca_store/cacert.pem", 14, max_certs)
         other = self.root / "software/wifi/raw_none"
@@ -112,11 +115,11 @@ class RefreshTest(unittest.TestCase):
 
         self.assertEqual(self.tree.pem.read_text(), new)
         pins = ca_store.read_pins(self.tree.pins)
-        self.assertEqual(pins["CA_MOZILLA_DATE"], NEW_DATE)
+        self.assertEqual(pins["CA_MOZILLA_DATE"], NEW_ISO)
         self.assertEqual(pins["CA_SHA256"], hashlib.sha256(new.encode()).hexdigest())
         self.assertEqual(pins["CA_SOURCE_URL"], "https://curl.se/ca/cacert.pem")
         self.assertIn("# comment kept\n", self.tree.pins.read_text())
-        self.assertIn('CA_MOZILLA_DATE="%s"\n' % NEW_DATE, self.tree.pins.read_text())
+        self.assertIn("\nCA_MOZILLA_DATE=%s\n" % NEW_ISO, self.tree.pins.read_text())
         raw_a = (self.tree.root / "software/wifi/raw_a/main/rpc_dispatch.h").read_text()
         self.assertEqual(raw_a, '#define IDENT_STRING "ESP32 WiFi Bridge V1.7"\n'
                                 "#define IDENT_MAJOR   1\n"
@@ -130,7 +133,7 @@ class RefreshTest(unittest.TestCase):
         self.assertEqual(untouched, HEADER % (3, 3, 3))
         self.assertEqual(len(written), 4)
         report = summary.read_text()
-        self.assertIn("as of %s (was %s), 30 certificates" % (NEW_DATE, OLD_DATE), report)
+        self.assertIn("as of %s (was %s), 30 certificates" % (NEW_ISO, OLD_ISO), report)
         self.assertIn("Removed: ", report)
         self.assertIn("Added: ", report)
         self.assertEqual(ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29)), ([], []))
@@ -251,6 +254,16 @@ class CheckTest(unittest.TestCase):
             self.assertEqual(ca_store.main(arguments), 0)
             self.assertEqual(ca_store.main([*arguments, "--release"]), 1)
 
+    def test_a_pins_date_that_disagrees_with_the_store_fails(self):
+        self.tree.pins.write_text(self.tree.pins.read_text().replace(OLD_ISO, NEW_ISO))
+        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29))
+        self.assertIn("is from %s, CA_MOZILLA_DATE says %s" % (OLD_ISO, NEW_ISO), errors[0])
+
+    def test_a_pins_date_that_is_not_iso_fails(self):
+        self.tree.pins.write_text(self.tree.pins.read_text().replace(OLD_ISO, "2026-07-14"))
+        with self.assertRaisesRegex(ca_store.StoreError, "not of the form"):
+            ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29))
+
     def test_a_store_edited_by_hand_fails(self):
         self.tree.pem.write_text(self.tree.pem.read_text() + "\n")
         errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29))
@@ -280,6 +293,17 @@ class CommittedStoreTest(unittest.TestCase):
     def test_the_committed_store_is_consistent(self):
         errors, _ = ca_store.check(REPO_ROOT)
         self.assertEqual(errors, [])
+
+    def test_the_committed_pins_parse_like_pins_and_as_shell(self):
+        path = REPO_ROOT / ca_store.STORE_DIR / ca_store.PINS_NAME
+        pins = ca_store.read_pins(path)
+        for value in pins.values():
+            self.assertNotRegex(value, "[\"' ]")
+        shell = subprocess.run(
+            ["sh", "-c", '. "$1" && echo "$CA_MOZILLA_DATE $CA_MAX_AGE_DAYS"', "sh", str(path)],
+            capture_output=True, text=True, check=True)
+        self.assertEqual(shell.stdout.split(),
+                         [pins["CA_MOZILLA_DATE"], pins["CA_MAX_AGE_DAYS"]])
 
     def test_every_esp32_project_builds_its_bundle_from_the_store(self):
         found = sorted(str(p.relative_to(REPO_ROOT)) for p, _ in ca_store.projects(REPO_ROOT))
