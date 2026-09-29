@@ -5,6 +5,8 @@
 #   tests/crypto/run.sh [outdir]      (default tests/crypto/output)
 #
 # CRYPTO_PINS, CRYPTO_SDKCONFIG, CRYPTO_MACROS and CRYPTO_CACHE are passed on to build_mbedtls.sh;
+# CRYPTO_EXPECTATIONS names a different expectations file (a candidate's), and
+# CRYPTO_KNOWN_VULNERABLE=0 ignores its known-vulnerable lines.
 # CRYPTO_CONFIG names an mbedTLS config header to use instead of the ESP32's; CRYPTO_CFLAGS
 # builds the library and the harnesses with extra flags, e.g. '-fsanitize=address,undefined'.
 #

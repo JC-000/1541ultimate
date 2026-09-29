@@ -166,18 +166,28 @@ class Harness:
 
 
 class Expectations:
-    """Lines of "<vector file> tc=<id>|flag=<name> accept|reject|skip <reason>". A tc= line wins over
-    flag= lines; among flag= lines the first in the file that names one of the vector's flags wins."""
+    """Lines of "<vector file> tc=<id>|flag=<name> accept|reject|skip <reason>", or
+    "<vector file> tc=<id>|flag=<name> known-vulnerable <CVE> <first fixed mbedTLS version> <reason>".
+    A tc= line wins over flag= lines; among flag= lines the first in the file that names one of
+    the vector's flags wins. With known_vulnerable False the known-vulnerable lines are ignored."""
 
-    def __init__(self, path):
+    def __init__(self, path, known_vulnerable=True):
         self.rules = {}
+        self.cves = {}
         self.used = set()
         for n, line in enumerate(open(path), 1):
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
             fields = line.split(None, 3)
-            if len(fields) < 4 or fields[2] not in ('accept', 'reject', 'skip') or '=' not in fields[1]:
+            if len(fields) == 4 and fields[2] == 'known-vulnerable':
+                cve = fields[3].split(None, 2)
+                if len(cve) < 3 or not re.fullmatch(r'CVE-\d{4}-\d+', cve[0]):
+                    sys.exit('%s:%d: want "... known-vulnerable <CVE> <fixed in> <reason>"' % (path, n))
+                if not known_vulnerable:
+                    continue
+                self.cves[(fields[0], fields[1])] = '%s (fixed in mbedTLS %s)' % (cve[0], cve[1])
+            elif len(fields) < 4 or fields[2] not in ('accept', 'reject', 'skip') or '=' not in fields[1]:
                 sys.exit('%s:%d: want "<file> tc=N|flag=F accept|reject|skip <reason>"' % (path, n))
             if (fields[0], fields[1]) in self.rules:
                 sys.exit('%s:%d: %s %s is there twice' % (path, n, fields[0], fields[1]))
@@ -189,8 +199,8 @@ class Expectations:
         for key in keys:
             if key in self.rules:
                 self.used.add(key)
-                return self.rules[key][0]
-        return None
+                return self.rules[key][0], self.cves.get(key)
+        return None, None
 
     def unused(self):
         return sorted((self.rules[k][1], k) for k in self.rules if k not in self.used)
@@ -202,7 +212,8 @@ class Suite:
         self.expectations = expectations
         self.passed = self.failed = 0
         # vectors an expectations line judged: its outcome against the vector's own verdict
-        self.decided = {'deviate': 0, 'acceptable': 0, 'agree': 0}
+        self.decided = {'deviate': 0, 'acceptable': 0, 'agree': 0, 'known-vulnerable': 0}
+        self.known = []  # (CVE text, vector) for each vector that still shows a known vulnerability
         self.failures = []
         self.covered = set()
 
@@ -212,11 +223,19 @@ class Suite:
 
     def judge(self, source, tc, result, flags, observed, cover=None):
         """observed: 'accept', 'reject', or 'wrong' (reported success with the wrong output)."""
-        want = self.expectations.lookup(source, tc, flags)
+        want, cve = self.expectations.lookup(source, tc, flags)
         label = '%s tc=%s (%s, %s)' % (source, tc, result, ' '.join(flags) or '-')
         if observed == 'wrong':
             return self.fail('%s: WRONG OUTPUT' % label)
         own = {'valid': 'accept', 'invalid': 'reject'}.get(result)
+        if want == 'known-vulnerable':
+            # The vector must still show the vulnerability; once it does not, the line has to go
+            if observed == own:
+                return self.fail('%s: %s no longer shows: remove its known-vulnerable line' % (label, cve))
+            self.decided['known-vulnerable'] += 1
+            self.known.append((cve, tc))
+            self.passed += 1
+            return
         if want is None:
             if result == 'acceptable':
                 return self.fail('%s: %s, and no expectation says which outcome is right' % (label, observed))
@@ -236,7 +255,8 @@ class Suite:
         text = 'SUITE %-18s %s %5d passed %3d failed' % (self.name, 'PASS' if self.ok() else 'FAIL', self.passed,
                                                           self.failed)
         if any(self.decided.values()):
-            text += ' (expectations: %(deviate)d deviate, %(acceptable)d acceptable, %(agree)d agree)' % self.decided
+            text += ' (expectations: %(deviate)d deviate, %(acceptable)d acceptable, %(agree)d agree' % self.decided
+            text += (', %(known-vulnerable)d known-vulnerable)' % self.decided) if self.known else ')'
         return text + (' ' + detail if detail else '')
 
 
@@ -520,15 +540,26 @@ def limbo(exe, name, source, cases, exp):
 # ---- mbedTLS's own TLS 1.3 key schedule tests -----------------------------------------------
 
 def mbedtls_tls13(out, exp):
-    """mbedTLS's test_suite_ssl cases for the TLS 1.3 key schedule and record protection, built
-    with the ESP32 configuration: they check HKDF-Expand-Label, Derive-Secret, the secret
-    evolution, traffic keys and the PSK binder (mostly against RFC 8448) through the library's
-    internal functions, which the public API cannot reach. The rest of test_suite_ssl drives
-    both ends of a connection, and this configuration has no server side."""
+    """mbedTLS's test_suite_ssl cases for the TLS 1.3 key schedule, built with the configuration
+    under test: they check HKDF-Expand-Label, Derive-Secret, the secret evolution, traffic keys
+    and the PSK binder (mostly against RFC 8448) through the library's internal functions, which
+    the public API cannot reach. Its record protection cases set up the transforms of both ends,
+    so they only run where the configuration has a server side (MBEDTLS_SSL_SRV_C); without one
+    they are counted as not applicable, and the rfc suite opens the RFC 8448 records instead.
+    The rest of test_suite_ssl drives both ends of a connection."""
     suite = Suite('mbedtls-tls13-ks', exp)
     tests = os.path.join(out, 'build', 'tests')
-    selected = [e for e in open(os.path.join(tests, 'test_suite_ssl.datax')).read().split('\n\n')
-                if e.startswith(('SSL TLS 1.3 Key schedule', 'SSL TLS 1.3 Record Encryption'))]
+    macros = subprocess.run(['cc', '-E', '-dM', '-I', os.path.join(out, 'config'), '-I', os.path.join(out, 'src', 'include'),
+                             '-DMBEDTLS_CONFIG_FILE="mbedtls_host.h"',
+                             os.path.join(out, 'src', 'include', 'mbedtls', 'build_info.h')],
+                            capture_output=True, text=True, check=True).stdout
+    prefixes = ('SSL TLS 1.3 Key schedule',)
+    if re.search(r'^#define MBEDTLS_SSL_SRV_C\b', macros, re.M):
+        prefixes += ('SSL TLS 1.3 Record Encryption',)
+    cases = open(os.path.join(tests, 'test_suite_ssl.datax')).read().split('\n\n')
+    selected = [e for e in cases if e.startswith(prefixes)]
+    na = sum(1 for e in cases if e.startswith('SSL TLS 1.3 Record Encryption')) - \
+        sum(1 for e in selected if e.startswith('SSL TLS 1.3 Record Encryption'))
     datax = os.path.join(out, 'tls13_key_schedule.datax')
     with open(datax, 'w') as f:
         f.write('\n\n'.join(selected) + '\n')
@@ -539,7 +570,7 @@ def mbedtls_tls13(out, exp):
     for name, result in results:
         seen = {'PASS': 'accept', 'FAILED': 'reject', '----': 'skip'}[result]
         suite.judge('test_suite_ssl', name.replace(' ', '_'), 'valid', [], seen)
-    return suite
+    return suite, ('not applicable: %d record protection (no server side)' % na) if na else ''
 
 
 # ---- regressions ---------------------------------------------------------------------------
@@ -588,13 +619,14 @@ def main():
     ap.add_argument('--out', required=True, help='the build directory run.sh made')
     ap.add_argument('--cache', default=os.environ.get('CRYPTO_CACHE', os.path.expanduser('~/.cache/1541u-build/crypto')))
     ap.add_argument('--pins', default=os.environ.get('CRYPTO_PINS', os.path.join(HERE, 'PINS')))
-    ap.add_argument('--expectations', default=os.path.join(HERE, 'expectations'))
+    ap.add_argument('--expectations', default=os.environ.get('CRYPTO_EXPECTATIONS', os.path.join(HERE, 'expectations')))
     ap.add_argument('--verbose', action='store_true', help='list every failure, not the first ten')
     args = ap.parse_args()
     args.out = os.path.abspath(args.out)
 
     src = Sources(args.cache, read_pins(args.pins))
-    exp = Expectations(args.expectations)
+    # CRYPTO_KNOWN_VULNERABLE=0 ignores the known-vulnerable lines, to show what they hold back
+    exp = Expectations(args.expectations, os.environ.get('CRYPTO_KNOWN_VULNERABLE', '1') != '0')
     vectors = os.path.join(args.out, 'vectors')
     h = Harness(vectors)
     suites = [wycheproof(h, src, exp, name) for name in WYCHEPROOF]
@@ -605,7 +637,8 @@ def main():
     local = [(f, json.load(open(os.path.join(HERE, 'x509', f)))['testcases'])
              for f in sorted(os.listdir(os.path.join(HERE, 'x509'))) if f.endswith('.json')]
     cve, _ = limbo(os.path.join(args.out, 'limbo'), 'x509-local', 'x509', [t for _, ts in local for t in ts], exp)
-    suites += [lim, cve, mbedtls_tls13(args.out, exp)]
+    ks, ks_note = mbedtls_tls13(args.out, exp)
+    suites += [lim, cve, ks]
     cov, offer = coverage(vectors, suites, exp)
     suites.append(cov)
 
@@ -619,7 +652,7 @@ def main():
         for name, sha in src.used:
             f.write('%s %s\n' % (sha, name))
     for s in suites:
-        detail = ('offer: ' + ' '.join(offer)) if s is cov else lim_note if s is lim else ''
+        detail = ('offer: ' + ' '.join(offer)) if s is cov else lim_note if s is lim else ks_note if s is ks else ''
         print(s.line(detail))
         for what in s.failures[:None if args.verbose else 10]:
             print('    ' + what)
@@ -628,8 +661,12 @@ def main():
     passed = sum(s.passed for s in suites)
     failed = sum(s.failed for s in suites)
     ok = all(s.ok() for s in suites)
-    print('CRYPTO_CONFORMANCE %s %d passed %d failed %d suites' % ('PASS' if ok else 'FAIL', passed, failed,
-                                                                   len(suites)))
+    known = [k for s in suites for k in s.known]
+    cves = sorted(set(cve for cve, _ in known))
+    if cves:
+        print('KNOWN VULNERABILITIES %d: %s' % (len(cves), ', '.join(cves)))
+    print('CRYPTO_CONFORMANCE %s %d passed %d failed %d suites%s' % (
+        'PASS' if ok else 'FAIL', passed, failed, len(suites), ' known-vulnerable %d' % len(known) if known else ''))
     return 0 if ok else 1
 
 
