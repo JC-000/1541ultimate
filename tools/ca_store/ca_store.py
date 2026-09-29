@@ -8,11 +8,13 @@
     ca_store.py check      fail if the store and the sdkconfigs disagree; warn when the store
                            is older than CA_MAX_AGE_DAYS, and fail instead with --release
 
-The store is software/wifi/ca_store/cacert.pem, the bundle curl extracts from Mozilla's
-certdata.txt (the same source ESP-IDF's own cacrt_all.pem comes from), with CA_PINS beside it.
+The store is the directory software/wifi/ca_store: cacert.pem, the bundle curl extracts from
+Mozilla's certdata.txt (the same source ESP-IDF's own cacrt_all.pem comes from); anchors.pem, a
+few roots Mozilla dropped that cross-signed chains still need, chosen by hand; and CA_PINS.
 Each ESP32 project's sdkconfig selects CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_NONE and points
-CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH at the file, so ESP-IDF's gen_crt_bundle.py builds
-the device's bundle from it at every build. ESP-IDF refreshes its own copy only at minor
+CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH at the directory, so ESP-IDF's gen_crt_bundle.py
+builds the device's bundle from every .pem in it at every build. `refresh` never touches
+anchors.pem. ESP-IDF refreshes its own copy only at minor
 releases, so a patch-release bump never makes it current.
 
 curl.se publishes the file and its sum from the same server, so the sum alone proves only that
@@ -50,7 +52,9 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 STORE_DIR = "software/wifi/ca_store"
 PEM_NAME = "cacert.pem"
 PINS_NAME = "CA_PINS"
-PIN_KEYS = ("CA_SOURCE_URL", "CA_MOZILLA_DATE", "CA_SHA256", "CA_MAX_AGE_DAYS", "CA_CERTDATA_REF")
+ANCHORS_NAME = "anchors.pem"
+PIN_KEYS = ("CA_SOURCE_URL", "CA_MOZILLA_DATE", "CA_SHA256", "CA_MAX_AGE_DAYS", "CA_CERTDATA_REF",
+            "CA_ANCHORS_SHA256")
 
 # The second origin: Mozilla's certdata.txt as Firefox's release branch carries it, and the
 # script curl converts it with.
@@ -83,6 +87,16 @@ class StoreError(Exception):
 def store_paths(repo_root):
     store = pathlib.Path(repo_root) / STORE_DIR
     return store / PEM_NAME, store / PINS_NAME
+
+
+def write_atomically(path, data):
+    """Writes through a new file renamed into place. The rename changes the directory's
+    modification time, which is what ESP-IDF's build watches when the bundle path is a
+    directory, so an incremental build regenerates the bundle."""
+    path = pathlib.Path(path)
+    temporary = path.with_name(path.name + ".new")
+    temporary.write_bytes(data)
+    os.replace(str(temporary), str(path))
 
 
 # CA_PINS: KEY=VALUE lines and # comments, parsed like tests/crypto/PINS and shell-sourceable,
@@ -119,7 +133,7 @@ def write_pins(path, updates):
         if "=" in line and not line.startswith("#") and key in updates:
             line = "%s=%s" % (key, updates[key])
         out.append(line)
-    pathlib.Path(path).write_text("\n".join(out))
+    write_atomically(path, "\n".join(out).encode())
 
 
 # The PEM.
@@ -293,7 +307,7 @@ def has_line(text, line):
 def projects(repo_root):
     """(project dir, sdkconfig text) of every ESP32 project whose bundle comes from the store."""
     repo_root = pathlib.Path(repo_root)
-    pem = (repo_root / STORE_DIR / PEM_NAME).resolve()
+    store = (repo_root / STORE_DIR).resolve()
     found = []
     for sdkconfig in sorted(repo_root.glob("software/**/sdkconfig")):
         if "build" in sdkconfig.relative_to(repo_root).parts:
@@ -302,7 +316,7 @@ def projects(repo_root):
         if not has_line(text, "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y"):
             continue
         match = re.search(r'^CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH="(.*)"$', text, re.M)
-        if match and (sdkconfig.parent / match.group(1)).resolve() == pem:
+        if match and (sdkconfig.parent / match.group(1)).resolve() == store:
             found.append((sdkconfig.parent, text))
     return found
 
@@ -320,8 +334,9 @@ def bundle_misconfigured(repo_root):
             continue
         relative = sdkconfig.relative_to(repo_root)
         if sdkconfig.parent not in using:
-            problems.append("%s: CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH does not name %s/%s"
-                            % (relative, STORE_DIR, PEM_NAME))
+            problems.append("%s: CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH does not name the "
+                            "directory %s (a path to %s alone leaves out %s)"
+                            % (relative, STORE_DIR, PEM_NAME, ANCHORS_NAME))
         if not has_line(text, "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_NONE=y"):
             problems.append("%s: also takes ESP-IDF's default bundle; select "
                             "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_NONE" % relative)
@@ -459,12 +474,15 @@ def refresh(repo_root, source=None, summary=None, now=None, regenerate=regenerat
         return []
 
     using = projects(repo_root)
+    anchors_path = pem_path.with_name(ANCHORS_NAME)
+    anchors = certificates(anchors_path.read_text()) if anchors_path.exists() else []
+    total = len(ders) + len(anchors)
     for project, sdkconfig in using:
         limit = max_certs(sdkconfig)
-        if limit is not None and len(ders) > limit:
-            raise StoreError("%d certificates, but %s/sdkconfig allows %d "
+        if limit is not None and total > limit:
+            raise StoreError("%d certificates with the anchors, but %s/sdkconfig allows %d "
                              "(CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_MAX_CERTS)"
-                             % (len(ders), project, limit))
+                             % (total, project, limit))
 
     # The bundle is built from the certificates alone, so only a change to them needs the
     # modules reflashed.
@@ -473,14 +491,14 @@ def refresh(repo_root, source=None, summary=None, now=None, regenerate=regenerat
     bumps = ([(project, *bump_ident(project, day)) for project, _ in using]
              if certificates_changed else [])
 
-    pem_path.write_bytes(data)
+    write_atomically(pem_path, data)
     write_pins(pins_path, {"CA_MOZILLA_DATE": iso(date),
                            "CA_SHA256": hashlib.sha256(data).hexdigest(),
                            "CA_CERTDATA_REF": ref})
     written = [pem_path, pins_path]
     bumped = []
     for project, header, text_after, version in bumps:
-        header.write_text(text_after)
+        write_atomically(header, text_after.encode())
         written.append(header)
         bumped.append((project, version))
 
@@ -518,6 +536,56 @@ def describe(old_text, text, url, ref, date, old_date, count, bumped, repo_root)
     return "\n".join(lines) + "\n"
 
 
+def not_after(der):
+    """A certificate's notAfter, as a naive UTC datetime."""
+    _, start, _ = _tlv(der, 0)
+    _, pos, _ = _tlv(der, start)
+    fields = []
+    while len(fields) < 4:
+        tag, _, end = _tlv(der, pos)
+        if not (tag == 0xA0 and not fields):
+            fields.append(der[pos:end])
+        pos = end
+    validity = fields[3]
+    _, start, _ = _tlv(validity, 0)
+    _, _, end = _tlv(validity, start)
+    tag, value, stop = _tlv(validity, end)
+    stamp = validity[value:stop].decode("ascii")
+    if tag == 0x17:                             # UTCTime, years 1950-2049
+        stamp = ("19" if int(stamp[:2]) >= 50 else "20") + stamp
+    return datetime.datetime.strptime(stamp, "%Y%m%d%H%M%SZ")
+
+
+def check_anchors(store_dir, pins, store, now):
+    """(anchor DERs, errors, warnings). ESP-IDF builds the bundle from every .pem and .der in
+    the store directory, so nothing but the two known files may be there."""
+    errors, warnings = [], []
+    for path in sorted(store_dir.iterdir()):
+        if path.suffix in (".pem", ".der") and path.name not in (PEM_NAME, ANCHORS_NAME):
+            errors.append("%s would go into every module's bundle: only %s and %s belong in %s"
+                          % (path.name, PEM_NAME, ANCHORS_NAME, STORE_DIR))
+    path = store_dir / ANCHORS_NAME
+    if not path.exists():
+        return [], [*errors, "%s is missing" % ANCHORS_NAME], warnings
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != pins["CA_ANCHORS_SHA256"]:
+        errors.append("%s does not match CA_ANCHORS_SHA256 in %s" % (ANCHORS_NAME, PINS_NAME))
+    try:
+        anchors = certificates(data.decode("utf-8", "replace"))
+    except StoreError as error:
+        return [], [*errors, "%s: %s" % (ANCHORS_NAME, error)], warnings
+    labels = names(data.decode("utf-8", "replace"))
+    for i, der in enumerate(anchors):
+        label = labels[i] if len(labels) == len(anchors) else "anchor %d" % (i + 1)
+        if der in store:
+            errors.append("%s: %s is in %s again; remove it from %s"
+                          % (ANCHORS_NAME, label, PEM_NAME, ANCHORS_NAME))
+        if not_after(der) < now:
+            warnings.append("%s: %s expired on %s; remove it"
+                            % (ANCHORS_NAME, label, not_after(der).date()))
+    return anchors, errors, warnings
+
+
 def check(repo_root, release=False, today=None, now=None):
     """Returns (errors, warnings)."""
     pem_path, pins_path = store_paths(repo_root)
@@ -537,10 +605,13 @@ def check(repo_root, release=False, today=None, now=None):
         if iso(mozilla_date(text)) != pins["CA_MOZILLA_DATE"]:
             errors.append("%s is from %s, CA_MOZILLA_DATE says %s"
                           % (pem_path.name, iso(mozilla_date(text)), pins["CA_MOZILLA_DATE"]))
-        count = len(certificates(text))
+        store = certificates(text)
     except StoreError as error:
         errors.append("%s: %s" % (pem_path.name, error))
-        count = 0
+        store = []
+    anchors, anchor_errors, anchor_warnings = check_anchors(pem_path.parent, pins, store, now)
+    errors += anchor_errors
+    count = len(store) + len(anchors)
     errors += bundle_misconfigured(repo_root)
     for project, sdkconfig in projects(repo_root):
         limit = max_certs(sdkconfig)
@@ -548,7 +619,7 @@ def check(repo_root, release=False, today=None, now=None):
             errors.append("%s/sdkconfig: CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_MAX_CERTS=%d, "
                           "the store has %d" % (os.path.relpath(project, repo_root), limit, count))
 
-    warnings = []
+    warnings = anchor_warnings
     today = today or now.date()
     age = (today - parse_iso(pins["CA_MOZILLA_DATE"]).date()).days
     limit = int(pins["CA_MAX_AGE_DAYS"])
