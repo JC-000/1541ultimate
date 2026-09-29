@@ -3,8 +3,8 @@
 Runs the crypto conformance suites against a host build of the ESP32's mbedTLS (run.sh builds
 it) and prints one line per suite and a final CRYPTO_CONFORMANCE PASS|FAIL line.
 
-Vectors are fetched at run time, never committed: Wycheproof from git at the commit in
-PINS, the RFCs and NIST CAVP files by URL, checked against the sha256 below (those
+Vectors are fetched at run time, never committed: Wycheproof and x509-limbo from git at the
+commits in PINS, the RFCs and NIST CAVP files by URL, checked against the sha256 below (those
 documents never change). Every file used is listed with its sha256 in <out>/sources.txt.
 
 Each vector's expected outcome is Wycheproof's: "valid" must be accepted with the right output,
@@ -13,6 +13,8 @@ expectations file saying which outcome mbedTLS gives and why; a vector without o
 does an expectations line that no vector used.
 """
 import argparse
+import base64
+import datetime
 import hashlib
 import io
 import json
@@ -411,6 +413,56 @@ def cavp_sha(h, src, exp):
     return suite
 
 
+# ---- x509-limbo ----------------------------------------------------------------------------
+
+def pem_to_hex(pem):
+    body = ''.join(l for l in pem.strip().split('\n') if not l.startswith('-----'))
+    return base64.b64decode(body).hex()
+
+
+def limbo(exe, src, exp):
+    """SERVER cases through limbo.c. Not applicable, and counted as such: CLIENT cases (the
+    engine only verifies servers), cases with CRLs (it configures none: tls_engine.c passes no
+    CRL to mbedtls_ssl_conf_ca_chain()), and cases without a peer name (it refuses to verify
+    without one)."""
+    suite = Suite('x509-limbo', exp)
+    cases = json.loads(src.git('X509_LIMBO', 'limbo.json'))['testcases']
+    skipped = {'CLIENT': 0, 'has-crl': 0, 'no peer name': 0}
+    run = []
+    for t in cases:
+        if t['validation_kind'] != 'SERVER':
+            skipped['CLIENT'] += 1
+        elif 'has-crl' in (t.get('features') or []) or t.get('crls'):
+            skipped['has-crl'] += 1
+        elif not t.get('expected_peer_name'):
+            skipped['no peer name'] += 1
+        else:
+            run.append(t)
+    proc = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+    for t in run:
+        when = t['validation_time']
+        when = int(datetime.datetime.fromisoformat(when).timestamp()) if when else int(datetime.datetime.now().timestamp())
+        chain = [pem_to_hex(c) for c in t['untrusted_intermediates']]
+        trusted = [pem_to_hex(c) for c in t['trusted_certs']]
+        leaf = pem_to_hex(t['peer_certificate'])
+        proc.stdin.write(' '.join([str(when), t['expected_peer_name']['value'], leaf, str(len(chain))] + chain +
+                                  [str(len(trusted))] + trusted) + '\n')
+        ret, flags = proc.stdout.readline().split()
+        seen = 'accept' if int(ret) == 0 else 'reject'
+        result = 'valid' if t['expected_result'] == 'SUCCESS' else 'invalid'
+        # Expectations can name a group of cases by an id prefix ("bettertls::nameconstraints"),
+        # or by what is in the certificates: a critical nameConstraints extension (the DER of
+        # its OID 2.5.29.30 followed by critical TRUE)
+        parts = t['id'].split('::')
+        flags = ['::'.join(parts[:n]) for n in range(1, len(parts))]
+        if any('0603551d1e0101ff' in c for c in [leaf] + chain + trusted):
+            flags.append('critical-nameConstraints')
+        suite.judge('limbo.json', t['id'], result, flags, seen)
+    proc.stdin.close()
+    proc.wait()
+    return suite, 'not applicable: %s' % ', '.join('%d %s' % (n, k) for k, n in skipped.items())
+
+
 # ---- coverage ------------------------------------------------------------------------------
 
 def coverage(vectors_exe, suites, exp):
@@ -445,6 +497,8 @@ def main():
     h = Harness(vectors)
     suites = [wycheproof(h, src, exp, name) for name in WYCHEPROOF]
     suites += [rfc_vectors(h, src, exp), cavp_sha(h, src, exp)]
+    lim, lim_note = limbo(os.path.join(args.out, 'limbo'), src, exp)
+    suites.append(lim)
     cov, offer = coverage(vectors, suites, exp)
     suites.append(cov)
 
@@ -458,7 +512,7 @@ def main():
         for name, sha in src.used:
             f.write('%s %s\n' % (sha, name))
     for s in suites:
-        detail = ('offer: ' + ' '.join(offer)) if s is cov else ''
+        detail = ('offer: ' + ' '.join(offer)) if s is cov else lim_note if s is lim else ''
         print(s.line(detail))
         for what in s.failures[:None if args.verbose else 10]:
             print('    ' + what)

@@ -85,3 +85,99 @@ ecdsa_secp384r1_sha384_test.json tc=48 reject indefinite length refused (asn1par
 ecdsa_secp384r1_sha512_test.json tc=49 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
 ecdsa_secp521r1_sha512_test.json tc=46 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
 
+# ---- X.509 path validation (x509-limbo, SERVER cases) --------------------------------------
+# Paths here are mbedTLS's library/ at MBEDTLS_COMMIT, and software/wifi/raw_u64/main/ for
+# tls_engine.c. "fail-closed" lines are valid chains mbedTLS refuses: an availability cost, not
+# a security one. "DEVIATION" lines are chains limbo wants refused that mbedTLS accepts.
+#
+# Name constraints: mbedTLS 3.6 has no nameConstraints support, and a critical nameConstraints
+# is an unknown critical extension, so any case with one in its certificates is refused at parse
+# time, valid or not (781 valid BetterTLS cases, and the rfc5280::nc ones listed below).
+limbo.json flag=critical-nameConstraints reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=pathlen::validation-ignores-pathlen-in-leaf reject fail-closed (TLS 1.3): the leaf here has no digitalSignature keyUsage, which the TLS 1.3 client requires of a server certificate (ssl_tls13_generic.c:717-722)
+limbo.json tc=pathlen::intermediate-pathlen-may-increase reject fail-closed: mbedTLS counts this chain against the pathLenConstraint more strictly than RFC 5280 6.1.4(l)-(m)
+limbo.json tc=pathlen::self-issued-certs-pathlen reject fail-closed: mbedTLS counts this chain against the pathLenConstraint more strictly than RFC 5280 6.1.4(l)-(m)
+limbo.json tc=pathlen::max-chain-depth-0-exhausted accept not a setting mbedTLS has: max_chain_depth is limbo's verifier parameter; mbedTLS has only the build-time MBEDTLS_X509_MAX_INTERMEDIATE_CA (8)
+limbo.json tc=pathlen::max-chain-depth-1-self-issued reject not a setting mbedTLS has: max_chain_depth is limbo's verifier parameter; mbedTLS has only the build-time MBEDTLS_X509_MAX_INTERMEDIATE_CA (8)
+limbo.json tc=rfc5280::aki::critical-aki accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::aki::leaf-missing-aki accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::aki::intermediate-missing-aki accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::aki::cross-signed-root-missing-aki accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::nc::permitted-dns-match reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=rfc5280::nc::permitted-dns-match-noncritical accept DEVIATION: a non-critical nameConstraints is skipped unread (x509_crt.c:944), so it constrains nothing
+limbo.json tc=rfc5280::nc::permitted-dns-match-more reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=rfc5280::nc::permitted-ipv4-match reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=rfc5280::nc::permitted-ipv6-match reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=rfc5280::nc::permitted-self-issued reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=rfc5280::nc::permitted-nonempty-excluded-nonempty reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=rfc5280::nc::permitted-different-constraint-type reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=rfc5280::nc::excluded-different-constraint-type reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=rfc5280::nc::not-allowed-in-ee-noncritical accept DEVIATION: a non-critical nameConstraints is skipped unread (x509_crt.c:944), so it constrains nothing
+limbo.json tc=rfc5280::nc::nc-forbids-alternate-chain-ica reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=rfc5280::nc::nc-forbids-same-chain-ica reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=rfc5280::nc::nc-forbids-othername-noop reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=rfc5280::pc::ica-noncritical-pc accept DEVIATION: certificate policies and policyConstraints are not processed
+limbo.json tc=rfc5280::san::noncritical-with-empty-subject accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::san::underscore-dns accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::san::ip-in-dns accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::serial::too-long accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::serial::zero accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::ski::critical-ski accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::ski::root-missing-ski accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::ski::intermediate-missing-ski accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::unknown-critical-extension-unrelated-root reject fail-closed: an unused certificate with an unknown critical extension does not parse (x509_crt.c:946-950), and the engine refuses a CA list with such a certificate (tls_engine.c:264-266) as TLS 1.3 refuses such a Certificate entry (ssl_tls13_generic.c:536-540)
+limbo.json tc=rfc5280::unknown-critical-extension-unrelated-intermediate reject fail-closed: an unused certificate with an unknown critical extension does not parse (x509_crt.c:946-950), and the engine refuses a CA list with such a certificate (tls_engine.c:264-266) as TLS 1.3 refuses such a Certificate entry (ssl_tls13_generic.c:536-540)
+limbo.json tc=rfc5280::root-non-critical-basic-constraints accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::leaf-ku-keycertsign accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::ca-as-leaf reject fail-closed (TLS 1.3): the leaf here has no digitalSignature keyUsage, which the TLS 1.3 client requires of a server certificate (ssl_tls13_generic.c:717-722)
+limbo.json tc=rfc9881::ml-dsa-44 reject fail-closed: mbedTLS 3.6 has no ML-DSA (RFC 9881); the root does not parse (UNKNOWN_SIG_ALG), which fails the OPEN (tls_engine.c:264-266)
+limbo.json tc=rfc9881::ml-dsa-65 reject fail-closed: mbedTLS 3.6 has no ML-DSA (RFC 9881); the root does not parse (UNKNOWN_SIG_ALG), which fails the OPEN (tls_engine.c:264-266)
+limbo.json tc=rfc9881::ml-dsa-87 reject fail-closed: mbedTLS 3.6 has no ML-DSA (RFC 9881); the root does not parse (UNKNOWN_SIG_ALG), which fails the OPEN (tls_engine.c:264-266)
+limbo.json tc=webpki::aki::root-with-aki-all-fields accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::aki::root-with-aki-ski-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::ipv4-hex-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::ipv4-leading-zeros-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::ipv6-uppercase-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::ipv6-uncompressed-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::ipv6-non-rfc5952-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::punycode-not-in-san accept DEVIATION (CA/B Forum issuance rule): with a subjectAltName present the CN is never looked at (x509_crt.c:2989-2991), so a CN that disagrees with it is not an error
+limbo.json tc=webpki::cn::utf8-vs-punycode-mismatch accept DEVIATION (CA/B Forum issuance rule): with a subjectAltName present the CN is never looked at (x509_crt.c:2989-2991), so a CN that disagrees with it is not an error
+limbo.json tc=webpki::cn::not-in-san accept DEVIATION (CA/B Forum issuance rule): with a subjectAltName present the CN is never looked at (x509_crt.c:2989-2991), so a CN that disagrees with it is not an error
+limbo.json tc=webpki::cn::case-mismatch accept DEVIATION (CA/B Forum issuance rule): with a subjectAltName present the CN is never looked at (x509_crt.c:2989-2991), so a CN that disagrees with it is not an error
+limbo.json tc=webpki::eku::ee-anyeku accept DEVIATION: anyExtendedKeyUsage satisfies serverAuth (x509_crt.c:1976-1977)
+limbo.json tc=webpki::eku::ee-critical-eku accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::eku::ee-without-eku accept DEVIATION: a certificate without extKeyUsage may be used for anything (x509_crt.c:1961-1962)
+limbo.json tc=webpki::eku::root-has-eku accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::nc::nc-permits-dns-san-pattern reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:946-950)
+limbo.json tc=webpki::san::public-suffix-wildcard-san accept DEVIATION: no public suffix list; a wildcard over a public suffix matches like any other wildcard
+limbo.json tc=webpki::san::public-suffix-multi-label-wildcard-san accept DEVIATION: no public suffix list; a wildcard over a public suffix matches like any other wildcard
+limbo.json tc=webpki::san::public-suffix-private-namespace-wildcard-san accept DEVIATION: no public suffix list; a wildcard over a public suffix matches like any other wildcard
+limbo.json tc=webpki::san::no-san accept DEVIATION: with no subjectAltName, the name is matched against the subject CN (x509_crt.c:2992-3000); web PKI clients no longer do
+limbo.json tc=webpki::san::san-critical-with-nonempty-subject accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::malformed-aia accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::forbidden-rsa-not-divisible-by-8-in-root accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::forbidden-rsa-key-not-divisible-by-8-in-leaf accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::v1-cert accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::ee-basicconstraints-ca accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=bettertls::nameconstraints::tc736 accept DEVIATION: with no subjectAltName, the name is matched against the subject CN (x509_crt.c:2992-3000); web PKI clients no longer do
+limbo.json tc=bettertls::nameconstraints::tc7297 accept DEVIATION: with no subjectAltName, the name is matched against the subject CN (x509_crt.c:2992-3000); web PKI clients no longer do
+limbo.json tc=bettertls::pathbuilding::tc2 reject fail-closed: path building takes the first matching parent from the presented chain (x509_crt.c:2400) and does not backtrack to another candidate
+limbo.json tc=bettertls::pathbuilding::tc5 accept DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls13_generic.c:717-722); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
+limbo.json tc=bettertls::pathbuilding::tc12 accept DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls13_generic.c:717-722); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
+limbo.json tc=bettertls::pathbuilding::tc17 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:536-540), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc23 reject fail-closed: path building takes the first matching parent from the presented chain (x509_crt.c:2400) and does not backtrack to another candidate
+limbo.json tc=bettertls::pathbuilding::tc25 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:536-540), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc30 reject fail-closed: path building takes the first matching parent from the presented chain (x509_crt.c:2400) and does not backtrack to another candidate
+limbo.json tc=bettertls::pathbuilding::tc31 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:536-540), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc32 reject fail-closed: path building takes the first matching parent from the presented chain (x509_crt.c:2400) and does not backtrack to another candidate
+limbo.json tc=bettertls::pathbuilding::tc35 reject fail-closed: the parent mbedTLS picks is signed with a hash the default profile refuses (BADCERT_BAD_MD), and it does not try the other path
+limbo.json tc=bettertls::pathbuilding::tc38 accept DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls13_generic.c:717-722); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
+limbo.json tc=bettertls::pathbuilding::tc50 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:536-540), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc56 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:536-540), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc58 reject fail-closed: path building takes the first matching parent from the presented chain (x509_crt.c:2400) and does not backtrack to another candidate
+limbo.json tc=bettertls::pathbuilding::tc59 reject fail-closed: path building takes the first matching parent from the presented chain (x509_crt.c:2400) and does not backtrack to another candidate
+limbo.json tc=bettertls::pathbuilding::tc60 reject fail-closed: the parent mbedTLS picks is signed with a hash the default profile refuses (BADCERT_BAD_MD), and it does not try the other path
+limbo.json tc=bettertls::pathbuilding::tc64 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:536-540), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc71 accept DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls13_generic.c:717-722); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
+limbo.json tc=bettertls::pathbuilding::tc77 accept DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls13_generic.c:717-722); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
+
