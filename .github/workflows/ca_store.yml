@@ -1,17 +1,23 @@
 # Keeps the Mozilla root store the ESP32 modules trust (software/wifi/ca_store) current.
 #
-# Once a week it fetches curl's extract of Mozilla's certdata.txt, and when Mozilla's data has
-# changed it opens (or updates) one pull request from the branch ca-store/refresh with the new
-# cacert.pem, CA_PINS and the version bump of every module that builds its bundle from it. It
-# builds no firmware: before it opens the pull request it checks that ESP-IDF's own
-# gen_crt_bundle.py, at the release the modules build with, turns the new file into a bundle.
+# Once a week it fetches curl's extract of Mozilla's certdata.txt and checks it against a copy
+# regenerated from certdata.txt on GitHub (tools/ca_store/ca_store.py refresh). When Mozilla's
+# data has changed it opens a pull request with the new cacert.pem, CA_PINS and, when the
+# certificates changed, the version bump of every module that builds its bundle from it. The
+# description lists the roots added and removed by SHA-256 fingerprint. It builds no firmware.
 #
-# On a GitHub-hosted runner, not the self-hosted build machine: it needs nothing from the
-# build image. A pull request opened with GITHUB_TOKEN does not start the Build workflow, so
-# the firmware is built when a maintainer pushes to the branch or merges it.
+# Two jobs: `refresh` does all the fetching and checking with a read-only token and hands a
+# patch on; `pull-request` only applies it and runs git and gh. It never force-pushes. Each
+# Mozilla date gets its own branch, ca-store/refresh-<date>, and a branch that already exists
+# is left alone, so a maintainer's commits on it are never overwritten. A newer pull request
+# closes the older ones with a comment and leaves their branches in place.
+#
+# A pull request opened with GITHUB_TOKEN does not start the Build workflow, so the firmware
+# is built when a maintainer pushes to the branch or merges it.
 #
 # Needs "Allow GitHub Actions to create and approve pull requests" under Settings, Actions,
-# General; without it the refresh still runs and the last step fails, saying so.
+# General. A failed run opens (or comments on) an issue titled "CA store refresh failed",
+# because GitHub mails a scheduled run's failure only to whoever last edited its schedule.
 name: CA store refresh
 
 on:
@@ -19,73 +25,126 @@ on:
     - cron: "23 5 * * 1"
   workflow_dispatch:
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 concurrency:
   group: ca-store-refresh
   cancel-in-progress: false
-
-env:
-  BRANCH: ca-store/refresh
-  # ESP-IDF v5.3.1, the release the ESP32 modules build with, and the sha256 of its
-  # components/mbedtls/esp_crt_bundle/gen_crt_bundle.py.
-  ESP_IDF_COMMIT: c8fc5f643b7a7b0d3b182d3df610844e3dc9bd74
-  GEN_CRT_BUNDLE_SHA256: e8abcaf9bc077c3e4a18f7c350763eade39b926d90add6b27539ae12ad80eec7
 
 jobs:
   refresh:
     # Forks do not open weekly pull requests against themselves unless asked to.
     if: github.repository == 'GideonZ/1541ultimate' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.refresh.outputs.changed }}
+      date: ${{ steps.refresh.outputs.date }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Test the refresh
         run: python3 -m unittest discover -s tools/ca_store -p "test_*.py"
 
+      # The token only raises the GitHub API's rate limit for the certdata.txt lookup.
       - name: Refresh the store
         id: refresh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 tools/ca_store/ca_store.py refresh --summary "$RUNNER_TEMP/summary.md"
           if [ -n "$(git status --porcelain)" ]; then
-            echo "changed=true" >>"$GITHUB_OUTPUT"
+            python3 tools/ca_store/ca_store.py check --release
+            git diff --binary >"$RUNNER_TEMP/ca-store.patch"
             cat "$RUNNER_TEMP/summary.md" >>"$GITHUB_STEP_SUMMARY"
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+            echo "date=$(sed -n 's/^CA_MOZILLA_DATE=//p' software/wifi/ca_store/CA_PINS)" >>"$GITHUB_OUTPUT"
           fi
 
-      - name: Build the bundle with ESP-IDF's generator
+      - name: Hand the change on
         if: steps.refresh.outputs.changed == 'true'
-        run: |
-          cd "$RUNNER_TEMP"
-          curl -fsSL -o gen_crt_bundle.py \
-            "https://raw.githubusercontent.com/espressif/esp-idf/$ESP_IDF_COMMIT/components/mbedtls/esp_crt_bundle/gen_crt_bundle.py"
-          echo "$GEN_CRT_BUNDLE_SHA256  gen_crt_bundle.py" | sha256sum -c -
-          # ESP-IDF v5.3's constraints file allows cryptography below 43.
-          python3 -m venv venv
-          venv/bin/pip install --quiet "cryptography<43"
-          venv/bin/python gen_crt_bundle.py -q --input "$GITHUB_WORKSPACE/software/wifi/ca_store/cacert.pem"
-          echo "ESP-IDF bundle: $(wc -c <x509_crt_bundle) bytes" | tee -a "$GITHUB_STEP_SUMMARY"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ca-store
+          path: |
+            ${{ runner.temp }}/ca-store.patch
+            ${{ runner.temp }}/summary.md
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: Check the store
-        if: steps.refresh.outputs.changed == 'true'
-        run: python3 tools/ca_store/ca_store.py check --release
+  pull-request:
+    needs: refresh
+    if: needs.refresh.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Open or update the pull request
-        if: steps.refresh.outputs.changed == 'true'
+      - name: Fetch the change
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ca-store
+          path: ${{ runner.temp }}/ca-store
+
+      - name: Open the pull request
         env:
           GH_TOKEN: ${{ github.token }}
+          DATE: ${{ needs.refresh.outputs.date }}
         run: |
-          date=$(sed -n 's/^CA_MOZILLA_DATE=//p' software/wifi/ca_store/CA_PINS)
+          branch="ca-store/refresh-${DATE//:/}"
+          gh auth setup-git
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "$branch already exists; leaving it and its pull request alone"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          { echo "Update the Mozilla root store to $date"; echo; cat "$RUNNER_TEMP/summary.md"; } \
+          git switch -c "$branch"
+          git apply --index "$RUNNER_TEMP/ca-store/ca-store.patch"
+          { echo "Update the Mozilla root store to $DATE"; echo; cat "$RUNNER_TEMP/ca-store/summary.md"; } \
             >"$RUNNER_TEMP/message"
-          git switch -C "$BRANCH"
-          git commit -a -q -F "$RUNNER_TEMP/message"
-          git push --force origin "$BRANCH"
-          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[]')" ]; then
-            gh pr create --head "$BRANCH" --base "${{ github.event.repository.default_branch }}" \
-              --title "Update the Mozilla root store to $date" --body-file "$RUNNER_TEMP/summary.md"
+          git commit -q -F "$RUNNER_TEMP/message"
+          git push origin "$branch"
+          # On a schedule the event carries no repository, so ask for the default branch.
+          base=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+          url=$(gh pr create --base "$base" --head "$branch" \
+            --title "Update the Mozilla root store to $DATE" \
+            --body-file "$RUNNER_TEMP/ca-store/summary.md")
+          gh pr list --state open --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"ca-store/refresh-\")) | select(.headRefName != \"$branch\") | .number" |
+            while read -r stale; do
+              gh pr close "$stale" --comment "Superseded by $url."
+            done
+
+  report-failure:
+    needs: [refresh, pull-request]
+    if: failure()
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="CA store refresh failed"
+          open=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "Failed again: $RUN"
+          else
+            gh issue create --title "$title" --body "The weekly refresh of software/wifi/ca_store failed: $RUN
+
+          Run \`python3 tools/ca_store/ca_store.py refresh\` locally to see why. Until it passes, the store ages, and a release build (\`make RELEASE=1\`) fails once it is older than CA_MAX_AGE_DAYS."
           fi
