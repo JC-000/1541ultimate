@@ -37,8 +37,8 @@ done
 mkdir -p "$1" "$CACHE"
 OUT=$(cd "$1" && pwd)
 
-# fetch <repo> <commit> <dir>: a clean checkout of exactly <commit>, fetched once and cached.
-# A checkout that is not at <commit> or has local changes is refused, never used.
+# fetch <repo> <commit> <dir>: a clean checkout of exactly <commit> and its submodules, fetched
+# once and cached. A checkout that is not at <commit> or has local changes is refused, never used.
 fetch() {
     local repo=$1 commit=$2 dir=$3
     if [ ! -d "$dir/.git" ]; then
@@ -46,6 +46,8 @@ fetch() {
         git init -q "$dir.tmp"
         git -C "$dir.tmp" fetch -q --depth 1 "$repo" "$commit"
         git -C "$dir.tmp" -c advice.detachedHead=false checkout -q FETCH_HEAD
+        # Later 3.6.x releases keep their test framework in a submodule, pinned by the commit
+        git -C "$dir.tmp" submodule -q update --init --depth 1
         mv "$dir.tmp" "$dir"
     fi
     local head
@@ -141,6 +143,8 @@ if grep -Eq '^#define .*(esp_|ESP_)' "$HDR"; then
 fi
 
 BUILD=$OUT/build
+# Later 3.6.x releases link framework/data_files into the build tree without creating its parent
+mkdir -p "$BUILD/framework"
 cmake -S "$SRC" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DMBEDTLS_CONFIG_FILE="$HDR" \
       -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=ON -DGEN_FILES=OFF \
       -DMBEDTLS_FATAL_WARNINGS=OFF -Wno-dev > "$OUT/cmake.log" 2>&1 ||
