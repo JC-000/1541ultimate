@@ -811,6 +811,9 @@ TICKETS = [0, 1, 2, 8]
 # TLS alert descriptions (RFC 8446 section 6)
 BAD_RECORD_MAC, UNEXPECTED_MESSAGE, BAD_CERTIFICATE, CERTIFICATE_EXPIRED, CERTIFICATE_UNKNOWN = 20, 10, 42, 45, 46
 ILLEGAL_PARAMETER, UNKNOWN_CA, DECRYPT_ERROR, PROTOCOL_VERSION = 47, 48, 51, 70
+UNSUPPORTED_CERTIFICATE = 43
+# A usage (KU/EKU) failure: certificate_unknown from mbedTLS 3.6.0, unsupported_certificate from 3.6.7
+USAGE_ALERTS = (CERTIFICATE_UNKNOWN, UNSUPPORTED_CERTIFICATE)
 
 TWENTY_YEARS = 20 * 365 * 86400
 
@@ -872,9 +875,9 @@ def matrix(suites, groups):
                ("expired", dict(cert="expired"), {}, "-0x2700", CERTIFICATE_EXPIRED),
                ("not_yet_valid", dict(cert="notyet"), {}, "-0x2700", CERTIFICATE_UNKNOWN),
                ("forged_signature", dict(cert="forged"), {}, "-0x2700", UNKNOWN_CA),
-               ("eku_client_only", dict(cert="eku_client"), {}, "-0x7a00", CERTIFICATE_UNKNOWN)]
+               ("eku_client_only", dict(cert="eku_client"), {}, "-0x7a00", USAGE_ALERTS)]
         if srv == "openssl":
-            bad.append(("ku_no_digital_signature", dict(cert="ku_no_ds"), {}, "-0x7a00", CERTIFICATE_UNKNOWN))
+            bad.append(("ku_no_digital_signature", dict(cert="ku_no_ds"), {}, "-0x7a00", USAGE_ALERTS))
         if srv == "gnutls":
             bad.append(("key_mismatch", dict(key="other"), {}, "-0x6e00", None))
         for label, sa, ca, err, alert in bad:
@@ -906,7 +909,9 @@ def matrix(suites, groups):
     # protection (bad_record_mac), not the message in it: tlslite/mustfail/* break the messages themselves.
     for label, mode, idx, err, alert in (
             ("serverhello_flip", "flip", 0, "-0x6600", ILLEGAL_PARAMETER),
-            ("serverhello_shortened", "shorten", 0, "-0x7080", None),
+            # the rest of the message is missing: DECODE_ERROR on 3.6.0; 3.6.7 reassembles handshake messages
+            # across records (3.6.3) and then meets the leftover bytes as a record: INVALID_RECORD
+            ("serverhello_shortened", "shorten", 0, ("-0x7080", "-0x7200"), None),
             ("record_flip_certificate", "flip", 3, "-0x7180", BAD_RECORD_MAC),
             ("record_flip_certificateverify", "flip", 4, "-0x7180", BAD_RECORD_MAC),
             ("record_flip_finished", "flip", 5, "-0x7180", BAD_RECORD_MAC)):
@@ -1013,6 +1018,10 @@ def run_case(c, a, out, info=""):
     return "FAIL", detail + " || not the recorded %s failure (%s)" % (kind, sig_text)
 
 
+def as_set(v):
+    return v if isinstance(v, (tuple, list)) else (v,)
+
+
 def judge(c, res, facts, err, rc, proxy, seed):
     why = []
     e = c.expect
@@ -1043,7 +1052,7 @@ def judge(c, res, facts, err, rc, proxy, seed):
         got = facts.get("relayed") if facts.get("server") == "openssl" else facts.get("received")
         if hashlib.sha256(payload(seed, got)).hexdigest() != facts["sha256"]:
             why.append("the %d bytes the server received are not the payload's first %d" % (got, got))
-    if outcome == "FAILED" and res.get("esp_err") == "-0x7780" and e.get("err") != "-0x7780":
+    if outcome == "FAILED" and res.get("esp_err") == "-0x7780" and "-0x7780" not in as_set(e.get("err")):
         why.append("the client failed on the SERVER's alert (-0x7780): nothing of the client was tested")
     generic_clean = not why
 
@@ -1109,10 +1118,10 @@ def judge(c, res, facts, err, rc, proxy, seed):
                 why.append("outcome %s state %s, want PEER_CLOSED while handshaking" % (outcome, res.get("state")))
         elif outcome != "FAILED":
             why.append("outcome %s, want FAILED" % outcome)
-        if e.get("err") and outcome == "FAILED" and res.get("esp_err") != e["err"]:
+        if e.get("err") and outcome == "FAILED" and res.get("esp_err") not in as_set(e["err"]):
             why.append("esp_err %s, want %s" % (res.get("esp_err"), e["err"]))
-        if e.get("alert") is not None and facts.get("alert_received") != e["alert"]:
-            why.append("the server received alert %s, want %d" % (facts.get("alert_received"), e["alert"]))
+        if e.get("alert") is not None and facts.get("alert_received") not in as_set(e["alert"]):
+            why.append("the server received alert %s, want %s" % (facts.get("alert_received"), e["alert"]))
         if e.get("late"):
             # Data before the damage arrived intact (compared as it came); the failure came after some
             if int(res.get("echo_received", "0")) <= 0:

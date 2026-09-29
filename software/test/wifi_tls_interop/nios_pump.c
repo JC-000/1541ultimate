@@ -519,7 +519,20 @@ int main(int argc, char **argv)
         start_s = t.tv_sec;
     }
     mbedtls_platform_set_calloc_free(count_calloc, count_free);
-    psa_crypto_init(); // the module's lasting state: taken before the count starts
+    // The module's lasting state is made before the count starts: PSA itself, and the key store that
+    // mbedTLS 3.6.1+ allocates at the first key and keeps (one ECDH key made and destroyed)
+    psa_crypto_init();
+    {
+        psa_key_attributes_t at = PSA_KEY_ATTRIBUTES_INIT;
+        psa_set_key_type(&at, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_MONTGOMERY));
+        psa_set_key_bits(&at, 255);
+        psa_set_key_usage_flags(&at, PSA_KEY_USAGE_DERIVE);
+        psa_set_key_algorithm(&at, PSA_ALG_ECDH);
+        psa_key_id_t key;
+        if (psa_generate_key(&at, &key) == PSA_SUCCESS) {
+            psa_destroy_key(key);
+        }
+    }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(port) };
