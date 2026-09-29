@@ -29,8 +29,18 @@ import urllib.request
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def switch(name):
+    """A 0/1 setting: unset is 0, and anything else than 0 or 1 is an error, not a silent 0."""
+    value = os.environ.get(name, '0')
+    if value not in ('0', '1'):
+        sys.exit('%s=%s: use 0 or 1' % (name, value))
+    return value == '1'
+
+
 # CRYPTO_OFFLINE=1: use what the cache holds, fetch nothing, and fail on anything missing
-OFFLINE = os.environ.get('CRYPTO_OFFLINE', '0') == '1'
+OFFLINE = switch('CRYPTO_OFFLINE')
 
 # Documents fetched by URL: they are immutable, so the sha256 pins them.
 DOCUMENTS = {
@@ -818,9 +828,9 @@ def main():
     signal.signal(signal.SIGALRM, lambda *_: sys.exit('timed out after 30 minutes'))
     signal.alarm(1800)
 
-    strict = os.environ.get('CRYPTO_STRICT', '0') == '1'
+    strict = switch('CRYPTO_STRICT')
     print('expectations %s sha256 %s' % (args.expectations, hashlib.sha256(read(args.expectations, 'rb')).hexdigest()))
-    print('strict %s, offline %s%s' % ('on' if strict else 'off', 'on' if OFFLINE else 'off',
+    print('strict: %s, offline: %s%s' % ('on' if strict else 'off', 'on' if OFFLINE else 'off',
                                        ', cflags %s' % os.environ['CRYPTO_CFLAGS'] if os.environ.get('CRYPTO_CFLAGS') else ''))
     src = Sources(args.cache, read_pins(args.pins))
     # A build directory from other pins would test another mbedTLS than the summary names

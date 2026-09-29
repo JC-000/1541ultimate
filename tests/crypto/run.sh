@@ -25,6 +25,9 @@ KNOWN=" CRYPTO_PINS CRYPTO_SDKCONFIG CRYPTO_MACROS CRYPTO_CACHE CRYPTO_CONFIG CR
 for v in $(env | sed -n 's/^\(CRYPTO_[A-Za-z0-9_]*\)=.*/\1/p'); do
     [[ $KNOWN == *" $v "* ]] || { echo "unknown setting $v (known:$KNOWN)"; echo "CRYPTO_CONFORMANCE FAIL setup"; exit 1; }
 done
+for v in CRYPTO_STRICT CRYPTO_OFFLINE; do
+    case ${!v:-0} in 0|1) ;; *) echo "$v=${!v}: use 0 or 1"; echo "CRYPTO_CONFORMANCE FAIL setup"; exit 1;; esac
+done
 OUT=${1:-$HERE/output}
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)

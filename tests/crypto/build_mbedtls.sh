@@ -60,6 +60,7 @@ offline_check() {
         exit 1
     fi
 }
+case ${CRYPTO_OFFLINE:-0} in 0|1) ;; *) echo "CRYPTO_OFFLINE=$CRYPTO_OFFLINE: use 0 or 1" >&2; exit 2;; esac
 [ "${CRYPTO_OFFLINE:-0}" = 1 ] && export GIT_NO_LAZY_FETCH=1
 
 # fetch <repo> <commit> <dir>: a clean checkout of exactly <commit> and its submodules, fetched
