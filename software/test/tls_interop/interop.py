@@ -1,16 +1,44 @@
 #!/usr/bin/env python3
-"""TLS interop matrix for the ESP32's TLS engine (tls_engine.c), run on the host.
+"""TLS 1.3 interop matrix: independent servers against a TLS client under test.
 
-nios_pump drives the engine through the CMD_TLS_* handlers the way the Ultimate
-does (software/io/wifi/wifi_tls_spike.cc); this script puts an independent TLS 1.3
-server at the other end of its socket, one server process per case, and judges
-each case from what the SERVER reports it negotiated and sent (OpenSSL's -trace
-of its own messages, the GnuTLS server's report), never from the engine's claims.
+The peer side lives here and knows nothing about the client: a throwaway PKI,
+one server process per case on 127.0.0.1 (OpenSSL s_server with -trace, the
+GnuTLS echo server gnutls_echo.c, and a raw-record peer for HelloRetryRequest
+cases), a tampering proxy, the cases, and the verdicts. Every verdict rests on
+what the SERVER reports it negotiated, sent and received, never on the client's
+claims; the bytes a server echoed are checked against a hash of the payload.
 
     interop.py pki --openssl OPENSSL --pki DIR
-    interop.py run --pump PUMP --gnutls GNUTLS_ECHO --openssl OPENSSL --pki DIR --out DIR [--only REGEX] [--baud N]
+    interop.py run --client CLIENT --gnutls GNUTLS_ECHO --openssl OPENSSL --pki DIR --out DIR
+                   [--only REGEX] [--client-arg ARG ...]
 
-Prints one line per case and, last, "TLS_INTEROP PASS|FAIL n/m".
+Prints one line per case (PASS, XFAIL: a documented limitation of the client's
+TLS library, or FAIL) and, last, "TLS_INTEROP PASS|FAIL n/m".
+
+The client contract. CLIENT is an executable; the ESP32's TLS engine is driven
+by software/test/wifi_tls_interop/nios_pump.c, and any other client (mbedTLS on
+the main CPU over sockets, say) plugs in the same way:
+
+  CLIENT --list
+      prints "SUITES name:0xID ..." (the TLS 1.3 suites it offers, in order),
+      "GROUPS 0xID ..." (the groups, first = its key share) and optionally
+      "INFO <text>" (library, version, configuration), one line each.
+  CLIENT --port N --sni NAME --echo BYTES --seed S --after none|close|eof
+         --pt-chunk B --ct-chunk B --settle-ms MS --settle-at K [--ct-caps LIST] [ARG ...]
+      connects to 127.0.0.1:N, runs a TLS 1.3 handshake with verification on,
+      trusting exactly <pki>/trust.pem and checking NAME; sends BYTES bytes, byte
+      i being payload(S, i) below; reads the same number back, comparing as they
+      come; then with --after close waits for the server's close_notify, with
+      --after eof for a TCP close without one. The last stdout line is
+      "RESULT outcome=O pt_delivered=N echo_sent=N echo_received=N echo_ok=0|1
+      [esp_err=E] ...", O one of ECHO_OK, CLOSED (close_notify), PEER_CLOSED
+      (TCP closed first), FAILED (the TLS layer failed), TIMEOUT, ECHO_MISMATCH,
+      CONNECT_FAILED, OPEN_FAILED. pt_delivered counts every plaintext byte the
+      TLS layer handed out, in any stage; E is the TLS library's error code.
+      Exit status 0; anything on stderr containing "Sanitizer" or "runtime
+      error" fails the case.
+  The chunking options describe the traffic shape (plaintext per write,
+  ciphertext per read, when reads happen); a client should honour what it can.
 """
 
 import argparse
@@ -21,6 +49,8 @@ import socket
 import subprocess
 import sys
 import threading
+import hashlib
+import struct
 import time
 import zlib
 
@@ -122,16 +152,23 @@ OPENSSL_TRACE_GROUP = {"x25519": "ecdh_x25519", "secp256r1": "secp256r1", "secp3
 GNUTLS_GROUP = {"x25519": "X25519", "secp256r1": "SECP256R1", "secp384r1": "SECP384R1", "secp521r1": "SECP521R1"}
 
 
-def engine_offer(pump):
-    """The cipher suites and groups the engine offers, from the mbedTLS it was built with."""
-    out = subprocess.run([pump, "--list"], check=True, capture_output=True, text=True).stdout
-    suites, groups = [], []
+def payload(seed, n):
+    """The client's payload (see the contract above)."""
+    return bytes(((i * 131 + (i >> 8) * 7 + seed) ^ (seed >> 8)) & 0xFF for i in range(n))
+
+
+def client_offer(client):
+    """The cipher suites and groups the client offers, and what it says it is."""
+    out = subprocess.run([client, "--list"], check=True, capture_output=True, text=True).stdout
+    suites, groups, info = [], [], ""
     for line in out.splitlines():
+        if line.startswith("INFO "):
+            info = line[5:]
         if line.startswith("SUITES"):
             suites = [int(x.split(":")[1], 16) for x in line.split()[1:]]
         if line.startswith("GROUPS"):
             groups = [int(x, 16) for x in line.split()[1:]]
-    return suites, groups
+    return suites, groups, info
 
 
 # ---------------------------------------------------------------- servers
@@ -184,6 +221,7 @@ class OpenSSLServer:
         self.end_after = end_after
         self.end = end
         self.relayed = 0
+        self.hash = hashlib.sha256()
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.ready = wait_listening(self.port, self.proc)
         self.relay = threading.Thread(target=self._relay, daemon=True)
@@ -195,6 +233,7 @@ class OpenSSLServer:
             while True:
                 if self.end_after is not None and self.relayed >= self.end_after:
                     if self.end == "close":
+                        time.sleep(0.3)  # s_server sends the last bytes back first
                         self.proc.stdin.close()  # -no_ign_eof: s_server ends the connection
                     elif self.end == "eof":
                         time.sleep(0.3)  # s_server sends the last bytes back first
@@ -204,6 +243,7 @@ class OpenSSLServer:
                 if not d:
                     return
                 self.relayed += len(d)
+                self.hash.update(d)
                 os.write(fout, d)
         except OSError:
             return
@@ -220,7 +260,7 @@ class OpenSSLServer:
 
     def facts(self):
         """What s_server's trace says it SENT: ServerHello (or HRR) contents, tickets, key updates, alerts."""
-        f = {"server": "openssl", "relayed": self.relayed, "tickets": 0, "hrr": 0, "version": None, "suite": None,
+        f = {"server": "openssl", "relayed": self.relayed, "sha256": self.hash.hexdigest(), "tickets": 0, "hrr": 0, "version": None, "suite": None,
              "group": None, "keyupdates": 0, "alerts_sent": [], "handshake_done": False}
         try:
             lines = open(self.trace, errors="replace").read().splitlines()
@@ -327,14 +367,15 @@ class GnuTLSServer:
                 kv = dict(x.split("=", 1) for x in head.split()[1:])
                 kv["end"] = end
                 f.update(tickets=int(kv["tickets_sent"]), keyupdates=int(kv["keyupdates_sent"]),
-                         received=int(kv["received"]), end=kv["end"])
+                         received=int(kv["received"]), relayed=int(kv["echoed"]), sha256=kv.get("sha256"),
+                         end=kv["end"])
             if ln.startswith("SERVER_HANDSHAKE_FAILED"):
                 f["handshake_error"] = ln.split(" ", 1)[1]
         return f
 
 
 class TamperProxy:
-    """Between the pump and a server: changes the server's bytes, one record chosen by its position."""
+    """Between the client and a server: changes the server's bytes, one record chosen by its position."""
 
     def __init__(self, target_port, mode, record_index):
         self.mode, self.index = mode, record_index
@@ -406,16 +447,128 @@ class TamperProxy:
             pass
 
 
+HRR_RANDOM = bytes.fromhex("CF21AD74E59A6111BE1D8C021E65B891C2A211167ABB8C5E079E09E2C8A8339C")
+
+
+class HRRPeer:
+    """Raw records, no TLS library: answers the ClientHello with a HelloRetryRequest that selects a group
+    chosen from what the client ADVERTISED (RFC 8446 section 4.1.4), and logs what the client does next."""
+
+    ALERTS = {40: "handshake_failure", 47: "illegal_parameter", 80: "internal_error", 50: "decode_error"}
+
+    def __init__(self, out, name, select):
+        self.select = select  # "unoffered", "share" (the group of the key share sent), or "offered"
+        self.log = os.path.join(out, name + ".server.log")
+        self.ls = socket.socket()
+        self.ls.bind(("127.0.0.1", 0))
+        self.ls.listen(1)
+        self.port = self.ls.getsockname()[1]
+        self.ready = True
+        self.cmd = ["HRRPeer", select]
+        self.f = {"server": "hrr", "received": 0, "after_hrr": None}
+        self.t = threading.Thread(target=self._run, daemon=True)
+        self.t.start()
+
+    @staticmethod
+    def _record(c):
+        h = b""
+        while len(h) < 5:
+            d = c.recv(5 - len(h))
+            if not d:
+                return None
+            h += d
+        n = struct.unpack(">H", h[3:5])[0]
+        b = b""
+        while len(b) < n:
+            d = c.recv(n - len(b))
+            if not d:
+                return None
+            b += d
+        return h[0], b
+
+    @staticmethod
+    def _client_hello(body):
+        p = 2 + 32
+        sid = body[p + 1:p + 1 + body[p]]
+        p += 1 + body[p]
+        p += 2 + struct.unpack(">H", body[p:p + 2])[0]
+        p += 1 + body[p]
+        end = p + 2 + struct.unpack(">H", body[p:p + 2])[0]
+        p += 2
+        groups, shares = [], []
+        while p < end:
+            t, ln = struct.unpack(">HH", body[p:p + 4])
+            d = body[p + 4:p + 4 + ln]
+            if t == 10:
+                groups = [struct.unpack(">H", d[2 + i:4 + i])[0] for i in range(0, struct.unpack(">H", d[:2])[0], 2)]
+            if t == 51:
+                q = 2
+                while q < len(d):
+                    g, kl = struct.unpack(">HH", d[q:q + 4])
+                    shares.append(g)
+                    q += 4 + kl
+            p += 4 + ln
+        return sid, groups, shares
+
+    def _run(self):
+        f = self.f
+        c, _ = self.ls.accept()
+        c.settimeout(10)
+        try:
+            t, b = self._record(c)
+            sid, groups, shares = self._client_hello(b[4:])
+            f["advertised"], f["shares"] = groups, shares
+            if self.select == "unoffered":
+                # x448, ffdhe2048, secp384r1, a GREASE value: the first the client did not advertise
+                g = next(x for x in (0x001e, 0x0100, 0x0018, 0x0a0a) if x not in groups)
+            elif self.select == "share":
+                g = shares[0]
+            else:
+                g = next(x for x in groups if x not in shares)
+            f["selected"] = g
+            ext = struct.pack(">HHH", 43, 2, 0x0304) + struct.pack(">HHH", 51, 2, g)
+            body = struct.pack(">H", 0x0303) + HRR_RANDOM + bytes([len(sid)]) + sid + struct.pack(">HB", 0x1301, 0) + \
+                struct.pack(">H", len(ext)) + ext
+            msg = bytes([2]) + len(body).to_bytes(3, "big") + body
+            c.sendall(bytes([22, 3, 3]) + struct.pack(">H", len(msg)) + msg)
+            while True:
+                r = self._record(c)
+                if r is None:
+                    f["after_hrr"] = "eof"
+                    break
+                t, b = r
+                if t == 20:
+                    continue  # the compatibility-mode ChangeCipherSpec
+                if t == 21:
+                    f["after_hrr"] = "alert:" + self.ALERTS.get(b[1], str(b[1]))
+                elif t == 22 and b[0] == 1:
+                    f["after_hrr"] = "client_hello2"
+                    f["shares2"] = self._client_hello(b[4:])[2]
+                else:
+                    f["after_hrr"] = "record:%d" % t
+                break
+        except (OSError, TypeError, StopIteration) as e:
+            f["after_hrr"] = f["after_hrr"] or "error:%r" % e
+        c.close()
+        self.ls.close()
+
+    def stop(self):
+        self.t.join(timeout=15)
+        with open(self.log, "w") as fh:
+            fh.write(repr(self.f) + "\n")
+        return self.f
+
+
 # ---------------------------------------------------------------- cases
 
 class Case:
-    def __init__(self, name, server, sargs, pump, expect, proxy=None, note=""):
-        self.name, self.server, self.sargs, self.pump, self.expect, self.proxy, self.note = \
-            name, server, sargs, pump, expect, proxy, note
+    def __init__(self, name, server, sargs, client, expect, proxy=None):
+        self.name, self.server, self.sargs, self.client, self.expect, self.proxy = \
+            name, server, sargs, client, expect, proxy
 
 
 PAYLOADS = [1, 511, 512, 1024, 3000, 16500]
-# (label, pt per step, ct per step: 0 is what the step has room for, as the Nios reads)
+# (label, plaintext per write, ciphertext per read: 0 is what the step has room for, as the Nios reads)
 CHUNKINGS = [("pt512", 512, 0), ("pt1024", 1024, 0), ("pt512-ct1", 512, 1), ("pt512-ct1500", 512, 1500)]
 TICKETS = [0, 1, 2, 8]
 
@@ -426,7 +579,7 @@ def matrix(suites, groups):
     grouplist = [(first, 0), (second, 0 if first == second else 1)]
     for srv in ("openssl", "gnutls"):
         default_tickets = 2
-        # Handshake parameters: every suite the engine offers x groups (and an HRR) x both chains
+        # Handshake parameters: every suite the client offers x groups (and an HRR) x both chains
         for suite in suites:
             for g, hrr in grouplist:
                 for cert in ("leaf_ec", "leaf_rsa"):
@@ -442,20 +595,26 @@ def matrix(suites, groups):
                     name = "%s/shape/tickets%d/%dB/%s" % (srv, t, n, label)
                     cases.append(Case(name, srv, dict(tickets=t), dict(echo=n, pt=pt, ct=ct),
                                       dict(ok=True, tickets=t)))
+        # Many tickets, as the client reads them
+        for t in (4, 5, 10, 40):
+            for n in (1, 100, 3000):
+                cases.append(Case("%s/tickets-many/tickets%d/%dB" % (srv, t, n), srv, dict(tickets=t),
+                                  dict(echo=n, pt=512, ct=0), dict(ok=True, tickets=t)))
         # A burst: every ticket (and the echo behind them) already in the socket at the first echo step
         for t in (2, 4, 5, 8):
             for n in (1, 3000):
                 cases.append(Case("%s/burst/tickets%d/%dB" % (srv, t, n), srv, dict(tickets=t),
                                   dict(echo=n, pt=512, ct=0, settle=100), dict(ok=True, tickets=t)))
-        # Scripted: the echo's one write goes out with no ciphertext; 150 ms later the next step takes
-        # the start of the server's flight (one byte, or with 8 tickets about the first three, each
-        # ticket record being about 250 bytes from both servers), and the step after it all the rest:
-        # up to five tickets and the echo in one step, nothing more to come
-        for t in (1, 2, 4, 5, 8):
+        # Scripted: the echo's one write goes out with no ciphertext; 150 ms later the next read takes
+        # the start of the server's flight (one byte, or with more than five tickets all but about the
+        # last five, a ticket record being about 250 bytes from both servers), and the read after it
+        # all the rest: five tickets and the echo in one step, and nothing left to send
+        for t in (1, 2, 4, 5, 8, 10, 40):
             first = 1 if t <= 5 else (t - 5) * 250 - 50
-            cases.append(Case("%s/burst-after-write/tickets%d/1B" % (srv, t), srv, dict(tickets=t),
-                              dict(echo=1, pt=512, ct=0, settle=150, settle_at=1, caps="0,%d" % first),
-                              dict(ok=True, tickets=t)))
+            for n in (1, 100):
+                cases.append(Case("%s/burst-after-write/tickets%d/%dB" % (srv, t, n), srv, dict(tickets=t),
+                                  dict(echo=n, pt=512, ct=0, settle=150, settle_at=1, caps="0,%d" % first),
+                                  dict(ok=True, tickets=t)))
         # Endings
         cases.append(Case("%s/end/close_notify" % srv, srv, dict(tickets=2, end_after=3000, end="close"),
                           dict(echo=3000, pt=512, ct=0, after="close"), dict(ok=True, outcome="CLOSED", tickets=2)))
@@ -470,20 +629,28 @@ def matrix(suites, groups):
                ("forged_signature", dict(cert="forged"), {})]
         if srv == "gnutls":
             bad.append(("key_mismatch", dict(key="other"), {}))
-        for label, s, p in bad:
-            cases.append(Case("%s/mustfail/%s" % (srv, label), srv, dict(tickets=2, **s), dict(echo=3000, **p),
+        for label, sa, ca in bad:
+            cases.append(Case("%s/mustfail/%s" % (srv, label), srv, dict(tickets=2, **sa), dict(echo=3000, **ca),
                               dict(ok=False)))
     # KeyUpdate from the server, mid-stream (GnuTLS; s_server -quiet cannot be told to)
     cases.append(Case("gnutls/keyupdate/after1024", "gnutls", dict(tickets=2, keyupdate_after=1024),
                       dict(echo=3000, pt=512, ct=0), dict(ok=True, keyupdate=True, tickets=2)))
     # Tampering on the wire, by the server's record number: 0 ServerHello, 1 ChangeCipherSpec, then the
     # encrypted EncryptedExtensions 2, Certificate 3, CertificateVerify 4, Finished 5 (s_server sends
-    # one record per message; interop.py checks it in the trace)
+    # one record per message, as its -trace shows)
     for label, mode, idx in (("serverhello_flip", "flip", 0), ("serverhello_shortened", "shorten", 0),
                              ("serverhello_truncated", "truncate", 0), ("certificate_flip", "flip", 3),
                              ("certverify_flip", "flip", 4), ("finished_flip", "flip", 5)):
         cases.append(Case("openssl/tamper/%s" % label, "openssl", dict(tickets=2), dict(echo=3000),
                           dict(ok=False), proxy=(mode, idx)))
+    # HelloRetryRequest from a raw peer (RFC 8446 section 4.1.4): a group the client did not advertise
+    # (CVE-2026-25832, fixed in mbedTLS 3.6.7), or the group of the key share it already sent, must be
+    # answered with an illegal_parameter alert; an advertised group with a second ClientHello
+    for label, select in (("unoffered_group", "unoffered"), ("group_of_sent_share", "share")):
+        cases.append(Case("raw/hrr/%s" % label, "hrr", dict(select=select), dict(echo=100),
+                          dict(ok=False, after_hrr="alert:illegal_parameter")))
+    cases.append(Case("raw/hrr/advertised_group", "hrr", dict(select="offered"), dict(echo=100),
+                      dict(hrr_accept=True)))
     return cases
 
 
@@ -491,84 +658,97 @@ def run_case(c, a, out):
     base = re.sub(r"[^\w.-]", "_", c.name)
     if c.server == "openssl":
         srv = OpenSSLServer(a.openssl, a.pki, out, base, **c.sargs)
-    else:
+    elif c.server == "gnutls":
         srv = GnuTLSServer(a.gnutls, a.pki, out, base, **c.sargs)
+    else:
+        srv = HRRPeer(out, base, **c.sargs)
     if not srv.ready:
         srv.stop()
-        return False, "server did not start: %s" % " ".join(srv.cmd), {}
+        return "FAIL", "server did not start: %s" % " ".join(srv.cmd)
     port = srv.port
     proxy = None
     if c.proxy:
         proxy = TamperProxy(port, *c.proxy)
         port = proxy.port
-    p = c.pump
-    cmd = [a.pump, "--port", str(port), "--sni", p.get("sni", "localhost"), "--echo", str(p.get("echo", 0)),
+    p = c.client
+    seed = zlib.crc32(c.name.encode())
+    cmd = [a.client, "--port", str(port), "--sni", p.get("sni", "localhost"), "--echo", str(p.get("echo", 0)),
            "--pt-chunk", str(p.get("pt", 512)), "--ct-chunk", str(p.get("ct", 0)), "--after", p.get("after", "none"),
-           "--seed", str(zlib.crc32(c.name.encode())), "--settle-ms", str(p.get("settle", 0)),
-           "--settle-at", str(p.get("settle_at", 0))] + (["--ct-caps", p["caps"]] if "caps" in p else [])
-    if a.baud is not None:
-        cmd += ["--baud", a.baud]
-    t0 = time.time()
+           "--seed", str(seed), "--settle-ms", str(p.get("settle", 0)), "--settle-at", str(p.get("settle_at", 0))]
+    cmd += (["--ct-caps", p["caps"]] if "caps" in p else []) + (a.client_arg or [])
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        pump_out, pump_err, rc = r.stdout, r.stderr, r.returncode
+        out_, err, rc = r.stdout, r.stderr, r.returncode
     except subprocess.TimeoutExpired as e:
-        pump_out, pump_err, rc = (e.stdout or b"").decode(), (e.stderr or b"").decode(), -1
-    dt = time.time() - t0
+        out_, err, rc = (e.stdout or b"").decode(), (e.stderr or b"").decode(), -1
     facts = srv.stop()
-    with open(os.path.join(out, base + ".pump.log"), "w") as f:
-        f.write(" ".join(cmd) + "\n" + pump_out + pump_err)
+    with open(os.path.join(out, base + ".client.log"), "w") as f:
+        f.write(" ".join(cmd) + "\n" + out_ + err)
     res = {}
-    for ln in pump_out.splitlines():
+    for ln in out_.splitlines():
         if ln.startswith("RESULT "):
             res = dict(re.findall(r"(\w+)=(\S*)", ln))
-    return judge(c, res, facts, pump_err, rc, proxy, dt)
+    return judge(c, res, facts, err, rc, proxy, seed)
 
 
-def judge(c, res, facts, pump_err, rc, proxy, dt):
+def judge(c, res, facts, err, rc, proxy, seed):
     why = []
+    xfail = ""
     e = c.expect
-    if rc != 0 or "Sanitizer" in pump_err or "runtime error" in pump_err:
-        why.append("pump exit %d / sanitizer: %s" % (rc, pump_err.strip().splitlines()[-1:] or ""))
+    if rc != 0 or "Sanitizer" in err or "runtime error" in err:
+        why.append("client exit %d / sanitizer: %s" % (rc, err.strip().splitlines()[-1:] or ""))
     if not res:
         why.append("no RESULT line")
-        return False, "; ".join(why), facts
+        return "FAIL", "; ".join(why)
     outcome = res.get("outcome")
-    detail = "outcome=%s esp_err=%s state=%s pt_delivered=%s echo_received=%s steps=%s" % (
-        outcome, res.get("esp_err"), res.get("state"), res.get("pt_delivered"), res.get("echo_received"),
-        res.get("steps"))
-    if e["ok"]:
+    echo = c.client.get("echo", 0)
+    detail = "outcome=%s esp_err=%s pt_delivered=%s echo_received=%s steps=%s" % (
+        outcome, res.get("esp_err"), res.get("pt_delivered"), res.get("echo_received"), res.get("steps"))
+    if c.server == "hrr":
+        detail += " server: advertised %s, HRR selected %s, then %s" % (
+            [hex(g) for g in facts.get("advertised", [])], hex(facts.get("selected", 0)), facts.get("after_hrr"))
+        if res.get("pt_delivered") != "0":
+            why.append("plaintext delivered")
+        if e.get("hrr_accept"):
+            if facts.get("after_hrr") != "client_hello2" or facts.get("shares2") != [facts.get("selected")]:
+                why.append("an HRR for an advertised group was not answered with a ClientHello for it")
+        else:
+            if outcome != "FAILED":
+                why.append("outcome %s, want FAILED" % outcome)
+            if facts.get("after_hrr") != e["after_hrr"]:
+                why.append("server saw %s after its HRR, want %s" % (facts.get("after_hrr"), e["after_hrr"]))
+    elif e.get("ok", True):
         want = e.get("outcome", "ECHO_OK")
-        if e.get("keyupdate"):
-            # mbedTLS 3.6.0 has no KeyUpdate: the engine must fail cleanly, with every byte before it intact
-            if outcome != "FAILED" or res.get("esp_err") != "-0x7700":
-                why.append("KeyUpdate: expected FAILED -0x7700 (UNEXPECTED_MESSAGE), got %s" % outcome)
+        if e.get("keyupdate") and outcome == "FAILED" and res.get("esp_err") == "-0x7700":
+            # mbedTLS 3.6 has no KeyUpdate (ssl_msg.c, "Fail in all other cases"): acceptable only as a
+            # clean failure with every byte before it intact
+            xfail = "mbedTLS 3.6 does not implement KeyUpdate (-0x7700 UNEXPECTED_MESSAGE)"
             if int(res.get("echo_received", -1)) < 1024:
                 why.append("bytes before the KeyUpdate lost")
-            if facts.get("keyupdates") != 1:
-                why.append("server sent %s KeyUpdates" % facts.get("keyupdates"))
         else:
             if outcome != want:
                 why.append("outcome %s, want %s" % (outcome, want))
-            if res.get("echo_ok") != "1" or res.get("echo_received") != str(c.pump["echo"]):
+            if res.get("echo_ok") != "1" or res.get("echo_received") != str(echo):
                 why.append("echo not intact")
+        if e.get("keyupdate") and facts.get("keyupdates") != 1:
+            why.append("server sent %s KeyUpdates" % facts.get("keyupdates"))
         # A killed s_server loses the end of its trace: then the echo it relayed is the witness
         killed = c.server == "openssl" and c.sargs.get("end") == "eof"
         if not facts.get("handshake_done") and not killed:
             why.append("server saw no completed handshake")
-        if c.server == "openssl" and killed:
-            if facts.get("relayed") != c.pump["echo"]:
-                why.append("server relayed %s of %d" % (facts.get("relayed"), c.pump["echo"]))
-        elif c.server == "openssl":
+        if not xfail and not e.get("keyupdate"):
+            want_hash = hashlib.sha256(payload(seed, echo)).hexdigest()
+            if facts.get("relayed") != echo or facts.get("sha256") != want_hash:
+                why.append("server echoed %s bytes, sha256 %s, want %d with %s" % (
+                    facts.get("relayed"), (facts.get("sha256") or "")[:16], echo, want_hash[:16]))
+        if c.server == "openssl" and not killed:
             if facts.get("version") != 0x0304:
                 why.append("server version %s" % facts.get("version"))
-            if not e.get("keyupdate") and facts.get("relayed", 0) < c.pump["echo"] and outcome == "ECHO_OK":
-                why.append("server relayed %s of %d" % (facts.get("relayed"), c.pump["echo"]))
             if "suite" in e and facts.get("suite") != e["suite"]:
                 why.append("server chose suite %s" % facts.get("suite"))
             if "group" in e and facts.get("group") != OPENSSL_TRACE_GROUP[e["group"]]:
                 why.append("server chose group %s" % facts.get("group"))
-        else:
+        elif c.server == "gnutls":
             if facts.get("version") != "TLS1.3":
                 why.append("server version %s" % facts.get("version"))
             if "suite" in e and not (facts.get("suite") or "").endswith(SUITES[e["suite"]][4:]):
@@ -583,7 +763,7 @@ def judge(c, res, facts, pump_err, rc, proxy, dt):
         if outcome not in ("FAILED", "PEER_CLOSED"):
             why.append("outcome %s, want FAILED" % outcome)
         if outcome == "PEER_CLOSED" and not (proxy and proxy.mode == "truncate"):
-            why.append("ended by the server, not by the engine")
+            why.append("ended by the server, not by the client")
         if res.get("pt_delivered") != "0" or res.get("echo_sent") != "0":
             why.append("plaintext moved: delivered %s, sent %s" % (res.get("pt_delivered"), res.get("echo_sent")))
         if facts.get("relayed", 0) or facts.get("received", 0):
@@ -592,7 +772,9 @@ def judge(c, res, facts, pump_err, rc, proxy, dt):
             why.append("proxy never tampered")
     if proxy:
         detail += " proxy: " + proxy.done
-    return not why, detail + ("" if not why else " || " + "; ".join(why)), facts
+    if why:
+        return "FAIL", detail + " || " + "; ".join(why)
+    return ("XFAIL", detail + " || " + xfail) if xfail else ("PASS", detail)
 
 
 def main():
@@ -600,34 +782,39 @@ def main():
     ap.add_argument("what", choices=("pki", "run"))
     ap.add_argument("--openssl", required=True)
     ap.add_argument("--pki", required=True)
-    ap.add_argument("--pump")
+    ap.add_argument("--client")
     ap.add_argument("--gnutls")
     ap.add_argument("--out")
     ap.add_argument("--only")
-    ap.add_argument("--baud", help="the pump's serial-link model (0: none; default: the pump's)")
+    ap.add_argument("--client-arg", action="append", help="passed to the client as it is (repeatable)")
+    ap.add_argument("--label", default="", help="what was built: printed with the summary line")
     a = ap.parse_args()
     if a.what == "pki":
         make_pki(a.openssl, a.pki)
         return 0
     os.makedirs(a.out, exist_ok=True)
-    suites, groups = engine_offer(a.pump)
+    suites, groups, info = client_offer(a.client)
     ver_o = subprocess.run([a.openssl, "version"], capture_output=True, text=True).stdout.strip()
     ver_g = subprocess.run(["pkg-config", "--modversion", "gnutls"], capture_output=True, text=True).stdout.strip()
-    print("PEERS openssl: %s | gnutls: %s" % (ver_o, ver_g))
-    print("ENGINE offers suites %s, groups %s" % (
-        ", ".join(SUITES.get(s, hex(s)) for s in suites), ", ".join(GROUPS.get(g, hex(g)) for g in groups)))
+    print("PEERS openssl: %s | gnutls: %s | raw HRR peer: interop.py" % (ver_o, ver_g))
+    print("CLIENT %s %s: %s" % (a.client, " ".join(a.client_arg or []), info))
+    print("CLIENT offers suites %s; groups %s" % (
+        ", ".join(SUITES.get(x, hex(x)) for x in suites), ", ".join(GROUPS.get(g, hex(g)) for g in groups)))
     cases = matrix(suites, groups)
     if a.only:
         cases = [c for c in cases if re.search(a.only, c.name)]
-    passed = 0
+    counts = {"PASS": 0, "XFAIL": 0, "FAIL": 0}
     t0 = time.time()
     for c in cases:
-        ok, detail, _ = run_case(c, a, a.out)
-        passed += ok
-        print("%s %s %s" % ("PASS" if ok else "FAIL", c.name, detail), flush=True)
-    print("elapsed %.1f s" % (time.time() - t0))
-    print("TLS_INTEROP %s %d/%d" % ("PASS" if passed == len(cases) and cases else "FAIL", passed, len(cases)))
-    return 0 if passed == len(cases) else 1
+        verdict, detail = run_case(c, a, a.out)
+        counts[verdict] += 1
+        print("%s %s %s" % (verdict, c.name, detail), flush=True)
+    good = counts["PASS"] + counts["XFAIL"]
+    print("elapsed %.1f s; %d PASS, %d XFAIL (documented library limits), %d FAIL" % (
+        time.time() - t0, counts["PASS"], counts["XFAIL"], counts["FAIL"]))
+    print("TLS_INTEROP %s %d/%d (%s)" % ("PASS" if good == len(cases) and cases else "FAIL", good, len(cases),
+                                       a.label or info))
+    return 0 if good == len(cases) else 1
 
 
 if __name__ == "__main__":

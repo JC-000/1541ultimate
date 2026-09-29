@@ -15,9 +15,12 @@
  * --close-after / --eof-after: once this many bytes were echoed, end with a
  *   close_notify, or with a bare TCP close.
  * --skip-key-check: load a key that does not match the certificate.
+ *
+ * SERVER_DONE carries the SHA-256 of every byte it received.
  */
 
 #include <arpa/inet.h>
+#include <gnutls/crypto.h>
 #include <gnutls/gnutls.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -126,10 +129,12 @@ int main(int argc, char **argv)
     printf("SERVER_NEGOTIATED version=%s suite=%s group=%s hrr=%d\n",
            gnutls_protocol_get_name(gnutls_protocol_get_version(s)), gnutls_ciphersuite_get(s),
            gnutls_group_get_name(gnutls_group_get(s)), hrr_sent);
-    if (tickets > 0) {
-        check(gnutls_session_ticket_send(s, tickets, 0), "ticket_send");
+    for (int i = 0; i < tickets; i++) {
+        check(gnutls_session_ticket_send(s, 1, 0), "ticket_send"); // many in one call fail with an internal error
     }
 
+    gnutls_hash_hd_t hash;
+    check(gnutls_hash_init(&hash, GNUTLS_DIG_SHA256), "hash");
     char buf[16384];
     long received = 0, echoed = 0;
     const char *end = "eof";
@@ -156,6 +161,7 @@ int main(int argc, char **argv)
             break;
         }
         received += n;
+        gnutls_hash(hash, buf, n);
         for (ssize_t off = 0; off < n; ) {
             ssize_t w = gnutls_record_send(s, buf + off, n - off);
             if (w < 0 && gnutls_error_is_fatal((int)w)) {
@@ -171,9 +177,15 @@ int main(int argc, char **argv)
             check(gnutls_session_key_update(s, 0), "key_update");
         }
     }
-done:
-    printf("SERVER_DONE received=%ld echoed=%ld tickets_sent=%d keyupdates_sent=%d end=%s\n", received, echoed,
-           tickets_sent, keyupdates_sent, end);
+done:;
+    unsigned char digest[32];
+    char hex[65];
+    gnutls_hash_deinit(hash, digest);
+    for (int i = 0; i < 32; i++) {
+        sprintf(hex + 2 * i, "%02x", digest[i]);
+    }
+    printf("SERVER_DONE received=%ld echoed=%ld sha256=%s tickets_sent=%d keyupdates_sent=%d end=%s\n", received,
+           echoed, hex, tickets_sent, keyupdates_sent, end);
     close(fd);
     gnutls_deinit(s);
     return 0;

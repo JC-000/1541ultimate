@@ -5,7 +5,8 @@
  * rpc_dispatch.c handlers and tls_engine.c, with mbedTLS built on the host,
  * and a TCP socket to a real TLS 1.3 server. The loops follow spike_run() in
  * software/io/wifi/wifi_tls_spike.cc: the same step sizes, the same resends,
- * the same waits. One connection per run; interop.py runs the matrix.
+ * the same waits. One connection per run: it is a client as described in
+ * software/test/tls_interop/interop.py, which runs the matrix.
  *
  *   nios_pump --list
  *   nios_pump --port N --sni NAME [--verify 0|1] [--echo BYTES] [--push BYTES]
@@ -51,6 +52,7 @@
 #include "tls_engine.h"
 #include "mbedtls/ssl.h"
 #include "mbedtls/ssl_ciphersuites.h"
+#include "mbedtls/build_info.h"
 
 void cmd_tls_open(command_buf_t *buf);
 void cmd_tls_step(command_buf_t *buf);
@@ -312,7 +314,8 @@ static int list(void)
     for (const uint16_t *g = conf.MBEDTLS_PRIVATE(group_list); g && *g; g++) {
         printf(" 0x%04x", *g);
     }
-    printf("\n");
+    printf("\nINFO tls_engine.c through rpc_dispatch.c, %s, config %s\n", MBEDTLS_VERSION_STRING_FULL,
+           MBEDTLS_CONFIG_FILE);
     mbedtls_ssl_config_free(&conf);
     return 0;
 }
