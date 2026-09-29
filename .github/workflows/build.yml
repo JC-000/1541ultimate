@@ -171,9 +171,9 @@ jobs:
                 software/wifi/raw_u64/build/bridge.bin
                 software/wifi/raw_u64/build/bootloader/bootloader.bin
                 software/wifi/raw_u64/build/partition_table/partition-table.bin
-            key: ${{ runner.os }}-esp32-${{ hashFiles('software/esp_depends.txt') }}
+            key: ${{ runner.os }}-esp32-${{ hashFiles('software/esp_depends.txt', 'software/wifi/ca_store/**') }}
             restore-keys: |
-                ${{ runner.os }}-esp32-${{ hashFiles('software/esp_depends.txt') }}
+                ${{ runner.os }}-esp32-${{ hashFiles('software/esp_depends.txt', 'software/wifi/ca_store/**') }}
 
       - if: steps.cache-esp32.outputs.cache-hit != 'true'
         name: Build ESP32 Software (skipped if available in cache)
