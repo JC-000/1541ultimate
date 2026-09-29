@@ -362,7 +362,7 @@ static void finish(const char *outcome, const char *detail)
         session_request(CMD_TLS_CLOSE, (uint8_t)session_id);
         session_id = -1;
     }
-    int stats_after = 0;
+    int stats_after = -1; // no session was opened
     if (last_session >= 0) {
         session_request(CMD_TLS_STATS, (uint8_t)last_session);
         stats_after = ((rpc_tls_stats_resp *)B.data)->esp_err; // ESP_ERR_NOT_FOUND: the module let it go
@@ -379,10 +379,11 @@ static void finish(const char *outcome, const char *detail)
     long leaked = live_allocs - allocs_before_open;
     printf("RESULT outcome=%s stage=%s detail=%s esp_err=%s0x%04x state=%d steps=%d resends=%d pt_delivered=%ld "
            "echo_sent=%ld echo_received=%ld echo_ok=%d tcp_in=%ld tcp_out=%ld tcp_eof=%d sessions_open=%d "
-           "tickets_taken=%d leaked=%ld psa_keys=%d stats_after=0x%04x clock_ok=%d open_reason=%d\n",
+           "tickets_taken=%d leaked=%ld psa_keys=%d stats_after=%s0x%04x clock_ok=%d open_reason=%d\n",
            outcome, R.stage, detail, (R.esp_err < 0) ? "-" : "", (unsigned)abs(R.esp_err), R.state, R.steps,
            R.resends, R.pt_delivered, R.echo_sent, R.echo_received, R.echo_ok, R.tcp_in, R.tcp_out, R.tcp_eof,
-           sessions_left, tickets_taken, leaked, psa_keys, (unsigned)stats_after, clock_ok, open_reason);
+           sessions_left, tickets_taken, leaked, psa_keys, (stats_after < 0) ? "-" : "",
+           (unsigned)abs(stats_after), clock_ok, open_reason);
     fflush(stdout);
     exit(0);
 }

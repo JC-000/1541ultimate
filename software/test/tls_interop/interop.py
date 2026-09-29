@@ -1119,7 +1119,8 @@ def judge(c, res, facts, err, rc, proxy, seed):
     # is empty, STATS for it says NOT_FOUND, and PSA holds no key
     if res.get("sessions_open", "0") != "0":
         why.append("the module still holds %s session(s) at the end" % res["sessions_open"])
-    if res.get("stats_after", "0x0000") not in ("0x0000", "0x0105"):
+    # (stats_after is -0x0001 where no session was ever opened)
+    if res.get("stats_after", "0x0105") not in ("-0x0001", "0x0105"):
         why.append("STATS for the ended session gave %s, not NOT_FOUND" % res["stats_after"])
     if res.get("psa_keys", "0") not in ("0", "-1"):
         why.append("PSA still holds %s key(s) at the end" % res["psa_keys"])
