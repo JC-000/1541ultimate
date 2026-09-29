@@ -156,8 +156,12 @@ class Harness:
         self.proc = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
 
     def __call__(self, *fields):
-        self.proc.stdin.write(' '.join(str(f) if f != '' else '-' for f in fields) + '\n')
-        rc, _, out = self.proc.stdout.readline().rstrip('\n').partition(' ')
+        line = ' '.join(str(f) if f != '' else '-' for f in fields)
+        self.proc.stdin.write(line + '\n')
+        answer = self.proc.stdout.readline()
+        if not answer:
+            raise RuntimeError('the vectors harness died on: %s' % line[:200])
+        rc, _, out = answer.rstrip('\n').partition(' ')
         return int(rc), bytes.fromhex(out)
 
 
@@ -196,7 +200,9 @@ class Suite:
     def __init__(self, name, expectations):
         self.name = name
         self.expectations = expectations
-        self.passed = self.failed = self.decided = 0
+        self.passed = self.failed = 0
+        # vectors an expectations line judged: its outcome against the vector's own verdict
+        self.decided = {'deviate': 0, 'acceptable': 0, 'agree': 0}
         self.failures = []
         self.covered = set()
 
@@ -210,12 +216,13 @@ class Suite:
         label = '%s tc=%s (%s, %s)' % (source, tc, result, ' '.join(flags) or '-')
         if observed == 'wrong':
             return self.fail('%s: WRONG OUTPUT' % label)
+        own = {'valid': 'accept', 'invalid': 'reject'}.get(result)
         if want is None:
             if result == 'acceptable':
                 return self.fail('%s: %s, and no expectation says which outcome is right' % (label, observed))
-            want = 'accept' if result == 'valid' else 'reject'
+            want = own
         else:
-            self.decided += 1
+            self.decided['acceptable' if own is None else 'agree' if want == own else 'deviate'] += 1
         if observed != want:
             return self.fail('%s: %s, expected %s' % (label, observed, want))
         self.passed += 1
@@ -226,8 +233,10 @@ class Suite:
         return self.failed == 0 and (self.passed > 0 or self.name == 'expectations')
 
     def line(self, detail=''):
-        text = 'SUITE %-18s %s %5d passed %3d failed (%d decided by expectations)' % (
-            self.name, 'PASS' if self.ok() else 'FAIL', self.passed, self.failed, self.decided)
+        text = 'SUITE %-18s %s %5d passed %3d failed' % (self.name, 'PASS' if self.ok() else 'FAIL', self.passed,
+                                                          self.failed)
+        if any(self.decided.values()):
+            text += ' (expectations: %(deviate)d deviate, %(acceptable)d acceptable, %(agree)d agree)' % self.decided
         return text + (' ' + detail if detail else '')
 
 
@@ -489,7 +498,10 @@ def limbo(exe, name, source, cases, exp):
         leaf = pem_to_hex(t['peer_certificate'])
         proc.stdin.write(' '.join([str(when), t['expected_peer_name']['value'], leaf, str(len(chain))] + chain +
                                   [str(len(trusted))] + trusted) + '\n')
-        ret, flags = proc.stdout.readline().split()
+        answer = proc.stdout.readline()
+        if not answer:
+            raise RuntimeError('the limbo harness died on %s' % t['id'])
+        ret, flags = answer.split()
         seen = 'accept' if int(ret) == 0 else 'reject'
         result = 'valid' if t['expected_result'] == 'SUCCESS' else 'invalid'
         # Expectations can name a group of cases by an id prefix ("bettertls::nameconstraints"),
@@ -530,6 +542,29 @@ def mbedtls_tls13(out, exp):
     return suite
 
 
+# ---- regressions ---------------------------------------------------------------------------
+
+# Inputs made here for fixed mbedTLS bugs that no vector set above reaches. The verdict is the
+# same before and after the fix; the bug is a memory error, which a sanitizer build of the
+# older version turns into a crash (run.sh with CRYPTO_CFLAGS='-fsanitize=address,undefined').
+REGRESSIONS = [
+    # mbedTLS 3.6.7 ChangeLog: 1-byte overread parsing a malformed ECC public key
+    # (library/pk_ecc.c read the point format byte of an empty point). That code is only built
+    # with MBEDTLS_PK_USE_PSA_EC_DATA (USE_PSA_CRYPTO without ECP_C), which the ESP32's
+    # configuration does not have; a main-CPU configuration may.
+    ('CVE-2026-50583 P-256 key with an empty point',
+     ('verify', 'ecdsa', '3018301306072a8648ce3d020106082a8648ce3d030107030100', 'sha256', '', '3006020101020101', 0)),
+]
+
+
+def regressions(h, exp):
+    suite = Suite('regressions', exp)
+    for name, op in REGRESSIONS:
+        rc, _ = h(*op)
+        suite.judge('regressions', name.split()[0], 'invalid', [], 'accept' if rc == 0 else 'reject')
+    return suite
+
+
 # ---- coverage ------------------------------------------------------------------------------
 
 def coverage(vectors_exe, suites, exp):
@@ -563,7 +598,7 @@ def main():
     vectors = os.path.join(args.out, 'vectors')
     h = Harness(vectors)
     suites = [wycheproof(h, src, exp, name) for name in WYCHEPROOF]
-    suites += [rfc_vectors(h, src, exp), cavp_sha(h, src, exp)]
+    suites += [rfc_vectors(h, src, exp), cavp_sha(h, src, exp), regressions(h, exp)]
     lim, lim_note = limbo(os.path.join(args.out, 'limbo'), 'x509-limbo', 'limbo.json',
                           json.loads(src.git('X509_LIMBO', 'limbo.json'))['testcases'], exp)
     # Chains made here for what limbo has no case for (x509/, each with the script that made it)
@@ -604,7 +639,8 @@ if __name__ == '__main__':
     except (SystemExit, Exception) as e:
         if isinstance(e, SystemExit) and not isinstance(e.code, str):
             raise
-        # A source that cannot be fetched or does not match its pin is a failed run too
+        # A source that cannot be fetched or does not match its pin, or a harness that crashed
+        # (a sanitizer build stops at the first memory error), is a failed run too
         print('%s: %s' % (type(e).__name__, e))
-        print('CRYPTO_CONFORMANCE FAIL setup')
+        print('CRYPTO_CONFORMANCE FAIL aborted')
         sys.exit(1)

@@ -31,7 +31,8 @@ time_t time(time_t *t)
 static unsigned char *unhex(const char *s, size_t *len)
 {
     *len = strlen(s) / 2;
-    unsigned char *p = malloc(*len + 1);
+    // Exactly as long as the data, so that a sanitizer build sees a read past its end
+    unsigned char *p = malloc(*len ? *len : 1);
     for (size_t i = 0; i < *len; i++) {
         unsigned int v;
         sscanf(s + 2 * i, "%2x", &v);
@@ -82,8 +83,10 @@ static void run_line(char *line)
     if ((ret == 0) && (chain.raw.p == NULL)) {
         ret = -2; // every entry skipped: the client has no peer certificate and aborts
     } else if (ret == 0) {
+        char *name = strdup(host); // in a buffer of its own, as above
         ret = mbedtls_x509_crt_verify_with_profile(&chain, &trusted, NULL, &mbedtls_x509_crt_profile_default,
-                                                   host, &flags, NULL, NULL);
+                                                   name, &flags, NULL, NULL);
+        free(name);
         if ((mbedtls_x509_crt_check_key_usage(&chain, MBEDTLS_X509_KU_DIGITAL_SIGNATURE) != 0) ||
             (mbedtls_x509_crt_check_extended_key_usage(&chain, MBEDTLS_OID_SERVER_AUTH,
                                                        MBEDTLS_OID_SIZE(MBEDTLS_OID_SERVER_AUTH)) != 0)) {
