@@ -509,10 +509,15 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
             // Take every one now, or the reply behind them waits for a step the Ultimate never sends.
             continue;
         } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) || (n == MBEDTLS_ERR_SSL_WANT_WRITE)) {
+            // Known limitation: a skipped warning alert (no_renegotiation, not TLS 1.3) ends up here with input left
             break;
         } else if (n == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
             continue; // a TLS 1.3 ticket after the handshake: no plaintext yet, read again (never FAILED)
-        } else if ((n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) || (n == 0)) {
+        } else if (n == 0) {
+            // An empty application data record, which RFC 8446 allows: read on. It never means the
+            // connection closed, because tls_bio_recv() never reports end of input.
+            continue;
+        } else if (n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
             s->stats.state = TLS_STATE_CLOSED;
         } else {
             ret = n;
