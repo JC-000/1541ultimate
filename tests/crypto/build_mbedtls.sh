@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+#
+# Builds mbedTLS for the host with the configuration the ESP32 image uses.
+#
+#   build_mbedtls.sh <outdir>
+#
+# Takes everything from PINS: mbedTLS at MBEDTLS_COMMIT, and ESP-IDF's own config header
+# (components/mbedtls/port/include/mbedtls/esp_config.h) at ESP_IDF_TAG, which must carry
+# MBEDTLS_COMMIT as its mbedtls submodule. The configuration is derived, not maintained:
+# software/wifi/raw_u64/sdkconfig becomes sdkconfig.h the way ESP-IDF writes it, esp_config.h
+# is run through the preprocessor with it, and every MBEDTLS_ macro that comes out is the
+# configuration. Hardware acceleration (the _ALT options) and the ESP-IDF platform hooks are
+# then replaced with mbedTLS's software implementations, and each replacement is printed.
+# Nothing in the fetched sources is changed.
+#
+# Leaves in <outdir>: config/ (the derived header, and sdkconfig.h), build/ (a CMake build tree
+# whose library/ holds libmbedcrypto.a, libmbedx509.a and libmbedtls.a) and src -> the sources.
+# The last line printed is "MBEDTLS_BUILD_OK <outdir> <commit>".
+#
+# CRYPTO_PINS names a different pin file (the red/green checks use one), CRYPTO_CACHE a
+# different cache directory.
+#
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+REPO=$(cd "$HERE/../.." && pwd)
+SDKCONFIG=$REPO/software/wifi/raw_u64/sdkconfig
+PINS=${CRYPTO_PINS:-$HERE/PINS}
+CACHE=${CRYPTO_CACHE:-$HOME/.cache/1541u-build/crypto}
+
+[ $# -eq 1 ] || { echo "usage: $0 <outdir>" >&2; exit 2; }
+# shellcheck source=PINS
+. "$PINS"
+for sha in "$MBEDTLS_COMMIT"; do
+    [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "PINS: MBEDTLS_COMMIT is not a full SHA: $sha" >&2; exit 1; }
+done
+mkdir -p "$1" "$CACHE"
+OUT=$(cd "$1" && pwd)
+
+# fetch <repo> <commit> <dir>: a clean checkout of exactly <commit>, fetched once and cached.
+# A checkout that is not at <commit> or has local changes is refused, never used.
+fetch() {
+    local repo=$1 commit=$2 dir=$3
+    if [ ! -d "$dir/.git" ]; then
+        rm -rf "$dir.tmp"
+        git init -q "$dir.tmp"
+        git -C "$dir.tmp" fetch -q --depth 1 "$repo" "$commit"
+        git -C "$dir.tmp" -c advice.detachedHead=false checkout -q FETCH_HEAD
+        mv "$dir.tmp" "$dir"
+    fi
+    local head
+    head=$(git -C "$dir" rev-parse HEAD)
+    [ "$head" = "$commit" ] || { echo "$dir is at $head, not $commit" >&2; exit 1; }
+    [ -z "$(git -C "$dir" status --porcelain)" ] || { echo "$dir has local changes" >&2; exit 1; }
+}
+
+# ESP-IDF's tree at the tag, without its blobs: only the files read below are downloaded.
+IDF=$CACHE/esp-idf-$ESP_IDF_TAG
+if [ ! -d "$IDF/.git" ]; then
+    rm -rf "$IDF.tmp"
+    git init -q "$IDF.tmp"
+    git -C "$IDF.tmp" fetch -q --depth 1 --filter=blob:none https://github.com/espressif/esp-idf \
+        "refs/tags/$ESP_IDF_TAG:refs/tags/$ESP_IDF_TAG"
+    mv "$IDF.tmp" "$IDF"
+fi
+IDF_COMMIT=$(git -C "$IDF" rev-parse "refs/tags/$ESP_IDF_TAG^{commit}")
+idf_file() { git -C "$IDF" cat-file -p "$IDF_COMMIT:$1"; }
+SUBMODULE=$(git -C "$IDF" rev-parse "$IDF_COMMIT:components/mbedtls/mbedtls")
+if [ "$SUBMODULE" != "$MBEDTLS_COMMIT" ]; then
+    echo "PINS: ESP-IDF $ESP_IDF_TAG carries mbedtls $SUBMODULE, but MBEDTLS_COMMIT is $MBEDTLS_COMMIT" >&2
+    exit 1
+fi
+
+SRC=$CACHE/mbedtls-$MBEDTLS_COMMIT
+fetch "$MBEDTLS_REPO" "$MBEDTLS_COMMIT" "$SRC"
+ln -sfn "$SRC" "$OUT/src"
+
+# sdkconfig.h as ESP-IDF's kconfgen writes it: "y" is 1, "not set" is absent, the rest as is.
+CFG=$OUT/config
+rm -rf "$CFG"
+mkdir -p "$CFG/soc" "$CFG/mbedtls"
+awk -F= '/^CONFIG_[A-Za-z0-9_]+=/ { v = substr($0, length($1) + 2); if (v == "y") v = 1;
+         print "#define " $1 " " v }' "$SDKCONFIG" > "$CFG/sdkconfig.h"
+TARGET=$(sed -n 's/^CONFIG_IDF_TARGET="\(.*\)"$/\1/p' "$SDKCONFIG")
+idf_file "components/soc/$TARGET/include/soc/soc_caps.h" > "$CFG/soc/soc_caps.h"
+idf_file components/mbedtls/port/include/mbedtls/esp_config.h > "$CFG/mbedtls/esp_config.h"
+# esp_config.h includes esp_mem.h for the declarations of the allocator it names; only its
+# macros are wanted here, and that allocator is replaced below.
+: > "$CFG/esp_mem.h"
+
+# Every MBEDTLS_ macro esp_config.h defines for this sdkconfig, include guards aside.
+cc -E -dM -I "$CFG" -I "$SRC/include" "$CFG/mbedtls/esp_config.h" |
+    awk '$1 == "#define" && $2 ~ /^MBEDTLS_/ && $2 !~ /_H$/' | sort > "$CFG/esp_macros.txt"
+
+# What stays on the device and what the host replaces. An _ALT option names a platform
+# implementation (ESP32 AES/SHA/MPI hardware, ROM MD5, the hardware RNG); its _FALLBACK
+# companions only exist with it. The allocator is ESP-IDF's heap_caps one. Without the hardware
+# RNG the host takes its entropy from the OS. AES-NI and VIA Padlock are x86 host instructions
+# the ESP32 does not have: the host runs the same portable C code the fallback paths use.
+replace() {
+    case $1 in
+        *_ALT|*_ALT_FALLBACK|*_ALT_SOFT_FALLBACK|MBEDTLS_GCM_NON_AES_CIPHER_SOFT_FALLBACK)
+            echo "ESP32 platform implementation -> mbedTLS software implementation";;
+        MBEDTLS_PLATFORM_STD_CALLOC|MBEDTLS_PLATFORM_STD_FREE)
+            echo "ESP-IDF allocator ($2) -> libc calloc/free";;
+        MBEDTLS_NO_PLATFORM_ENTROPY)
+            echo "ESP32 hardware RNG only -> host OS entropy source";;
+        MBEDTLS_AESNI_C|MBEDTLS_PADLOCK_C)
+            echo "host CPU AES instructions -> mbedTLS software AES";;
+        *) return 1;;
+    esac
+}
+
+HDR=$CFG/mbedtls_esp32_host.h
+{
+    echo "/* Generated by tests/crypto/build_mbedtls.sh from software/wifi/raw_u64/sdkconfig and"
+    echo " * ESP-IDF $ESP_IDF_TAG ($IDF_COMMIT) components/mbedtls/port/include/mbedtls/esp_config.h."
+    echo " * Do not edit: re-run the script. Values may name sdkconfig options, hence the include. */"
+    echo "#include \"sdkconfig.h\""
+} > "$HDR"
+echo "mbedTLS $MBEDTLS_COMMIT, ESP-IDF $ESP_IDF_TAG ($IDF_COMMIT), target $TARGET"
+echo "esp_config.h sha256 $(shasum -a 256 < "$CFG/mbedtls/esp_config.h" | cut -d' ' -f1)"
+echo "sdkconfig sha256 $(shasum -a 256 < "$SDKCONFIG" | cut -d' ' -f1)"
+kept=0
+replaced=0
+while read -r _ name value; do
+    if why=$(replace "$name" "$value"); then
+        echo "REPLACED $name${value:+ $value}: $why"
+        replaced=$((replaced + 1))
+    else
+        echo "#define $name${value:+ $value}" >> "$HDR"
+        kept=$((kept + 1))
+    fi
+done < "$CFG/esp_macros.txt"
+echo "config: $kept options kept, $replaced replaced -> $HDR"
+# Nothing ESP-IDF may be left for the host build to trip over
+if grep -Eq '^#define .*(esp_|ESP_)' "$HDR"; then
+    grep -E '^#define .*(esp_|ESP_)' "$HDR" >&2
+    echo "an ESP-IDF name is left in the derived configuration" >&2
+    exit 1
+fi
+
+BUILD=$OUT/build
+cmake -S "$SRC" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DMBEDTLS_CONFIG_FILE="$HDR" \
+      -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=ON -DGEN_FILES=OFF \
+      -DMBEDTLS_FATAL_WARNINGS=OFF -Wno-dev > "$OUT/cmake.log" 2>&1 ||
+    { cat "$OUT/cmake.log" >&2; exit 1; }
+cmake --build "$BUILD" --target mbedcrypto mbedx509 mbedtls -j "$(sysctl -n hw.ncpu 2>/dev/null || nproc)" \
+    > "$OUT/build.log" 2>&1 || { tail -40 "$OUT/build.log" >&2; exit 1; }
+for lib in mbedcrypto mbedx509 mbedtls; do
+    [ -f "$BUILD/library/lib$lib.a" ] || { echo "lib$lib.a was not built" >&2; exit 1; }
+done
+echo "MBEDTLS_BUILD_OK $OUT $MBEDTLS_COMMIT"
