@@ -3,21 +3,26 @@
 # tests/crypto/PINS, and prints the PINS lines for a new ESP-IDF release.
 #
 #   check_pins.sh [--offline] [--image] [PINS]   check the tree against PINS
+#   check_pins.sh --pins-only [PINS]             check only that PINS is self-consistent (online)
 #   check_pins.sh --suggest <idf-tag>            print the PINS lines for that tag
 #
 # The pin file is the argument, else $CRYPTO_PINS, else tests/crypto/PINS; the one used is printed.
-# Keys come only from that file: a C1 key already set in the environment is a failure, and the
-# PINS keys are unset before the file is sourced. ESP_IDF_TAG, ESP_IDF_COMMIT, MBEDTLS_REPO and
+# The file is parsed, never sourced: every line is blank, a comment, or KEY=VALUE with an optional
+# trailing "# comment"; anything else (export, quotes, $, spaces in a value, a repeated key) fails.
+# A C1 key already set in the environment also fails. ESP_IDF_TAG, ESP_IDF_COMMIT, MBEDTLS_REPO and
 # MBEDTLS_COMMIT are required (C1 + amendment 2), and a key C1 does not name is a failure.
-# Offline checks: PINS shape, docker/Dockerfile's one live (uncommented) esp-idf clone line, and the
-# version header of every ESP32 project's sdkconfig. The Dockerfile check reads the clone's
-# --branch only: a later `git checkout` in the same RUN would not be seen.
-# Online (GitHub API, read-only): ESP_IDF_TAG resolves to ESP_IDF_COMMIT; at ESP_IDF_COMMIT the
-# mbedtls submodule is MBEDTLS_COMMIT and its URL is MBEDTLS_REPO.
+# Tree checks (skipped by --pins-only): the version header of every ESP32 project's sdkconfig, and
+# docker/Dockerfile, whose live (uncommented) lines must hold exactly one esp-idf clone, from
+# https://github.com/espressif/esp-idf at --branch ESP_IDF_TAG, and no command that could move or
+# patch a tree after a clone (git checkout/switch/reset/am/apply/fetch/pull/-C, patch). What a
+# script the Dockerfile runs does is not seen.
+# Online (GitHub API, read-only; skipped by --offline): ESP_IDF_TAG resolves to ESP_IDF_COMMIT; at
+# ESP_IDF_COMMIT the mbedtls submodule is MBEDTLS_COMMIT and its URL is MBEDTLS_REPO.
 # --image also reads the published build image's history (ghcr.io/gideonz/riscv:latest) and
 # checks that it cloned ESP_IDF_TAG. That is the registry, not the local image a build used, and it
-# fails for a candidate release until upstream publishes an image for it.
-# Last line: CHECK_PINS_OK, CHECK_PINS_OK_OFFLINE (online checks skipped) or CHECK_PINS_FAIL <n>.
+# fails for a candidate release until upstream publishes an image for it: it is advisory.
+# Last line: CHECK_PINS_OK (every check ran and passed), CHECK_PINS_PARTIAL offline|pins-only (the
+# checks that ran passed, some were skipped: not a full pass) or CHECK_PINS_FAIL <n>.
 set -u
 
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
@@ -82,11 +87,13 @@ fi
 
 offline=0
 image=0
+pinsonly=0
 pins=${CRYPTO_PINS:-$ROOT/tests/crypto/PINS}
 for a in "$@"; do
     case $a in
         --offline) offline=1 ;;
         --image) image=1 ;;
+        --pins-only) pinsonly=1 ;;
         *) pins=$a ;;
     esac
 done
@@ -103,14 +110,31 @@ for k in $C1_KEYS; do
     fi
     unset "$k"
 done
-for k in $(sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$pins"); do
-    case " $C1_KEYS " in
-        *" $k "*) ;;
-        *) fail "PINS has $k, which C1 does not name" ;;
+PINS_LINE='^([A-Z][A-Z0-9_]*)=([A-Za-z0-9._:/+@-]+)([[:space:]]+#.*)?$'
+n=0
+seen=" "
+while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    case $line in
+        ''|[[:space:]]*'#'*|'#'*) continue ;;
     esac
-done
-# shellcheck disable=SC1090
-. "$pins"
+    [[ $line =~ ^[[:space:]]*$ ]] && continue
+    if [[ $line =~ $PINS_LINE ]]; then
+        k=${BASH_REMATCH[1]}
+        v=${BASH_REMATCH[2]}
+        case " $C1_KEYS " in
+            *" $k "*) ;;
+            *) fail "PINS line $n: $k is not a C1 key"; continue ;;
+        esac
+        case $seen in
+            *" $k "*) fail "PINS line $n: $k is set twice"; continue ;;
+        esac
+        seen="$seen$k "
+        printf -v "$k" '%s' "$v"
+    else
+        fail "PINS line $n is not KEY=VALUE: $line"
+    fi
+done < "$pins"
 for k in $REQUIRED_KEYS; do
     [ -n "${!k:-}" ] || fail "PINS has no $k"
 done
@@ -124,25 +148,37 @@ tag=${ESP_IDF_TAG:-}
 ver=${tag#v}
 [[ $ver =~ ^[0-9]+\.[0-9]+$ ]] && ver=$ver.0 # tag v5.4 writes 5.4.0 into sdkconfig
 
-clones=$(grep -v '^[[:space:]]*#' "$ROOT/docker/Dockerfile" 2>/dev/null |
-         sed -n 's/.*git clone .*--branch \([^ ]*\) .*esp-idf.*/\1/p')
-n=0
-while IFS= read -r l; do
-    [ -n "$l" ] && n=$((n + 1))
-done <<< "$clones"
-if [ "$n" -ne 1 ]; then
-    fail "docker/Dockerfile has $n live esp-idf clone lines (${clones//$'\n'/, }), expected 1"
-elif [ "$clones" = "$tag" ]; then
-    ok "docker/Dockerfile clones esp-idf $clones"
-else
-    fail "docker/Dockerfile clones esp-idf '$clones', PINS says $tag"
+if [ $pinsonly -eq 0 ]; then
+    # Live Dockerfile text with continuation lines joined, one RUN (or other instruction) per line
+    live=$(grep -v '^[[:space:]]*#' "$ROOT/docker/Dockerfile" 2>/dev/null | sed -e ':a' -e '/\\$/N; s/\\\n/ /; ta')
+    clones=$(printf '%s\n' "$live" | grep -o 'git clone [^&;]*esp-idf[^[:space:]&;]*' || true)
+    n=0
+    while IFS= read -r l; do
+        [ -n "$l" ] && n=$((n + 1))
+    done <<< "$clones"
+    if [ "$n" -ne 1 ]; then
+        fail "docker/Dockerfile has $n live esp-idf clones, expected 1"
+    else
+        url=$(printf '%s' "$clones" | grep -o 'https\?://[^[:space:]]*' | head -1)
+        branch=$(printf '%s' "$clones" | sed -n 's/.*--branch[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p')
+        if [ "${url%.git}" != "https://github.com/espressif/esp-idf" ]; then
+            fail "docker/Dockerfile clones esp-idf from '$url', not https://github.com/espressif/esp-idf"
+        elif [ "$branch" != "$tag" ]; then
+            fail "docker/Dockerfile clones esp-idf '${branch:-?}', PINS says $tag"
+        else
+            ok "docker/Dockerfile clones espressif/esp-idf $branch"
+        fi
+    fi
+    moves=$(printf '%s\n' "$live" | grep -o -E 'git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(checkout|switch|reset|am|apply|fetch|pull)\b|git[[:space:]]+-C\b|(^|[[:space:];&|])patch[[:space:]]' | sort -u | tr '\n' ' ' || true)
+    if [ -n "$moves" ]; then
+        fail "docker/Dockerfile runs commands that can move or patch a checkout: $moves"
+    fi
+
+    for p in $PROJECTS; do
+        h=$(sed -n 's/^# Espressif IoT Development Framework (ESP-IDF) \([^ ]*\) Project Configuration$/\1/p' "$ROOT/$p/sdkconfig" 2>/dev/null)
+        if [ "$h" = "$ver" ]; then ok "$p/sdkconfig was written by ESP-IDF $h"; else fail "$p/sdkconfig was written by ESP-IDF '${h:-?}', PINS says $tag"; fi
+    done
 fi
-
-for p in $PROJECTS; do
-    h=$(sed -n 's/^# Espressif IoT Development Framework (ESP-IDF) \([^ ]*\) Project Configuration$/\1/p' "$ROOT/$p/sdkconfig" 2>/dev/null)
-    if [ "$h" = "$ver" ]; then ok "$p/sdkconfig was written by ESP-IDF $h"; else fail "$p/sdkconfig was written by ESP-IDF '${h:-?}', PINS says $tag"; fi
-done
-
 if [ $offline -eq 0 ]; then
     c=$(tag_commit "$tag")
     if [ -z "$c" ]; then
@@ -189,4 +225,7 @@ if [ $image -eq 1 ]; then
 fi
 
 if [ $fails -ne 0 ]; then echo "CHECK_PINS_FAIL $fails"; exit 1; fi
-if [ $offline -eq 1 ]; then echo "CHECK_PINS_OK_OFFLINE"; else echo "CHECK_PINS_OK"; fi
+if [ $offline -eq 1 ] && [ $pinsonly -eq 1 ]; then echo "CHECK_PINS_PARTIAL offline pins-only"
+elif [ $offline -eq 1 ]; then echo "CHECK_PINS_PARTIAL offline"
+elif [ $pinsonly -eq 1 ]; then echo "CHECK_PINS_PARTIAL pins-only"
+else echo "CHECK_PINS_OK"; fi
