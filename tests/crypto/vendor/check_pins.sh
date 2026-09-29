@@ -17,8 +17,9 @@
 # docker/Dockerfile, whose live (uncommented) lines must hold exactly one esp-idf clone, from
 # https://github.com/espressif/esp-idf at --branch ESP_IDF_TAG; no git command, with any options,
 # that moves or patches a checkout (checkout switch reset restore am apply fetch pull merge rebase
-# cherry-pick, -C, submodule ... --remote), no patch, no ADD/COPY into the ESP-IDF tree, and one
-# ENV IDF_PATH. A guard against accidents, not an adversary: a script the Dockerfile runs, a
+# cherry-pick, -C, submodule ... --remote), no patch, no other git clone, no ADD/COPY or WORKDIR
+# into the ESP-IDF tree, and one IDF_PATH across all ENV lines. The last --branch/-b wins, as in
+# git, and shell comments are dropped first. A guard against accidents, not an adversary: a script the Dockerfile runs, a
 # download, or an unusual spelling is not seen. The image's own mbedTLS is checked by the bump
 # procedure (B8), not here.
 # Online (GitHub API, read-only; skipped by --offline): ESP_IDF_TAG resolves to ESP_IDF_COMMIT; at
@@ -182,7 +183,7 @@ ver=${tag#v}
 
 if [ $pinsonly -eq 0 ]; then
     # Live Dockerfile text with continuation lines joined, one RUN (or other instruction) per line
-    live=$(grep -v '^[[:space:]]*#' "$ROOT/docker/Dockerfile" 2>/dev/null | sed -e ':a' -e '/\\$/N; s/\\\n/ /; ta')
+    live=$(grep -v '^[[:space:]]*#' "$ROOT/docker/Dockerfile" 2>/dev/null | sed -e 's/[[:space:]]#.*$//' | sed -e ':a' -e '/\\$/N; s/\\\n/ /; ta')
     clones=$(printf '%s\n' "$live" | grep -o 'git clone [^&;]*esp-idf[^[:space:]&;]*' || true)
     n=0
     while IFS= read -r l; do
@@ -192,7 +193,7 @@ if [ $pinsonly -eq 0 ]; then
         fail "docker/Dockerfile has $n live esp-idf clones, expected 1"
     else
         url=$(printf '%s' "$clones" | grep -o 'https\?://[^[:space:]]*' | head -1)
-        branch=$(printf '%s' "$clones" | sed -n 's/.*--branch[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p')
+        branch=$(printf '%s' "$clones" | grep -o -E '(--branch([[:space:]]+|=)|-b[[:space:]]+)[^[:space:]]+' | tail -1 | sed -E 's/^(--branch([[:space:]]+|=)|-b[[:space:]]+)//')
         if [ "${url%.git}" != "https://github.com/espressif/esp-idf" ]; then
             fail "docker/Dockerfile clones esp-idf from '$url', not https://github.com/espressif/esp-idf"
         elif [ "$branch" != "$tag" ]; then
@@ -207,7 +208,12 @@ if [ $pinsonly -eq 0 ]; then
     if [ -n "$copies" ]; then
         fail "docker/Dockerfile adds files into the ESP-IDF tree: $copies"
     fi
-    idfpaths=$(printf '%s\n' "$live" | grep -c -E '^[[:space:]]*ENV[[:space:]]+IDF_PATH' || true)
+    allclones=$(printf '%s\n' "$live" | grep -o -E 'git[[:space:]]+([^;&|]*[[:space:]])?clone[[:space:]]' | wc -l | tr -d ' ')
+    [ "$allclones" -le 1 ] || fail "docker/Dockerfile runs $allclones git clones: only the one esp-idf clone is allowed"
+    # WORKDIR inside the ESP-IDF tree would let a relative ADD/COPY land there
+    wds=$(printf '%s\n' "$live" | grep -i -E '^[[:space:]]*WORKDIR[[:space:]].*(esp-idf|IDF_PATH|/opt/esp)' | tr '\n' ' ' || true)
+    [ -z "$wds" ] || fail "docker/Dockerfile sets WORKDIR inside the ESP-IDF tree: $wds"
+    idfpaths=$(printf '%s\n' "$live" | grep -o -E '^[[:space:]]*ENV[[:space:]].*' | grep -o -E '(^|[[:space:]])IDF_PATH[=[:space:]]' | wc -l | tr -d ' ')
     if [ "$idfpaths" -ne 1 ]; then
         fail "docker/Dockerfile sets IDF_PATH $idfpaths times, expected once"
     fi
