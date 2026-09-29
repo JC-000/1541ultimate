@@ -625,8 +625,8 @@ def main():
     args.out = os.path.abspath(args.out)
 
     src = Sources(args.cache, read_pins(args.pins))
-    # CRYPTO_KNOWN_VULNERABLE=0 ignores the known-vulnerable lines, to show what they hold back
-    exp = Expectations(args.expectations, os.environ.get('CRYPTO_KNOWN_VULNERABLE', '1') != '0')
+    # CRYPTO_STRICT=1 ignores the known-vulnerable lines, so that they count as failures
+    exp = Expectations(args.expectations, os.environ.get('CRYPTO_STRICT', '0') != '1')
     vectors = os.path.join(args.out, 'vectors')
     h = Harness(vectors)
     suites = [wycheproof(h, src, exp, name) for name in WYCHEPROOF]

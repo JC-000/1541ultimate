@@ -188,7 +188,7 @@ limbo.json tc=bettertls::pathbuilding::tc77 accept DEVIATION: only the leaf's ex
 # known-vulnerable <CVE> <first fixed version>: the vector must still show the vulnerable outcome.
 # The run stays usable as a regression gate, prints the CVE on a line of its own before the
 # final one, and fails once mbedTLS behaves correctly, so the line is removed with the bump.
-# CRYPTO_KNOWN_VULNERABLE=0 ignores these lines (the run is then red on them).
+# CRYPTO_STRICT=1 ignores these lines, so the run is red on them.
 # CVE-2026-49300: a malformed basicConstraints read as cA=TRUE (x509_crt.c:492-554 at 72aa6873),
 # so a certificate with no keyUsage that other parsers take for an end entity can issue
 # certificates (tests/crypto/x509/make_cases.py).
