@@ -56,12 +56,15 @@ misspelt one cannot be silently ignored.
 The coverage suite compares `tls_engine.c`'s verification surface with `engine_config.txt` and
 fails when it differs or the file is gone: every `#define` naming an `mbedtls_` or `esp_crt_`
 symbol, all of `tls_setup()` and `tls_open()` (the argument checks such as "no verify without a
-host name", the spike and clock gates, the session configuration with its arguments), every other
+host name", the spike and clock gates, the session configuration with its arguments), all of
+`tls_set_clock()` and `tls_build_time()` (the clock floor the clock gate relies on), every other
 function that touches the configuration, BIO, verify callback or host name, and the functions
 installed as verify callbacks. That keeps `vectors.c`'s ClientHello and `limbo.c`'s two ways to
 verify in step with the engine. It is a text comparison: it catches edits, not a determined
 evasion, and says nothing about what the engine does at run time. A behavioural test of the
 engine (handshakes against it: the interop lane, and M3) is the stronger check.
+The run also prints whether the sdkconfig it used sets `CONFIG_TLS_SPIKE` (which builds in
+`tls_accept_any`, the verify-nothing callback), so a log shows which engine build it describes.
 
 ## What it does not test
 

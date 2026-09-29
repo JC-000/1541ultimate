@@ -159,6 +159,39 @@ sessions[slot] = s;
 *session = s->id;
 return ESP_OK;
 }
+== tls_set_clock
+static uint8_t tls_set_clock(uint32_t unix_time)
+{
+time_t floor = tls_build_time();
+if (sntp_has_time() && (time(NULL) > floor)) {
+return TLS_TIME_SNTP;
+}
+if ((time_t)unix_time > floor) {
+struct timeval tv = { .tv_sec = (time_t)unix_time, .tv_usec = 0 };
+if (settimeofday(&tv, NULL) == 0) {
+clock_set_by_nios = 1;
+return TLS_TIME_NIOS;
+}
+}
+return TLS_TIME_NONE;
+}
+== tls_build_time
+static time_t tls_build_time(void)
+{
+static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+const char *date = __DATE__;
+int m = 1;
+while ((m < 12) && strncmp(months + 3 * (m - 1), date, 3)) {
+m++;
+}
+int d = atoi(date + 4);
+int y = atoi(date + 7) - (m <= 2);
+int era = y / 400;
+int yoe = y - era * 400;
+int doy = (153 * (m + ((m > 2) ? -3 : 9)) + 2) / 5 + d - 1;
+int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+return (time_t)(era * 146097 + doe - 719468) * 86400;
+}
 == tls_free
 static void tls_free(tls_session_t *s)
 {

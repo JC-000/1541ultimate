@@ -25,8 +25,11 @@
  *   <time, unix> <host name> <path|given> <ca|bundle> <none|leaf|issuer> <leaf> <n> <intermediate>...
  *   <m> <trusted>...
  * The fifth field flips the last byte (inside the signature) of the leaf ("leaf"), or of the K-th
- * certificate above it on the first path ("pathK"); that answers "end 0" when the path is shorter,
- * and "na 0" when another presented or trusted certificate has its name (it could stand in).
+ * certificate above it on the first path ("pathK"), or nothing ("none"); that answers "end 0" when
+ * the path is shorter, and "na 0" when another presented or trusted certificate also verifies the
+ * certificate below it (it could stand in). "+spaced" puts a filler in front of every parent on
+ * the path, "+decoy" an expired same-named CA; the decoys (one per intermediate, in the given
+ * order) then follow the trusted certificates: <k> <decoy>...
  * One result per line on stdout: "<ret> <verify flags in hex>", ret 0 when the chain is accepted.
  *
  *   limbo bundle <cert hex>...            prints the bundle those certificates make, in hex
@@ -286,7 +289,7 @@ static int verify(der_t leaf, der_t *inter, const int *order, int n, mbedtls_x50
 
 static void run_line(char *line)
 {
-    static der_t inter[MAX_CERTS];
+    static der_t inter[2 * MAX_CERTS + 1]; // the intermediates, the filler, the decoys
     static int orders[MAX_PATHS][MAX_CERTS];
     char *save;
     char *when = strtok_r(line, " \n", &save);
@@ -312,6 +315,11 @@ static void run_line(char *line)
         der_t d = unhex(strtok_r(NULL, " \n", &save));
         ret = ret ? ret : parse(&trusted, d, 0);
         free(d.p);
+    }
+    // "+decoy" layouts come with a decoy for each intermediate, in the same order
+    int decoys = strstr(flip, "+decoy") ? atoi(strtok_r(NULL, " \n", &save)) : 0;
+    for (int i = 0; i < decoys; i++) {
+        inter[n + 1 + i] = unhex(strtok_r(NULL, " \n", &save));
     }
     static int alone[MAX_CERTS];
     int count = 1, path_len = 0;
@@ -340,6 +348,19 @@ static void run_line(char *line)
         }
         if (path_len == 0) {
             spaced_order[total++] = n; // no path: the filler ahead of the rest
+        }
+        order0 = spaced_order;
+    }
+    // "+decoy": the first path with a decoy in front of each certificate above the leaf: an
+    // expired CA with that certificate's name and another key. mbedTLS's parent search keeps it as
+    // a fallback and goes on to the real parent, whose signature must still be checked.
+    if ((decoys == n) && n && path_len) {
+        total = 0;
+        for (int i = 0; i < n; i++) {
+            if (i < path_len) {
+                spaced_order[total++] = n + 1 + orders[0][i];
+            }
+            spaced_order[total++] = orders[0][i];
         }
         order0 = spaced_order;
     }
@@ -394,8 +415,11 @@ static void run_line(char *line)
     for (int i = 0; i < n; i++) {
         free(inter[i].p);
     }
-    if (order0 == spaced_order) {
+    if (strstr(flip, "+spaced") && (n < MAX_CERTS)) {
         free(inter[n].p); // the filler
+    }
+    for (int i = 0; i < decoys; i++) {
+        free(inter[n + 1 + i].p);
     }
     mbedtls_x509_crt_free(&trusted);
 }

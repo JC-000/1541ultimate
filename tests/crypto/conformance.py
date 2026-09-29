@@ -788,6 +788,45 @@ def not_applicable(t):
     return None
 
 
+def der_tlv(tag, body):
+    n = len(body)
+    size = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([tag]) + (bytes([n]) if n < 0x80 else bytes([0x80 | len(size)]) + size) + body
+
+
+def der_children(data):
+    """The TLVs inside a DER constructed value, whole."""
+    out, i = [], 2 + (data[1] & 0x7F if data[1] & 0x80 else 0)
+    while i < len(data):
+        n, h = data[i + 1], 2
+        if n & 0x80:
+            n, h = int.from_bytes(data[i + 2 : i + 2 + (n & 0x7F)], "big"), 2 + (n & 0x7F)
+        out.append(data[i : i + h + n])
+        i += h + n
+    return out
+
+
+# A P-256 key that belongs to nobody on any path here (Wycheproof's ecdsa_secp256r1_sha256 key)
+DECOY_KEY = bytes.fromhex(
+    "3059301306072a8648ce3d020106082a8648ce3d0301070342000404aaec73635726f213fb8a9e64da3b8632e4"
+    "1495a944d0045b522eba7240fad587d9315798aaa3a5ba01775787ced05eaaf7b4e09fc81d6d1aa546e8365d525d"
+)
+DECOY_VALIDITY = der_tlv(0x30, der_tlv(0x17, b"150101000000Z") + der_tlv(0x17, b"160101000000Z"))
+
+
+def decoy(cert_hex):
+    """An expired CA with the certificate's exact name and extensions, but DECOY_KEY and a 2015
+    validity: what an attacker can make of any intermediate's name. Its own signature is left as
+    it was (mbedTLS reads it only if the decoy were the child)."""
+    cert = bytes.fromhex(cert_hex)
+    tbs, alg, sig = der_children(cert)
+    fields = der_children(tbs)
+    first = 1 if fields[0][0] == 0xA0 else 0  # [0] version
+    fields[first + 3] = DECOY_VALIDITY  # serial, signature, issuer, validity
+    fields[first + 5] = DECOY_KEY  # subject, subjectPublicKeyInfo
+    return der_tlv(0x30, der_tlv(0x30, b"".join(fields)) + alg + sig).hex()
+
+
 class Limbo:
     """The limbo program: one case per line, one "<ret> <flags>" per line."""
 
@@ -816,6 +855,7 @@ class Limbo:
                     *chain,
                     str(len(trusted)),
                     *trusted,
+                    *([str(len(chain)), *(decoy(c) for c in chain)] if "+decoy" in flip else []),
                 ]
             )
             + "\n"
@@ -883,16 +923,25 @@ def limbo_suite(lim, name, source, cases, exp, order="path", missing=()):
 def signatures(lim, accepted, exp):
     """Every valid chain accepted above (in CA and in bundle mode), with one byte of a signature
     flipped: the leaf's, and in turn each certificate's above it on the path to the trusted
-    certificate. Each broken chain is presented twice, as the path in order and "spaced", with a
-    filler certificate in front of every parent (so mbedTLS's parent search, not adjacency, finds
-    it), and must be refused both times. A flip on a certificate that another presented or trusted
-    one also verifies the child of (so could stand in) is not applicable."""
+    certificate. Each broken chain is presented three ways and must be refused each time: as the
+    path in order; "spaced", with a filler certificate in front of every parent (so mbedTLS's
+    parent search, not adjacency, finds it); and "decoy", with an expired CA of the parent's name
+    and another key in front of every parent (so the search's time fallback is taken on the way).
+    The unbroken chain with decoys must still be accepted. A flip on a certificate that another
+    presented or trusted one also verifies the child of (so could stand in) is not applicable."""
     suite = Suite("x509-signatures", exp)
     for t, mode, trusted in accepted:
+        # (only where the first path alone is accepted: a few chains are accepted by a later path)
+        if (
+            t["untrusted_intermediates"]
+            and lim(t, mode=mode, flip="none+spaced", trusted=trusted)[0] == "accept"
+        ):
+            seen, _ = lim(t, mode=mode, flip="none+decoy", trusted=trusted)
+            suite.judge("signatures", "%s/%s/none+decoy" % (t["id"], mode), "valid", [], seen)
         for depth in range(64):
             flip = "path%d" % depth if depth else "leaf"
             seen = None
-            for layout in ("", "+spaced"):
+            for layout in ("", "+spaced", "+decoy"):
                 seen, _ = lim(t, mode=mode, flip=flip + layout, trusted=trusted)
                 if seen == "end":
                     break
@@ -1094,16 +1143,16 @@ def regressions(h, exp, conditions):
 # tls_engine.c's verification surface, which offer() in vectors.c and limbo.c's two ways to
 # verify copy, as text: every #define that names an mbedtls_ or esp_crt_ symbol; the whole of
 # tls_setup() and tls_open() (the argument checks, the verify and clock gates, the session
-# configuration); every other function that touches the configuration, the BIO, the verify
+# configuration), and tls_set_clock() and tls_build_time() (the clock's floor); every other function that touches the configuration, the BIO, the verify
 # callback or the host name; and the functions installed as verify callbacks. Comments and blank
 # lines are left out. It must equal engine_config.txt, or the coverage suite fails: the copies
 # have to be looked at, and the file updated in the same commit. A text check catches edits, not
 # a determined evasion; a test of the engine's behaviour would be stronger (M3).
 ENGINE = os.path.join(HERE, "..", "..", "software", "wifi", "raw_u64", "main", "tls_engine.c")
 ENGINE_CONFIG = os.path.join(HERE, "engine_config.txt")
-ENGINE_FUNCTIONS = ("tls_setup", "tls_open")
+ENGINE_FUNCTIONS = ("tls_setup", "tls_open", "tls_set_clock", "tls_build_time")
 SURFACE = re.compile(
-    r"\b(mbedtls_ssl_conf_\w+|mbedtls_ssl_config_\w+|mbedtls_ssl_set_\w+|mbedtls_ssl_setup|esp_crt_\w+)\("
+    r"\b(mbedtls_ssl_conf_\w+|mbedtls_ssl_config_\w+|mbedtls_ssl_set_\w+|mbedtls_ssl_setup|esp_crt_\w+)\s*\("
 )
 
 
@@ -1112,7 +1161,7 @@ def engine_config(text):
     # Top-level functions: a line at column 0 naming one, to the "}" at column 0 that ends it
     functions, i = {}, 0
     while i < len(lines):
-        m = re.match(r"^[A-Za-z].*?\b(\w+)\(", lines[i])
+        m = re.match(r"^[A-Za-z].*?\b(\w+)\s*\(", lines[i])
         if m and not lines[i].rstrip().endswith(";"):
             end = next((j for j in range(i + 1, len(lines)) if lines[j] == "}"), None)
             if end is not None and any("{" in line for line in lines[i : end + 1]):
@@ -1128,7 +1177,7 @@ def engine_config(text):
     ]
     callbacks = set(
         re.findall(
-            r"mbedtls_ssl_conf_verify\([^,]*,\s*(\w+)",
+            r"mbedtls_ssl_conf_verify\s*\([^,]*,\s*(\w+)",
             "\n".join(line for body in functions.values() for line in body),
         )
     )
@@ -1256,6 +1305,20 @@ def main():
             ", cflags %s" % os.environ["CRYPTO_CFLAGS"] if os.environ.get("CRYPTO_CFLAGS") else "",
         )
     )
+    sdkconfig = os.environ.get("CRYPTO_SDKCONFIG") or os.path.join(
+        HERE, "..", "..", "software", "wifi", "raw_u64", "sdkconfig"
+    )
+    if os.path.exists(sdkconfig):
+        spike = re.search(
+            r"^(CONFIG_TLS_SPIKE=\S+|# CONFIG_TLS_SPIKE is not set)", read(sdkconfig), re.M
+        )
+        print(
+            "engine: %s (tls_accept_any is %s)"
+            % (
+                spike.group(1) if spike else "CONFIG_TLS_SPIKE absent",
+                "built in" if spike and spike.group(1).endswith("=y") else "not built",
+            )
+        )
     src = Sources(args.cache, read_pins(args.pins))
     # A build directory from other pins would test another mbedTLS than the summary names
     if os.path.isdir(os.path.join(args.out, "src", ".git")):

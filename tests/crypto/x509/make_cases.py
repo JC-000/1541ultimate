@@ -408,6 +408,81 @@ def main():
             order="given",
         ),
     ]
+    # An expired CA with the real intermediate's name and the attacker's key, in front of the real
+    # intermediate: mbedTLS keeps it as a time fallback on its way to the real parent
+    expired_decoy = cert(
+        "sig ICA",
+        other,
+        "sig ICA",
+        other,
+        CA,
+        not_before=datetime.datetime(2015, 1, 1, tzinfo=datetime.UTC),
+        not_after=datetime.datetime(2016, 1, 1, tzinfo=datetime.UTC),
+    )
+    for order in ("path", "given"):
+        cases.append(
+            case(
+                "signatures::forged-leaf-expired-decoy::%s" % order,
+                "forged leaf, [expired attacker CA named like the ICA, real ICA]",
+                root,
+                [expired_decoy, ica],
+                forged,
+                "victim.example",
+                "FAILURE",
+                order=order,
+            )
+        )
+    cases.append(
+        case(
+            "signatures::good-leaf-expired-decoy",
+            "root -> ICA -> leaf, [expired attacker CA named like the ICA, ICA]",
+            root,
+            [expired_decoy, ica],
+            good,
+            "victim.example",
+            "SUCCESS",
+            order="given",
+        )
+    )
+    # A forged intermediate one level up: a leaf under "evil ICA" (the attacker's key, the real
+    # ICA's name as issuer), with a CA filler in front of the real ICA
+    evil_key = p256()
+    evil = cert("sig evil ICA", evil_key, "sig ICA", other, CA)
+    for order in ("path", "given"):
+        cases.append(
+            case(
+                "signatures::forged-intermediate-ca-filler::%s" % order,
+                "leaf -> forged ICA (issuer: the real ICA), [forged ICA, CA filler, real ICA]",
+                root,
+                [evil, filler, ica],
+                cert("victim.example", p256(), "sig evil ICA", evil_key, server("victim.example")),
+                "victim.example",
+                "FAILURE",
+                order=order,
+            )
+        )
+    # Two trust anchors of one name and key, the expired one first: mbedTLS keeps it only as a
+    # fallback and uses the valid one
+    expired_anchor = cert(
+        "sig anchor",
+        anchor_key,
+        "sig anchor",
+        anchor_key,
+        CA,
+        not_before=datetime.datetime(2015, 1, 1, tzinfo=datetime.UTC),
+        not_after=datetime.datetime(2016, 1, 1, tzinfo=datetime.UTC),
+    )
+    cases.append(
+        case(
+            "signatures::two-anchors-first-expired",
+            "two trusted roots of one name and key, the expired one first",
+            [expired_anchor, anchor],
+            [],
+            leaf,
+            "victim.example",
+            "SUCCESS",
+        )
+    )
     write("signatures.json", cases)
 
     # What the certificate bundle does not check: each chain with the root as the CA chain and
