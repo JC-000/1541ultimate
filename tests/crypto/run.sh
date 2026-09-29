@@ -4,8 +4,9 @@
 #
 #   tests/crypto/run.sh [outdir]      (default tests/crypto/output)
 #
-# CRYPTO_PINS, CRYPTO_SDKCONFIG and CRYPTO_CACHE are passed on to build_mbedtls.sh;
-# CRYPTO_CONFIG names an mbedTLS config header to use instead of the ESP32's.
+# CRYPTO_PINS, CRYPTO_SDKCONFIG, CRYPTO_MACROS and CRYPTO_CACHE are passed on to build_mbedtls.sh;
+# CRYPTO_CONFIG names an mbedTLS config header to use instead of the ESP32's; CRYPTO_CFLAGS
+# builds the library and the harnesses with extra flags, e.g. '-fsanitize=address,undefined'.
 #
 # Builds mbedTLS as PINS says with the ESP32's configuration (build_mbedtls.sh), builds the two
 # harnesses and mbedTLS's own TLS 1.3 key schedule tests against it, fetches the vectors and runs
@@ -26,10 +27,10 @@ echo "tree $(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo unknown)$(
 # keeps the pins, the sdkconfig and the configuration used
 "$HERE/build_mbedtls.sh" "$OUT" ${CRYPTO_CONFIG:+"$CRYPTO_CONFIG"} > "$OUT/build_mbedtls.txt" 2>&1 ||
     { tail -20 "$OUT/build_mbedtls.txt"; echo "CRYPTO_CONFORMANCE FAIL build"; exit 1; }
-grep -E '^(pins|mbedTLS|sdkconfig|config:)' "$OUT/build_mbedtls.txt"
+grep -E '^(pins|mbedTLS|sdkconfig|macros|config:)' "$OUT/build_mbedtls.txt"
 
 LIB=$OUT/build/library
-CFLAGS=(-std=c11 -O1 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -I"$OUT/config" -I"$OUT/src/include"
+CFLAGS=(${CRYPTO_CFLAGS:-} -std=c11 -O1 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -I"$OUT/config" -I"$OUT/src/include"
         -DMBEDTLS_CONFIG_FILE='"mbedtls_host.h"')
 cc "${CFLAGS[@]}" "$HERE/vectors.c" "$LIB/libmbedtls.a" "$LIB/libmbedx509.a" "$LIB/libmbedcrypto.a" -o "$OUT/vectors"
 cc "${CFLAGS[@]}" "$HERE/limbo.c" "$LIB/libmbedx509.a" "$LIB/libmbedcrypto.a" -o "$OUT/limbo"

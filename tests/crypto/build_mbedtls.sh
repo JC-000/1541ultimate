@@ -22,8 +22,11 @@
 # libmbedx509.a and libmbedtls.a) and src -> the sources. The last line printed is
 # "MBEDTLS_BUILD_OK <outdir> <commit>".
 #
+# The derived list of MBEDTLS_ macros, before any replacement, must equal esp32_macros.txt.
+#
 # CRYPTO_PINS names a different pin file, CRYPTO_SDKCONFIG a different sdkconfig (a candidate
-# release's, regenerated with its kconfgen), CRYPTO_CACHE a different cache directory.
+# release's, regenerated with its kconfgen), CRYPTO_MACROS a different macro list to match,
+# CRYPTO_CACHE a different cache directory, CRYPTO_CFLAGS extra compiler flags (a sanitizer).
 #
 set -euo pipefail
 
@@ -31,6 +34,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 SDKCONFIG=${CRYPTO_SDKCONFIG:-$REPO/software/wifi/raw_u64/sdkconfig}
 PINS=${CRYPTO_PINS:-$HERE/PINS}
+MACROS=${CRYPTO_MACROS:-$HERE/esp32_macros.txt}
 CACHE=${CRYPTO_CACHE:-$HOME/.cache/1541u-build/crypto}
 
 [ $# -eq 1 ] || [ $# -eq 2 ] || { echo "usage: $0 <outdir> [<mbedtls config header>]" >&2; exit 2; }
@@ -132,6 +136,14 @@ derive_esp32_config() {
     # Every MBEDTLS_ macro esp_config.h defines for this sdkconfig, include guards aside.
     cc -E -dM -I "$CFG" -I "$SRC/include" "$CFG/mbedtls/esp_config.h" |
         awk '$1 == "#define" && $2 ~ /^MBEDTLS_/ && $2 !~ /_H$/' | sort > "$CFG/esp_macros.txt"
+    # The whole list must match the committed one, so an option that appears or disappears (a
+    # new Kconfig default, a renamed macro) is seen and explained in the commit that updates it
+    if ! diff -u "$MACROS" "$CFG/esp_macros.txt" > "$CFG/esp_macros.diff"; then
+        cat "$CFG/esp_macros.diff" >&2
+        echo "the derived macro list differs from $MACROS: review the diff above and update that file" >&2
+        exit 1
+    fi
+    echo "macros: $(wc -l < "$CFG/esp_macros.txt" | tr -d ' ') match $MACROS"
 
     # What stays on the device and what the host replaces. An _ALT option names a platform
     # implementation (ESP32 AES/SHA/MPI hardware, ROM MD5, the hardware RNG); its _FALLBACK
@@ -196,6 +208,7 @@ BUILD=$OUT/build
 # Later 3.6.x releases link framework/data_files into the build tree without creating its parent
 mkdir -p "$BUILD/framework"
 cmake -S "$SRC" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DMBEDTLS_CONFIG_FILE="$CFG/mbedtls_host.h" \
+      -DCMAKE_C_FLAGS="${CRYPTO_CFLAGS:-}" \
       -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=ON -DGEN_FILES=OFF \
       -DMBEDTLS_FATAL_WARNINGS=OFF -Wno-dev > "$OUT/cmake.log" 2>&1 ||
     { cat "$OUT/cmake.log" >&2; exit 1; }

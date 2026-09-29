@@ -1,15 +1,26 @@
 #!/usr/bin/env python3
 """
-Writes cve-2026-49300.json: x509-limbo style SERVER cases for CVE-2026-49300, where mbedTLS up to
+Writes x509-limbo style SERVER cases for fixed mbedTLS bugs that x509-limbo has no case for.
+
+cve-2026-49300.json: CVE-2026-49300, where mbedTLS up to
 3.6.6 read a malformed basicConstraints as cA=TRUE, so that a certificate every other parser
 takes for an end entity could issue certificates. Fixed in mbedTLS 3.6.7 by Mbed-TLS/mbedtls
 07f45b87 ("Fix lax basicConstraints parsing") and f67b8e5b ("Stop accepting basicConstraints
 with only pathLenConstraint"); see its ChangeLog.
 
 Each case is root -> X -> a leaf for victim.example signed with X's key, and must FAIL unless X
-really is a CA. The keys are made fresh and thrown away; only the certificates are written.
-Needs the "cryptography" package; conformance.py only reads the JSON.
+really is a CA.
+
+cve-2026-25833.json: CVE-2026-25833, a read before the host name in mbedTLS's own IPv6 parser
+(x509_inet_pton_ipv6(), fixed in 3.6.6), reached when a certificate has an IP address
+subjectAltName and the name has a ':'. The verdict does not change with the fix: a sanitizer
+build shows the read. mbedTLS only compiles that parser where the platform has no inet_pton
+(no AF_INET6) or with MBEDTLS_TEST_SW_INET_PTON; a macOS or Linux host uses the libc one.
+
+The keys are made fresh and thrown away; only the certificates are written. Needs the
+"cryptography" package; conformance.py only reads the JSON.
 """
+import ipaddress
 import datetime
 import json
 import os
@@ -56,6 +67,20 @@ def pem(c):
     return c.public_bytes(serialization.Encoding.PEM).decode()
 
 
+def case(case_id, description, root, intermediates, leaf, peer_name, result):
+    return {'id': case_id, 'description': description, 'validation_kind': 'SERVER',
+            'trusted_certs': [pem(root)], 'untrusted_intermediates': [pem(c) for c in intermediates],
+            'peer_certificate': pem(leaf), 'validation_time': VALIDATION_TIME,
+            'expected_peer_name': {'kind': 'IP' if peer_name[0].isdigit() else 'DNS', 'value': peer_name},
+            'expected_result': result, 'features': [], 'crls': []}
+
+
+def write(filename, cases):
+    with open(os.path.join(HERE, filename), 'w') as f:
+        json.dump({'version': 1, 'testcases': cases}, f, indent=1)
+        f.write('\n')
+
+
 def main():
     root_key = ec.generate_private_key(ec.SECP256R1())
     root = cert('cve-2026-49300 root', root_key, 'cve-2026-49300 root', root_key, [
@@ -79,22 +104,26 @@ def main():
                 (x509.KeyUsage(True, False, False, False, False, False, False, False, False), True),
                 (x509.SubjectAlternativeName([x509.DNSName('victim.example')]), False),
                 (x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), False)])
-            cases.append({
-                'id': 'cve-2026-49300::%s%s' % (variant, '-ku-digitalsignature' if ku else ''),
-                'description': 'root -> X -> victim.example; X basicConstraints extnValue %s%s' % (
-                    bc.hex(), ', keyUsage digitalSignature' if ku else ', no keyUsage'),
-                'validation_kind': 'SERVER',
-                'trusted_certs': [pem(root)],
-                'untrusted_intermediates': [pem(x_cert)],
-                'peer_certificate': pem(leaf),
-                'validation_time': VALIDATION_TIME,
-                'expected_peer_name': {'kind': 'DNS', 'value': 'victim.example'},
-                'expected_result': 'SUCCESS' if variant == 'control-ca' and not ku else 'FAILURE',
-                'features': [],
-                'crls': []})
-    with open(os.path.join(HERE, 'cve-2026-49300.json'), 'w') as f:
-        json.dump({'version': 1, 'testcases': cases}, f, indent=1)
-        f.write('\n')
+            cases.append(case('cve-2026-49300::%s%s' % (variant, '-ku-digitalsignature' if ku else ''),
+                              'root -> X -> victim.example; X basicConstraints extnValue %s%s' % (
+                                  bc.hex(), ', keyUsage digitalSignature' if ku else ', no keyUsage'),
+                              root, [x_cert], leaf, 'victim.example',
+                              'SUCCESS' if variant == 'control-ca' and not ku else 'FAILURE'))
+    write('cve-2026-49300.json', cases)
+
+    # A server certificate for 192.0.2.1 straight from the root
+    leaf_key = ec.generate_private_key(ec.SECP256R1())
+    leaf = cert('192.0.2.1', leaf_key, 'cve-2026-49300 root', root_key, [
+        (x509.BasicConstraints(ca=False, path_length=None), True),
+        (x509.KeyUsage(True, False, False, False, False, False, False, False, False), True),
+        (x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address('192.0.2.1'))]), False),
+        (x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), False)])
+    write('cve-2026-25833.json', [
+        # IPv4 digits first and a ':' later: the old parser walked back past the name's start
+        case('cve-2026-25833::ipv4-then-colons', 'IP SAN 192.0.2.1, peer name "1.2.3.4::"',
+             root, [], leaf, '1.2.3.4::', 'FAILURE'),
+        case('cve-2026-25833::control', 'IP SAN 192.0.2.1, peer name "192.0.2.1"',
+             root, [], leaf, '192.0.2.1', 'SUCCESS')])
 
 
 if __name__ == '__main__':

@@ -65,7 +65,8 @@ static int unhex(const char *s, blob_t *b)
         return -1;
     }
     b->len = n / 2;
-    b->p = malloc(b->len + 1);
+    // Exactly as long as the data, so that a sanitizer build sees a read past its end
+    b->p = malloc(b->len ? b->len : 1);
     for (size_t i = 0; i < b->len; i++) {
         unsigned int v;
         if (sscanf(s + 2 * i, "%2x", &v) != 1) {
