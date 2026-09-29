@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+"""
+Runs the crypto conformance suites against a host build of the ESP32's mbedTLS (run.sh builds
+it) and prints one line per suite and a final CRYPTO_CONFORMANCE PASS|FAIL line.
+
+Vectors are fetched at run time, never committed: Wycheproof from git at the commit in
+PINS, the RFCs and NIST CAVP files by URL, checked against the sha256 below (those
+documents never change). Every file used is listed with its sha256 in <out>/sources.txt.
+
+Each vector's expected outcome is Wycheproof's: "valid" must be accepted with the right output,
+"invalid" rejected. An "acceptable" vector, or any known deviation, needs a line in the
+expectations file saying which outcome mbedTLS gives and why; a vector without one fails, and so
+does an expectations line that no vector used.
+"""
+import argparse
+import hashlib
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.request
+import zipfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# Documents fetched by URL: they are immutable, so the sha256 pins them.
+DOCUMENTS = {
+    'rfc5869': ('https://www.rfc-editor.org/rfc/rfc5869.txt',
+                '7a40eb3835b35fc947eb12a2ed614db079d43b26e50dbc537c31fba16397089c'),
+    'rfc7748': ('https://www.rfc-editor.org/rfc/rfc7748.txt',
+                '279ca0ecc5e92e2962e27b846986aeb74729d9dd34bd4a04a362f80dcb596ad3'),
+    'rfc8439': ('https://www.rfc-editor.org/rfc/rfc8439.txt',
+                '25bef70fbf7a07ff45c2fe4cb7c6ce954eac687413d8610603268b4e4415324c'),
+    'cavp-sha': ('https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/'
+                 'documents/shs/shabytetestvectors.zip',
+                 '929ef80b7b3418aca026643f6f248815913b60e01741a44bba9e118067f4c9b8'),
+}
+
+# What the TLS 1.3 client offers ("vectors offer" prints it from a real ClientHello), and the
+# algorithms each offer needs a passing valid vector for. An offer not listed here fails the
+# coverage suite: a new mbedTLS that offers something new needs vectors for it first.
+AEAD_SHA256 = ['sha256', 'hmac/sha256', 'hkdf/sha256']
+OFFERS = {
+    'suite 1301': ['aes-gcm/k128/t128'] + AEAD_SHA256,      # TLS_AES_128_GCM_SHA256
+    'suite 1302': ['aes-gcm/k256/t128', 'sha384', 'hmac/sha384', 'hkdf/sha384'],  # TLS_AES_256_GCM_SHA384
+    'suite 1303': ['chacha20-poly1305/k256/t128'] + AEAD_SHA256,  # TLS_CHACHA20_POLY1305_SHA256
+    'suite 1304': ['aes-ccm/k128/t128'] + AEAD_SHA256,      # TLS_AES_128_CCM_SHA256
+    'suite 1305': ['aes-ccm/k128/t64'] + AEAD_SHA256,       # TLS_AES_128_CCM_8_SHA256
+    'suite 00ff': [],                                       # renegotiation SCSV, no algorithm
+    'group 001d': ['x25519'],
+    'group 0017': ['ecdh/secp256r1'],
+    'group 0018': ['ecdh/secp384r1'],
+    'group 0019': ['ecdh/secp521r1'],
+    'keyshare 001d': ['x25519'],
+    'sigalg 0403': ['ecdsa/secp256r1/sha256'],
+    'sigalg 0503': ['ecdsa/secp384r1/sha384'],
+    'sigalg 0603': ['ecdsa/secp521r1/sha512', 'sha512'],
+    'sigalg 0804': ['pss/sha256'],                          # rsa_pss_rsae_sha256
+    'sigalg 0805': ['pss/sha384'],
+    'sigalg 0806': ['pss/sha512', 'sha512'],
+    'sigalg 0401': ['pkcs1/sha256'],                        # certificates only in TLS 1.3
+    'sigalg 0501': ['pkcs1/sha384'],
+    'sigalg 0601': ['pkcs1/sha512', 'sha512'],
+}
+
+WYCHEPROOF = {
+    'aes-gcm': ['aes_gcm_test.json'],
+    'chacha20-poly1305': ['chacha20_poly1305_test.json'],
+    'aes-ccm': ['aes_ccm_test.json'],
+    'hmac': ['hmac_sha256_test.json', 'hmac_sha384_test.json'],
+    'hkdf': ['hkdf_sha256_test.json', 'hkdf_sha384_test.json'],
+    'x25519': ['x25519_test.json'],
+    'ecdh-nist': ['ecdh_secp256r1_ecpoint_test.json', 'ecdh_secp384r1_ecpoint_test.json',
+                  'ecdh_secp521r1_ecpoint_test.json'],
+    # CertificateVerify binds curve and hash; a certificate's signature does not, hence the mixes
+    'ecdsa': ['ecdsa_secp256r1_sha256_test.json', 'ecdsa_secp256r1_sha512_test.json',
+              'ecdsa_secp384r1_sha256_test.json', 'ecdsa_secp384r1_sha384_test.json',
+              'ecdsa_secp384r1_sha512_test.json', 'ecdsa_secp521r1_sha512_test.json'],
+    'rsa-pkcs1': ['rsa_signature_%d_%s_test.json' % (b, h) for b in (2048, 3072, 4096)
+                  for h in ('sha256', 'sha384', 'sha512')],
+    # TLS 1.3 only uses rsa_pss_rsae with the salt as long as the hash (ssl_tls13_generic.c)
+    'rsa-pss': ['rsa_pss_2048_sha256_mgf1_32_test.json', 'rsa_pss_2048_sha384_mgf1_48_test.json',
+                'rsa_pss_3072_sha256_mgf1_32_test.json', 'rsa_pss_4096_sha256_mgf1_32_test.json',
+                'rsa_pss_4096_sha384_mgf1_48_test.json', 'rsa_pss_4096_sha512_mgf1_64_test.json'],
+}
+
+HASHES = {'SHA-1': 'sha1', 'SHA-224': 'sha224', 'SHA-256': 'sha256', 'SHA-384': 'sha384', 'SHA-512': 'sha512'}
+CURVE_BYTES = {'secp256r1': 32, 'secp384r1': 48, 'secp521r1': 66}
+
+
+def read_pins(path):
+    pins = {}
+    for line in open(path):
+        line = line.split('#', 1)[0].strip()
+        if line:
+            key, value = line.split('=', 1)
+            pins[key] = value
+    return pins
+
+
+class Sources:
+    """Fetches and caches what the suites read, and records the sha256 of each file used."""
+
+    def __init__(self, cache, pins):
+        self.cache = cache
+        self.pins = pins
+        self.used = []
+        os.makedirs(cache, exist_ok=True)
+
+    def _note(self, name, data):
+        self.used.append((name, hashlib.sha256(data).hexdigest()))
+        return data
+
+    def git(self, key, path):
+        repo, commit = self.pins[key + '_REPO'], self.pins[key + '_COMMIT']
+        if not re.fullmatch('[0-9a-f]{40}', commit):
+            sys.exit('PINS: %s_COMMIT is not a full SHA' % key)
+        name = repo.rstrip('/').split('/')[-1]
+        work = os.path.join(self.cache, '%s-%s' % (name, commit))
+        if not os.path.isdir(os.path.join(work, '.git')):
+            # A partial clone of the one commit: only the files read below are downloaded
+            subprocess.run(['git', 'init', '-q', work], check=True)
+            subprocess.run(['git', '-C', work, 'fetch', '-q', '--depth', '1', '--filter=blob:none',
+                            repo, commit], check=True)
+        # git checks every object against its hash, so the content is what the commit says
+        data = subprocess.run(['git', '-C', work, 'cat-file', '-p', '%s:%s' % (commit, path)],
+                              check=True, capture_output=True).stdout
+        return self._note('%s@%s:%s' % (name, commit, path), data)
+
+    def document(self, key):
+        url, sha = DOCUMENTS[key]
+        path = os.path.join(self.cache, 'sha256-' + sha)
+        if not os.path.exists(path):
+            # csrc.nist.gov refuses Python's default User-Agent
+            req = urllib.request.Request(url, headers={'User-Agent': 'curl/8 (1541u crypto conformance)'})
+            data = urllib.request.urlopen(req, timeout=60).read()
+            with open(path + '.tmp', 'wb') as f:
+                f.write(data)
+            os.replace(path + '.tmp', path)
+        data = open(path, 'rb').read()
+        if hashlib.sha256(data).hexdigest() != sha:
+            sys.exit('%s: sha256 mismatch (%s)' % (url, path))
+        return self._note(url, data)
+
+
+class Harness:
+    """The vectors program: one operation per line, one result per line."""
+
+    def __init__(self, exe):
+        self.proc = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+
+    def __call__(self, *fields):
+        self.proc.stdin.write(' '.join(str(f) if f != '' else '-' for f in fields) + '\n')
+        rc, _, out = self.proc.stdout.readline().rstrip('\n').partition(' ')
+        return int(rc), bytes.fromhex(out)
+
+
+class Expectations:
+    """Lines of "<vector file> tc=<id>|flag=<name> accept|reject|skip <reason>". A tc= line wins over
+    flag= lines; among flag= lines the first in the file that names one of the vector's flags wins."""
+
+    def __init__(self, path):
+        self.rules = {}
+        self.used = set()
+        for n, line in enumerate(open(path), 1):
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            fields = line.split(None, 3)
+            if len(fields) < 4 or fields[2] not in ('accept', 'reject', 'skip') or '=' not in fields[1]:
+                sys.exit('%s:%d: want "<file> tc=N|flag=F accept|reject|skip <reason>"' % (path, n))
+            if (fields[0], fields[1]) in self.rules:
+                sys.exit('%s:%d: %s %s is there twice' % (path, n, fields[0], fields[1]))
+            self.rules[(fields[0], fields[1])] = (fields[2], n)
+
+    def lookup(self, source, tc, flags):
+        keys = [(source, 'tc=%s' % tc)] + sorted(((source, 'flag=' + f) for f in flags),
+                                                 key=lambda k: self.rules.get(k, (0, 0))[1])
+        for key in keys:
+            if key in self.rules:
+                self.used.add(key)
+                return self.rules[key][0]
+        return None
+
+    def unused(self):
+        return sorted((self.rules[k][1], k) for k in self.rules if k not in self.used)
+
+
+class Suite:
+    def __init__(self, name, expectations):
+        self.name = name
+        self.expectations = expectations
+        self.passed = self.failed = self.decided = 0
+        self.failures = []
+        self.covered = set()
+
+    def fail(self, what):
+        self.failed += 1
+        self.failures.append(what)
+
+    def judge(self, source, tc, result, flags, observed, cover=None):
+        """observed: 'accept', 'reject', or 'wrong' (reported success with the wrong output)."""
+        want = self.expectations.lookup(source, tc, flags)
+        label = '%s tc=%s (%s, %s)' % (source, tc, result, ' '.join(flags) or '-')
+        if observed == 'wrong':
+            return self.fail('%s: WRONG OUTPUT' % label)
+        if want is None:
+            if result == 'acceptable':
+                return self.fail('%s: %s, and no expectation says which outcome is right' % (label, observed))
+            want = 'accept' if result == 'valid' else 'reject'
+        else:
+            self.decided += 1
+        if observed != want:
+            return self.fail('%s: %s, expected %s' % (label, observed, want))
+        self.passed += 1
+        if cover and (result == 'valid') and (observed == 'accept'):
+            self.covered.add(cover)
+
+    def ok(self):
+        return self.failed == 0 and (self.passed > 0 or self.name == 'expectations')
+
+    def line(self, detail=''):
+        text = 'SUITE %-18s %s %5d passed %3d failed (%d decided by expectations)' % (
+            self.name, 'PASS' if self.ok() else 'FAIL', self.passed, self.failed, self.decided)
+        return text + (' ' + detail if detail else '')
+
+
+def outcome(rc, out, expected):
+    if rc != 0:
+        return 'reject'
+    return 'accept' if expected is None or out == expected else 'wrong'
+
+
+# ---- Wycheproof ----------------------------------------------------------------------------
+
+def run_aead(h, suite, source, g, t):
+    aead = {'aes_gcm': 'gcm', 'aes_ccm': 'ccm', 'chacha20_poly1305': 'chachapoly'}[source.rsplit('_test', 1)[0]]
+    ct, tag = bytes.fromhex(t['ct']), bytes.fromhex(t['tag'])
+    rc, pt = h('open', aead, t['key'], t['iv'], t['aad'], t['ct'], t['tag'])
+    seen = outcome(rc, pt, bytes.fromhex(t['msg']))
+    if seen == 'accept' and t['result'] != 'invalid':
+        # The same vector sealed must give the same ciphertext and tag
+        rc, out = h('seal', aead, t['key'], t['iv'], t['aad'], t['msg'], len(tag))
+        seen = outcome(rc, out, ct + tag)
+    cover = '%s/k%d/t%d' % (suite.name, g['keySize'], g['tagSize']) if g['ivSize'] == 96 else None
+    suite.judge(source, t['tcId'], t['result'], t['flags'], seen, cover)
+
+
+def run_mac(h, suite, source, g, t):
+    alg = 'sha' + source.split('_sha')[1].split('_')[0]
+    rc, mac = h('hmac', alg, t['key'], t['msg'])
+    seen = 'accept' if rc == 0 and mac[:g['tagSize'] // 8] == bytes.fromhex(t['tag']) else 'reject'
+    suite.judge(source, t['tcId'], t['result'], t['flags'], seen, 'hmac/' + alg)
+
+
+def run_hkdf(h, suite, source, g, t):
+    alg = 'sha' + source.split('_sha')[1].split('_')[0]
+    rc, okm = h('hkdf', alg, t['ikm'], t['salt'], t['info'], t['size'])
+    suite.judge(source, t['tcId'], t['result'], t['flags'], outcome(rc, okm, bytes.fromhex(t['okm'])),
+                'hkdf/' + alg)
+
+
+def run_ecdh(h, suite, source, g, t):
+    curve = g['curve']
+    priv = t['private']
+    if curve in CURVE_BYTES:
+        # Wycheproof gives the scalar as an integer; PSA imports it at exactly the field size
+        raw = int(priv, 16).to_bytes(max(CURVE_BYTES[curve], (int(priv, 16).bit_length() + 7) // 8), 'big')
+        priv = raw.hex()
+    group = 'x25519' if curve == 'curve25519' else curve
+    rc, shared = h('ecdh', group, priv, t['public'])
+    suite.judge(source, t['tcId'], t['result'], t['flags'], outcome(rc, shared, bytes.fromhex(t['shared'])),
+                group if group == 'x25519' else 'ecdh/' + group)
+
+
+def run_verify(h, suite, source, g, t):
+    alg = HASHES[g['sha']]
+    if g['type'] == 'EcdsaVerify':
+        scheme, slen, cover = 'ecdsa', 0, 'ecdsa/%s/%s' % (g['publicKey']['curve'], alg)
+    elif g['type'] == 'RsassaPssVerify':
+        if HASHES[g['mgfSha']] != alg:
+            sys.exit('%s: TLS 1.3 uses MGF1 with the signature hash' % source)
+        scheme, slen, cover = 'pss', g['sLen'], 'pss/' + alg
+    else:
+        scheme, slen, cover = 'pkcs1', 0, 'pkcs1/' + alg
+    rc, _ = h('verify', scheme, g['publicKeyDer'], alg, t['msg'], t['sig'], slen)
+    suite.judge(source, t['tcId'], t['result'], t['flags'], 'accept' if rc == 0 else 'reject', cover)
+
+
+RUNNERS = {'aes-gcm': run_aead, 'chacha20-poly1305': run_aead, 'aes-ccm': run_aead, 'hmac': run_mac,
+           'hkdf': run_hkdf, 'x25519': run_ecdh, 'ecdh-nist': run_ecdh, 'ecdsa': run_verify,
+           'rsa-pkcs1': run_verify, 'rsa-pss': run_verify}
+
+
+def wycheproof(h, src, exp, name):
+    suite = Suite(name, exp)
+    for f in WYCHEPROOF[name]:
+        data = json.loads(src.git('WYCHEPROOF', 'testvectors_v1/' + f))
+        for g in data['testGroups']:
+            for t in g['tests']:
+                RUNNERS[name](h, suite, f, g, t)
+    return suite
+
+
+# ---- RFC and NIST CAVP vectors -------------------------------------------------------------
+
+def rfc_hex_after(text, label, start=0):
+    """The bytes printed after a label line: one hex string, a hex dump or colon-separated."""
+    i = text.index(label, start)
+    out = ''
+    for line in text[text.index('\n', i) + 1:].split('\n'):
+        tokens = line.split()
+        if not tokens:
+            if out:
+                break
+            continue
+        if re.fullmatch(r'[0-9a-f]{3}', tokens[0]):  # "016  90 91 ...  ascii"
+            for tok in tokens[1:17]:
+                if not re.fullmatch('[0-9a-f]{2}', tok):
+                    break
+                out += tok
+        elif re.fullmatch(r'([0-9a-f]{2}:)*[0-9a-f]{2}:?', tokens[0]):
+            out += tokens[0].replace(':', '')
+        elif re.fullmatch(r'[0-9a-f]+', tokens[0]) and len(tokens) == 1:
+            out += tokens[0]
+        else:
+            break
+    return bytes.fromhex(out)
+
+
+def rfc_vectors(h, src, exp):
+    suite = Suite('rfc', exp)
+
+    # RFC 5869 appendix A.1-A.3 (the SHA-256 cases; A.4-A.7 are SHA-1, which TLS 1.3 does not use)
+    text = src.document('rfc5869').decode()
+    for case in ('A.1', 'A.2', 'A.3'):
+        body = text[text.index('\n%s.  Test Case' % case):]
+        body = body[:body.index('\nA.', 1)]
+        fields = {}
+        for m in re.finditer(r'^   (\w+)\s*= (.*?)(?=^   \w+\s*=|\Z)', body, re.S | re.M):
+            # a value ends at its "(n octets)", before any page footer
+            fields[m.group(1)] = re.sub(r'\s|0x', '', m.group(2).split('(')[0])
+        rc, okm = h('hkdf', 'sha256', fields['IKM'], fields['salt'], fields['info'], fields['L'])
+        suite.judge('rfc5869', case, 'valid', [], outcome(rc, okm, bytes.fromhex(fields['OKM'])), 'hkdf/sha256')
+
+    # RFC 7748 section 5.2 (two X25519 vectors, then 1 and 1000 iterations) and 6.1 (the exchange)
+    text = src.document('rfc7748').decode()
+    sec = text[text.index('\n5.2.  Test Vectors'):]
+    pos = 0
+    for n in (1, 2):
+        pos = sec.index('Input scalar:', pos)
+        k, u = rfc_hex_after(sec, 'Input scalar:', pos), rfc_hex_after(sec, 'Input u-coordinate:', pos)
+        want = rfc_hex_after(sec, 'Output u-coordinate:', pos)
+        rc, out = h('ecdh', 'x25519', k.hex(), u.hex())
+        suite.judge('rfc7748', '5.2-%d' % n, 'valid', [], outcome(rc, out, want), 'x25519')
+        pos += 1
+    k = u = (9).to_bytes(32, 'little')
+    done = 0
+    for target, label in ((1, 'After one iteration:'), (1000, 'After 1,000 iterations:')):
+        while done < target:
+            rc, out = h('ecdh', 'x25519', k.hex(), u.hex())
+            if rc != 0:
+                break
+            k, u = out, k
+            done += 1
+        suite.judge('rfc7748', label, 'valid', [], outcome(rc, k, rfc_hex_after(sec, label)), 'x25519')
+    sec = text[text.index('\n6.1.  Curve25519'):]
+    a, b = rfc_hex_after(sec, "Alice's private key, a:"), rfc_hex_after(sec, "Bob's private key, b:")
+    base = (9).to_bytes(32, 'little')
+    for name, priv, pub, want in (
+            ('6.1 K_A', a, base, rfc_hex_after(sec, "Alice's public key, X25519(a, 9):")),
+            ('6.1 K_B', b, base, rfc_hex_after(sec, "Bob's public key, X25519(b, 9):")),
+            ('6.1 K (Alice)', a, rfc_hex_after(sec, "Bob's public key, X25519(b, 9):"),
+             rfc_hex_after(sec, 'Their shared secret, K:')),
+            ('6.1 K (Bob)', b, rfc_hex_after(sec, "Alice's public key, X25519(a, 9):"),
+             rfc_hex_after(sec, 'Their shared secret, K:'))):
+        rc, out = h('ecdh', 'x25519', priv.hex(), pub.hex())
+        suite.judge('rfc7748', name, 'valid', [], outcome(rc, out, want), 'x25519')
+
+    # RFC 8439 section 2.8.2 (seal) and appendix A.5 (open)
+    text = src.document('rfc8439').decode()
+    sec = text.index('\n2.8.2.  Example and Test Vector for AEAD_CHACHA20_POLY1305')
+    pt, aad, key = (rfc_hex_after(text, label, sec) for label in ('Plaintext:', 'AAD:', 'Key:'))
+    nonce = rfc_hex_after(text, '32-bit fixed-common part:', sec) + rfc_hex_after(text, 'IV:', sec)
+    want = rfc_hex_after(text, 'Ciphertext:', sec) + rfc_hex_after(text, 'Tag:', sec)
+    rc, out = h('seal', 'chachapoly', key.hex(), nonce.hex(), aad.hex(), pt.hex(), 16)
+    suite.judge('rfc8439', '2.8.2', 'valid', [], outcome(rc, out, want), 'chacha20-poly1305/k256/t128')
+    sec = text.index('\nA.5.  ChaCha20-Poly1305 AEAD Decryption')
+    key, ct, nonce, aad, tag, pt = (rfc_hex_after(text, label, sec) for label in (
+        'The ChaCha20 Key', 'Ciphertext:', 'The nonce:', 'The AAD:', 'Received Tag:', 'Plaintext::'))
+    rc, out = h('open', 'chachapoly', key.hex(), nonce.hex(), aad.hex(), ct.hex(), tag.hex())
+    suite.judge('rfc8439', 'A.5', 'valid', [], outcome(rc, out, pt), 'chacha20-poly1305/k256/t128')
+    bad = bytes([tag[0] ^ 1]) + tag[1:]
+    rc, out = h('open', 'chachapoly', key.hex(), nonce.hex(), aad.hex(), ct.hex(), bad.hex())
+    suite.judge('rfc8439', 'A.5 tag flipped', 'invalid', [], outcome(rc, out, None))
+    return suite
+
+
+def cavp_sha(h, src, exp):
+    suite = Suite('sha2-cavp', exp)
+    archive = zipfile.ZipFile(io.BytesIO(src.document('cavp-sha')))
+    for alg in ('SHA256', 'SHA384', 'SHA512'):
+        for kind in ('ShortMsg', 'LongMsg'):
+            name = 'shabytetestvectors/%s%s.rsp' % (alg, kind)
+            text = archive.read(name).decode()
+            for n, (bits, msg, md) in enumerate(re.findall(r'Len = (\d+)\s+Msg = (\w+)\s+MD = (\w+)', text)):
+                rc, out = h('hash', alg.lower(), msg if int(bits) else '', )
+                suite.judge(name, n, 'valid', [], outcome(rc, out, bytes.fromhex(md)), alg.lower())
+    return suite
+
+
+# ---- coverage ------------------------------------------------------------------------------
+
+def coverage(vectors_exe, suites, exp):
+    suite = Suite('coverage', exp)
+    offer = subprocess.run([vectors_exe, 'offer'], capture_output=True, text=True, check=True).stdout.split('\n')
+    covered = set().union(*(s.covered for s in suites if s.ok()))
+    for item in filter(None, offer):
+        if item not in OFFERS:
+            suite.fail('%s is offered, and no vectors are mapped to it' % item)
+            continue
+        missing = [a for a in OFFERS[item] if a not in covered]
+        if missing:
+            suite.fail('%s is offered, and has no passing valid vector for %s' % (item, ', '.join(missing)))
+        else:
+            suite.passed += 1
+    return suite, [i for i in offer if i]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--out', required=True, help='the build directory run.sh made')
+    ap.add_argument('--cache', default=os.path.expanduser('~/.cache/1541u-build/crypto'))
+    ap.add_argument('--pins', default=os.environ.get('CRYPTO_PINS', os.path.join(HERE, 'PINS')))
+    ap.add_argument('--expectations', default=os.path.join(HERE, 'expectations'))
+    ap.add_argument('--verbose', action='store_true', help='list every failure, not the first ten')
+    args = ap.parse_args()
+    args.out = os.path.abspath(args.out)
+
+    src = Sources(args.cache, read_pins(args.pins))
+    exp = Expectations(args.expectations)
+    vectors = os.path.join(args.out, 'vectors')
+    h = Harness(vectors)
+    suites = [wycheproof(h, src, exp, name) for name in WYCHEPROOF]
+    suites += [rfc_vectors(h, src, exp), cavp_sha(h, src, exp)]
+    cov, offer = coverage(vectors, suites, exp)
+    suites.append(cov)
+
+    stale = Suite('expectations', exp)
+    for n, key in exp.unused():
+        stale.fail('line %d (%s %s) matched no vector: remove it, or find out why' % (n, *key))
+    stale.passed = len(exp.rules) - stale.failed
+    suites.append(stale)
+
+    with open(os.path.join(args.out, 'sources.txt'), 'w') as f:
+        for name, sha in src.used:
+            f.write('%s %s\n' % (sha, name))
+    for s in suites:
+        detail = ('offer: ' + ' '.join(offer)) if s is cov else ''
+        print(s.line(detail))
+        for what in s.failures[:None if args.verbose else 10]:
+            print('    ' + what)
+        if len(s.failures) > 10 and not args.verbose:
+            print('    ... %d more (--verbose)' % (len(s.failures) - 10))
+    passed = sum(s.passed for s in suites)
+    failed = sum(s.failed for s in suites)
+    ok = all(s.ok() for s in suites)
+    print('CRYPTO_CONFORMANCE %s %d passed %d failed %d suites' % ('PASS' if ok else 'FAIL', passed, failed,
+                                                                   len(suites)))
+    return 0 if ok else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
