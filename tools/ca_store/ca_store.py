@@ -225,7 +225,8 @@ def bump_ident(project, date):
             header, string.group(2), string.group(3), major.group(1), minor.group(1)))
     new = int(minor.group(1)) + 1
     version = "%s.%d" % (major.group(1), new)
-    text = text[:minor.start()] + minor.group(0).replace(minor.group(1), str(new)) + text[minor.end():]
+    text = (text[:minor.start()] + minor.group(0).replace(minor.group(1), str(new))
+            + text[minor.end():])
     text = (text[:string.start()] + '#define IDENT_STRING "%s%s"' % (string.group(1), version)
             + text[string.end():])
     major = re.search(r"^#define IDENT_MAJOR\s+\d+\n", text, re.M)
@@ -278,7 +279,7 @@ def refresh(repo_root, source=None, summary=None):
                              % (len(ders), project, limit))
 
     day = parse_date(date).date().isoformat()
-    bumps = [(project,) + bump_ident(project, day) for project, _ in using]
+    bumps = [(project, *bump_ident(project, day)) for project, _ in using]
 
     pem_path.write_bytes(data)
     write_pins(pins_path, {"CA_MOZILLA_DATE": date,

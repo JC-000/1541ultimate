@@ -183,7 +183,8 @@ class RefreshTest(unittest.TestCase):
         self.assertRefused("not DER", new)
 
     def test_a_file_without_the_mozilla_date_is_refused(self):
-        self.assertRefused("Certificate data from Mozilla", pem(NEW_DATE).replace("as of: ", "at: "))
+        self.assertRefused("Certificate data from Mozilla",
+                           pem(NEW_DATE).replace("as of: ", "at: "))
 
     def test_an_older_store_is_refused(self):
         self.assertRefused("older than the committed store", pem("Mon Mar 11 15:25:27 2024 GMT"))
@@ -248,7 +249,7 @@ class CheckTest(unittest.TestCase):
         arguments = ["check", "--repo-root", str(self.tree.root), "--today", "2027-06-01"]
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(ca_store.main(arguments), 0)
-            self.assertEqual(ca_store.main(arguments + ["--release"]), 1)
+            self.assertEqual(ca_store.main([*arguments, "--release"]), 1)
 
     def test_a_store_edited_by_hand_fails(self):
         self.tree.pem.write_text(self.tree.pem.read_text() + "\n")
@@ -287,7 +288,7 @@ class CommittedStoreTest(unittest.TestCase):
 
     def test_every_project_that_uses_the_store_has_a_version_to_bump(self):
         for project, _ in ca_store.projects(REPO_ROOT):
-            header, text, version = ca_store.bump_ident(project, "2026-09-25")
+            _, text, version = ca_store.bump_ident(project, "2026-09-25")
             self.assertIn('%s"' % version, text)
 
 
