@@ -95,22 +95,24 @@ $(VENV)/installed: $(PEERS)/requirements-tlslite.txt
 	@touch $@
 
 # Always run: build_mbedtls.sh checks its inputs and is cached. The stamp only changes with the build.
-# A lock directory keeps two makes in this tree from building into the same place at once.
+# An flock on $(MBEDTLS).lock keeps two makes in this tree from building into the same place at once;
+# the kernel drops it with its holder, so a killed make leaves nothing that blocks the next one.
+LOCKED = $(PYTHON) -c 'import fcntl, subprocess, sys; f = open(sys.argv[1], "w"); \
+	fcntl.flock(f, fcntl.LOCK_EX); sys.exit(subprocess.call(sys.argv[2:]))'
 $(MBEDTLS)/stamp: FORCE
-	@mkdir -p $(OUTPUT)
-	@until mkdir $(MBEDTLS).lock 2>/dev/null; do echo "waiting for $(MBEDTLS).lock"; sleep 2; done; \
-	trap 'rmdir $(MBEDTLS).lock' EXIT INT TERM; \
-	mkdir -p $(MBEDTLS) && \
+	@mkdir -p $(MBEDTLS)
+	@$(LOCKED) $(MBEDTLS).lock sh -c '\
 	{ CRYPTO_PINS=$(EFF_PINS) CRYPTO_SDKCONFIG=$(EFF_SDKCONFIG) CRYPTO_MACROS=$(EFF_MACROS) \
 	    $(BUILD_MBEDTLS) $(MBEDTLS) > $(MBEDTLS)/build_mbedtls.log 2>&1 || { tail -20 $(MBEDTLS)/build_mbedtls.log; exit 1; }; } && \
-	tail -1 $(MBEDTLS)/build_mbedtls.log | grep '^MBEDTLS_BUILD_OK ' && \
-	{ cmp -s $(MBEDTLS)/build_mbedtls.log $(MBEDTLS)/stamp || cp $(MBEDTLS)/build_mbedtls.log $(MBEDTLS)/stamp; }
+	tail -1 $(MBEDTLS)/build_mbedtls.log | grep "^MBEDTLS_BUILD_OK " && \
+	{ cmp -s $(MBEDTLS)/build_mbedtls.log $(MBEDTLS)/stamp || cp $(MBEDTLS)/build_mbedtls.log $(MBEDTLS)/stamp; }' 
 
 # Fetched every time and replaced only if it changed, so a branch name follows the branch
 $(OUTPUT)/$(ENGINE_TAG)/tls_engine.c: FORCE
 	@mkdir -p $(dir $@)
-	@$(if $(ENGINE_FILE),cat $(ENGINE_FILE),git -C $(PATH_SW) show $(ENGINE_REV):software/wifi/raw_u64/main/tls_engine.c) > $@.new
-	@cmp -s $@.new $@ && rm $@.new || mv $@.new $@
+	@t=$$(mktemp $@.XXXXXX) && \
+	$(if $(ENGINE_FILE),cat $(ENGINE_FILE),git -C $(PATH_SW) show $(ENGINE_REV):software/wifi/raw_u64/main/tls_engine.c) > $$t && \
+	{ cmp -s $$t $@ && rm $$t || mv $$t $@; }
 
 # The engine's compiled-in test CA is the PKI's two roots
 # The throwaway PKI: made once, and only extended (interop.py pki keeps what exists)

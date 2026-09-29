@@ -12,7 +12,7 @@
  *   nios_pump --port N --sni NAME [--verify 0|1] [--echo BYTES] [--push BYTES]
  *             [--pt-chunk BYTES] [--ct-chunk BYTES] [--after none|close|eof] [--seed N] [--baud N]
  *             [--settle-ms MS] [--settle-at STEP] [--ct-caps N,N,...] [--split SEED]
- *             [--clock-offset SECONDS] [--esp-slowdown K]
+ *             [--clock-offset SECONDS] [--esp-slowdown K] [--pre-open-offset SECONDS] [--no-entropy 1]
  *
  * --echo: send that many bytes in steps of --pt-chunk and read the same back.
  * --push: send nothing, read that many bytes the server sends on its own.
@@ -31,6 +31,9 @@
  *   (arbitrary TCP segmentation, reproducible).
  * --clock-offset: the Ultimate's clock in OPEN is the host's plus this (a
  *   string, may be negative); "none" sends unix_time 0 (no clock).
+ * --pre-open-offset: first OPEN (and CLOSE) a session with the host's clock plus this, then the
+ *   real one: the second clock must be the one that counts.
+ * --no-entropy 1: the engine's entropy_source() says the radio has not started.
  * --esp-slowdown: after each call, wait K-1 times as long as the handler took
  *   on the host: a crude model of the ESP32's slower CPU (default 0: off).
  * --after close: then step until the server's close_notify ends the session.
@@ -42,8 +45,9 @@
  * What the Ultimate takes from each STEP reply is decided by its own code:
  * wifi_tls_take_step() from software/io/wifi/wifi_tls.cc (nios_take.cc). So a
  * FAILED step's plaintext is withheld, and a refused step's ciphertext is not
- * sent, as on the device. Every exit closes the session, as wifi_tls_spike()
- * does, and then counts what mbedTLS and the engine left allocated.
+ * sent, as on the device. The session is closed only while the Ultimate
+ * thinks it open, as wifi_tls_spike() does; the module must free a FAILED or
+ * CLOSED session by itself, and at the end nothing may be left allocated.
  *
  * The device's clock is modelled: time(), for the engine and for mbedTLS's
  * certificate checks, starts near 1970 and follows the engine's settimeofday().
@@ -82,7 +86,8 @@ void cmd_tls_stats(command_buf_t *buf);
 #define TIMEOUT_MS   15000 // wifi_tls_spike.cc: HANDSHAKE_TIMEOUT_MS and ECHO_TIMEOUT_MS
 
 /* ---- ESP-IDF stand-ins: what tls_engine.c and the four handlers call ---- */
-entropy_source_t entropy_source(void) { return ENTROPY_RADIO; }
+static int no_entropy; // --no-entropy: the radio has not started
+entropy_source_t entropy_source(void) { return no_entropy ? ENTROPY_NONE : ENTROPY_RADIO; }
 int sntp_has_time(void) { return 0; }
 static int transmitted;
 BaseType_t my_uart_transmit_packet(uint8_t u, command_buf_t *b) { transmitted++; return pdTRUE; }
@@ -142,8 +147,10 @@ static time_t host_time(void)
 
 /* ---- allocations ----
  * Everything mbedTLS allocates (mbedtls_platform_set_calloc_free) and the engine's own session
- * (tls_engine.c is built with -Dcalloc/-Dfree=harness_engine_*). What is live after the session
- * is closed, beyond what was live before OPEN, was leaked. */
+ * (tls_engine.c is built with -Dcalloc/-Dfree=harness_engine_*), counted from before the first
+ * OPEN, when nothing (not even PSA) is set up: the engine's own gated psa_crypto_init() is the only
+ * one. At the end, once the session is gone as the Ultimate sees it, PSA must hold no key, and after
+ * mbedtls_psa_crypto_free() (the module's lasting state, torn down) nothing may be left. */
 static long live_allocs;
 
 static void *count_calloc(size_t n, size_t size)
@@ -210,6 +217,7 @@ int harness_ssl_write(mbedtls_ssl_context *ssl, const unsigned char *buf, size_t
 }
 
 /* ---- the RPCs, as the Ultimate sends them ---- */
+static int session_id = -1;   // open on the module, as the Ultimate sees it (wifi_tls_spike.cc session_open)
 static command_buf_t B;
 static uint16_t seq;
 static long baud = 5000000;
@@ -288,6 +296,10 @@ static step_t step(uint8_t session, const uint8_t *ct, int ct_len, const uint8_t
         exit(3);
     }
     step_t s = { take, r->esp_err, r->state, 0, 0, ct_out, pt_out };
+    // wifi_tls_spike.cc:267-269: a FAILED or CLOSED reply ends the session for the Ultimate
+    if ((r->state == TLS_STATE_FAILED) || (r->state == TLS_STATE_CLOSED)) {
+        session_id = -1;
+    }
     if (take != WIFI_TLS_REFUSED) {
         s.ct_out_len = ws.ct_out_len;
         s.pt_out_len = ws.pt_out_len; // 0 from a FAILED step: withheld
@@ -302,6 +314,19 @@ static void session_request(uint8_t cmd, uint8_t session)
     req->session = session;
     req->reserved = 0;
     request(cmd, sizeof(rpc_tls_session_req));
+}
+
+static rpc_tls_open_resp *open_session(int verify, const char *sni, uint32_t unix_time)
+{
+    rpc_tls_open_req *o = (rpc_tls_open_req *)B.data;
+    memset(B.data, 0xEE, sizeof(B.data));
+    memset(&o->flags, 0, sizeof(rpc_tls_open_req) - sizeof(rpc_header_t));
+    o->flags = verify ? (TLS_OPEN_VERIFY | TLS_OPEN_CA_TEST) : 0;
+    o->sni_len = (uint8_t)strlen(sni);
+    o->unix_time = unix_time;
+    memcpy(o->sni, sni, o->sni_len);
+    request(CMD_TLS_OPEN, sizeof(rpc_tls_open_req) + o->sni_len);
+    return (rpc_tls_open_resp *)B.data;
 }
 
 /* ---- the run ---- */
@@ -322,25 +347,42 @@ static uint32_t seed;
 static uint8_t payload(long i) { return (uint8_t)((i * 131 + (i >> 8) * 7 + seed) ^ (seed >> 8)); }
 
 static long expect;
-static int session_id = -1; // open on the module, as far as this side knows
+static int last_session = -1; // the id OPEN gave, for the check that the module let it go
 static long allocs_before_open;
 static int clock_ok = -1;
+static int open_reason = -1;
 
 static void finish(const char *outcome, const char *detail)
 {
     R.echo_ok = expect && (R.echo_received == expect); // every byte was compared as it came
-    // wifi_tls_spike(): the session is closed on every exit path (NOT_FOUND when the module ended it)
+    // wifi_tls_spike(): CLOSE only while the session is open, as far as the Ultimate knows
+    // (wifi_tls_spike.cc:590); a FAILED or CLOSED step has ended it (:267-269), and the module must
+    // have freed it by itself
     if (session_id >= 0) {
         session_request(CMD_TLS_CLOSE, (uint8_t)session_id);
         session_id = -1;
     }
+    int stats_after = 0;
+    if (last_session >= 0) {
+        session_request(CMD_TLS_STATS, (uint8_t)last_session);
+        stats_after = ((rpc_tls_stats_resp *)B.data)->esp_err; // ESP_ERR_NOT_FOUND: the module let it go
+    }
+    int sessions_left = tls_sessions_open();
+    int psa_keys = -1;
+#if defined(MBEDTLS_PSA_CRYPTO_C)
+    mbedtls_psa_stats_t ps;
+    mbedtls_psa_get_stats(&ps);
+    psa_keys = (int)(ps.MBEDTLS_PRIVATE(volatile_slots) + ps.MBEDTLS_PRIVATE(persistent_slots) +
+                     ps.MBEDTLS_PRIVATE(external_slots));
+    mbedtls_psa_crypto_free();
+#endif
     long leaked = live_allocs - allocs_before_open;
     printf("RESULT outcome=%s stage=%s detail=%s esp_err=%s0x%04x state=%d steps=%d resends=%d pt_delivered=%ld "
            "echo_sent=%ld echo_received=%ld echo_ok=%d tcp_in=%ld tcp_out=%ld tcp_eof=%d sessions_open=%d "
-           "tickets_taken=%d leaked=%ld clock_ok=%d\n",
+           "tickets_taken=%d leaked=%ld psa_keys=%d stats_after=0x%04x clock_ok=%d open_reason=%d\n",
            outcome, R.stage, detail, (R.esp_err < 0) ? "-" : "", (unsigned)abs(R.esp_err), R.state, R.steps,
            R.resends, R.pt_delivered, R.echo_sent, R.echo_received, R.echo_ok, R.tcp_in, R.tcp_out, R.tcp_eof,
-           tls_sessions_open(), tickets_taken, leaked, clock_ok);
+           sessions_left, tickets_taken, leaked, psa_keys, (unsigned)stats_after, clock_ok, open_reason);
     fflush(stdout);
     exit(0);
 }
@@ -481,6 +523,8 @@ int main(int argc, char **argv)
     int caps[32], n_caps = 0;
     long echo = 0, push = 0;
     const char *sni = "localhost", *after = "none", *clock_offset = "0";
+    int pre_open = 0;
+    long pre_open_offset = 0;
     for (int i = 1; i + 1 < argc; i += 2) {
         const char *k = argv[i], *v = argv[i + 1];
         if (!strcmp(k, "--port")) port = atoi(v);
@@ -506,6 +550,8 @@ int main(int argc, char **argv)
         else if (!strcmp(k, "--split")) split_state = (uint32_t)strtoul(v, NULL, 0);
         else if (!strcmp(k, "--clock-offset")) clock_offset = v;
         else if (!strcmp(k, "--esp-slowdown")) esp_slowdown = atof(v);
+        else if (!strcmp(k, "--pre-open-offset")) { pre_open = 1; pre_open_offset = atol(v); }
+        else if (!strcmp(k, "--no-entropy")) no_entropy = atoi(v);
         else { fprintf(stderr, "unknown option %s\n", k); return 2; }
     }
     if (!port || pt_chunk <= 0 || pt_chunk >= TLS_STEP_IN_MAX) {
@@ -519,20 +565,7 @@ int main(int argc, char **argv)
         start_s = t.tv_sec;
     }
     mbedtls_platform_set_calloc_free(count_calloc, count_free);
-    // The module's lasting state is made before the count starts: PSA itself, and the key store that
-    // mbedTLS 3.6.1+ allocates at the first key and keeps (one ECDH key made and destroyed)
-    psa_crypto_init();
-    {
-        psa_key_attributes_t at = PSA_KEY_ATTRIBUTES_INIT;
-        psa_set_key_type(&at, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_MONTGOMERY));
-        psa_set_key_bits(&at, 255);
-        psa_set_key_usage_flags(&at, PSA_KEY_USAGE_DERIVE);
-        psa_set_key_algorithm(&at, PSA_ALG_ECDH);
-        psa_key_id_t key;
-        if (psa_generate_key(&at, &key) == PSA_SUCCESS) {
-            psa_destroy_key(key);
-        }
-    }
+    allocs_before_open = live_allocs;
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(port) };
@@ -541,25 +574,27 @@ int main(int argc, char **argv)
         finish("CONNECT_FAILED", strerror(errno));
     }
 
+    // --pre-open-offset: an earlier OPEN, with another clock, closed again: the next OPEN's clock
+    // must replace it (tls_set_clock: "a clock an earlier OPEN set does not count")
+    if (pre_open) {
+        rpc_tls_open_resp *pr = open_session(verify, sni, (uint32_t)(host_time() + pre_open_offset));
+        printf("pre_open esp_err=0x%04x\n", (unsigned)pr->esp_err);
+        if (pr->esp_err == ESP_OK) {
+            session_request(CMD_TLS_CLOSE, pr->session);
+        }
+    }
+
     // CMD_TLS_OPEN with the Ultimate's clock
-    rpc_tls_open_req *o = (rpc_tls_open_req *)B.data;
-    memset(B.data, 0xEE, sizeof(B.data));
-    memset(&o->flags, 0, sizeof(rpc_tls_open_req) - sizeof(rpc_header_t));
-    o->flags = verify ? (TLS_OPEN_VERIFY | TLS_OPEN_CA_TEST) : 0;
-    o->sni_len = (uint8_t)strlen(sni);
     uint32_t unix_time = strcmp(clock_offset, "none") ? (uint32_t)(host_time() + atol(clock_offset)) : 0;
-    o->unix_time = unix_time;
-    memcpy(o->sni, sni, o->sni_len);
-    allocs_before_open = live_allocs;
-    request(CMD_TLS_OPEN, sizeof(rpc_tls_open_req) + o->sni_len);
-    rpc_tls_open_resp *or = (rpc_tls_open_resp *)B.data;
+    rpc_tls_open_resp *or = open_session(verify, sni, unix_time);
     if (or->esp_err != ESP_OK) {
         R.esp_err = or->esp_err;
-        printf("open_reason=%u\n", or->reason);
+        open_reason = or->reason;
         finish("OPEN_FAILED", "open");
     }
     uint8_t session = or->session;
     session_id = session;
+    last_session = session;
 
     uint8_t in[TLS_STEP_IN_MAX], pt_in[TLS_STEP_IN_MAX];
     int in_room = TLS_STEP_IN_MAX;
@@ -568,14 +603,17 @@ int main(int argc, char **argv)
     }
 
     // wifi_tls_spike.cc reads the session's STATS before the handshake and again after it. The
-    // module's clock at OPEN must be the one the Ultimate gave it.
+    // module's clock must be the one the Ultimate gave it: as the device clock (time(), modelled
+    // here) says, and as the module reports it
     session_request(CMD_TLS_STATS, session);
     {
         rpc_tls_stats_resp *st = (rpc_tls_stats_resp *)B.data;
         long skew = (long)st->esp_time - (long)unix_time;
-        clock_ok = (st->time_source == TLS_TIME_NIOS) && (skew >= 0) && (skew <= 2) && (settime_calls > 0);
-        printf("module_clock esp_time=%u sent=%u time_source=%u settimeofday_calls=%d\n", st->esp_time, unix_time,
-               st->time_source, settime_calls);
+        long device_skew = (long)time(NULL) - (long)unix_time;
+        clock_ok = (st->time_source == TLS_TIME_NIOS) && (skew >= 0) && (skew <= 2) && (settime_calls > 0) &&
+                   (device_skew >= 0) && (device_skew <= 2);
+        printf("module_clock esp_time=%u device=%ld sent=%u time_source=%u settimeofday_calls=%d\n", st->esp_time,
+               (long)time(NULL), unix_time, st->time_source, settime_calls);
     }
 
     // The handshake: a step answered NO_MEM goes again as it is

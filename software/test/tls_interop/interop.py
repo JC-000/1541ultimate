@@ -141,12 +141,28 @@ def make_pki(openssl, d):
     signed("eku_client", "int_ec", "eku_client.ext", "/CN=localhost", keyname="leaf_ec")
     signed("ku_no_ds", "int_ec", "ku_no_ds.ext", "/CN=localhost", keyname="leaf_ec")
 
+    # Leaves valid only near the time the PKI step runs: +-2 days, from 20 days on, until 20 days ago.
+    # Remade on a new day, so they judge the device clock, whatever the age of the rest of the PKI.
+    today = time.strftime("%Y%m%d", time.gmtime())
+    stamp = os.path.join(d, "window.day")
+    if not (os.path.exists(stamp) and open(stamp).read() == today):
+        def at(days):
+            return time.strftime("%Y%m%d%H%M%SZ", time.gmtime(time.time() + days * 86400))
+        for name, nb, na in (("win_pm2", -2, 2), ("win_notyet20", 20, 400), ("win_expired20", -400, -20)):
+            for ext in (".pem",):
+                if os.path.exists(os.path.join(d, name + ext)):
+                    os.remove(os.path.join(d, name + ext))
+            signed(name, "int_ec", "leaf.ext", "/CN=localhost", keyname="leaf_ec", dates=(at(nb), at(na)))
+        with open(stamp, "w") as f:
+            f.write(today)
+
     for kind in ("ec", "rsa"):
         write("chain_%s.pem" % kind, open(os.path.join(d, "int_%s.pem" % kind)).read())
     write("chain_rogue.pem", open(os.path.join(d, "rogue_int.pem")).read())
     for leaf, chain in (("leaf_ec", "int_ec"), ("leaf_rsa", "int_rsa"), ("expired", "int_ec"),
                         ("notyet", "int_ec"), ("untrusted", "rogue_int"), ("forged", "int_ec"),
-                        ("eku_client", "int_ec"), ("ku_no_ds", "int_ec")):
+                        ("eku_client", "int_ec"), ("ku_no_ds", "int_ec"), ("win_pm2", "int_ec"),
+                        ("win_notyet20", "int_ec"), ("win_expired20", "int_ec")):
         write("full_%s.pem" % leaf, open(os.path.join(d, leaf + ".pem")).read() +
               open(os.path.join(d, chain + ".pem")).read())
     write("trust.pem", open(os.path.join(d, "root_ec.pem")).read() + open(os.path.join(d, "root_rsa.pem")).read())
@@ -197,12 +213,34 @@ def client_offer(client):
 # PID recorded in <out>/pids.txt
 LIVE = []
 PIDS = []
+PIDS_FILE = []
+PROGRAMS = ("openssl", "gnutls_echo", "tlslite_echo", "nios_pump")
 
 
 def track(proc, what):
     LIVE.append(proc)
     PIDS.append("%d %s" % (proc.pid, what))
+    for path in PIDS_FILE:  # at once: a kill -9 of this process must not lose it
+        with open(path, "a") as f:
+            f.write(PIDS[-1] + "\n")
     return proc
+
+
+def reap_previous(path):
+    """Servers and clients a previous run in this directory left behind (it was killed with -9): each
+    recorded PID that is still one of our programs is killed."""
+    if not os.path.exists(path):
+        return
+    for ln in open(path).read().splitlines():
+        try:
+            pid = int(ln.split()[0])
+        except (ValueError, IndexError):
+            continue
+        cmd = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True).stdout
+        if cmd and any(p in cmd for p in PROGRAMS):
+            os.kill(pid, signal.SIGKILL)
+            print("REAPED %d left by an earlier run: %s" % (pid, cmd.strip()[:120]))
+    os.remove(path)
 
 
 def untrack(proc):
@@ -221,13 +259,8 @@ def reap():
         untrack(p)
 
 
-PIDS_FILE = []
-
-
 def write_pids():
-    for path in PIDS_FILE:
-        with open(path, "w") as f:
-            f.write("\n".join(PIDS) + "\n")
+    pass  # written as each process starts (track)
 
 
 def on_signal(signum, frame):
@@ -268,7 +301,8 @@ class OpenSSLServer:
         self.port = free_port()
         self.trace = os.path.join(out, name + ".server.trace")
         chain = {"leaf_ec": "int_ec", "leaf_rsa": "int_rsa", "expired": "int_ec", "notyet": "int_ec",
-                 "untrusted": "rogue_int", "forged": "int_ec", "eku_client": "int_ec", "ku_no_ds": "int_ec"}[cert]
+                 "untrusted": "rogue_int", "forged": "int_ec", "eku_client": "int_ec", "ku_no_ds": "int_ec",
+                 "win_pm2": "int_ec", "win_notyet20": "int_ec", "win_expired20": "int_ec"}[cert]
         key = {"leaf_rsa": "leaf_rsa"}.get(cert, "leaf_ec")
         cmd = [openssl, "s_server", "-accept", "127.0.0.1:%d" % self.port, "-cert", os.path.join(pki, cert + ".pem"),
                "-cert_chain", os.path.join(pki, chain + ".pem"), "-key", os.path.join(pki, key + ".key"),
@@ -750,7 +784,9 @@ def _sig_keyupdate(res, facts):
 
 
 def _sig_empty4(res, facts):
-    return res.get("outcome") == "FAILED" and res.get("esp_err") == "-0x7180"
+    # Before any echo arrived, and with bad_record_mac sent to the server
+    return res.get("outcome") == "FAILED" and res.get("esp_err") == "-0x7180" and \
+        res.get("echo_received") == "0" and facts.get("alert_received") == BAD_RECORD_MAC
 
 
 KNOWN = {
@@ -777,7 +813,7 @@ KNOWN = {
         "Ultimate took are intact, and the FAILED step's own plaintext is withheld. Gated to below 3.6.8: "
         "a later version must be checked again."),
     "tlslite/empty/4x/before": (
-        "Mbed TLS", None, "XFAIL", _sig_empty4, "FAILED -0x7180",
+        "Mbed TLS", None, "XFAIL", _sig_empty4, "FAILED -0x7180 before any echo, bad_record_mac sent",
         "mbedTLS takes at most 3 empty records in a row (ssl_msg.c:4079-4092 at 72aa6873: nb_zero > 3 is "
         "MBEDTLS_ERR_SSL_INVALID_MAC), a limit against a flood of them. RFC 8446 section 5.1 allows empty "
         "application data records without a number."),
@@ -812,14 +848,30 @@ TICKETS = [0, 1, 2, 8]
 BAD_RECORD_MAC, UNEXPECTED_MESSAGE, BAD_CERTIFICATE, CERTIFICATE_EXPIRED, CERTIFICATE_UNKNOWN = 20, 10, 42, 45, 46
 ILLEGAL_PARAMETER, UNKNOWN_CA, DECRYPT_ERROR, PROTOCOL_VERSION = 47, 48, 51, 70
 UNSUPPORTED_CERTIFICATE = 43
-# A usage (KU/EKU) failure: certificate_unknown from mbedTLS 3.6.0, unsupported_certificate from 3.6.7
-USAGE_ALERTS = (CERTIFICATE_UNKNOWN, UNSUPPORTED_CERTIFICATE)
 
 TWENTY_YEARS = 20 * 365 * 86400
 
 
-def matrix(suites, groups):
+def mbedtls_version(info):
+    m = re.search(r"Mbed TLS (\d+)\.(\d+)\.(\d+)", info)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def by_version(info, v360, v367):
+    """A value that mbedTLS changed between 3.6.0 and 3.6.7: the one of the client's version, both
+    where the versions in between (not run) or another library could give either."""
+    v = mbedtls_version(info)
+    if v and v <= (3, 6, 0):
+        return v360
+    if v and v >= (3, 6, 7):
+        return v367
+    return (v360, v367)
+
+
+def matrix(suites, groups, info=""):
     cases = []
+    # A usage (KU/EKU) failure: certificate_unknown from mbedTLS 3.6.0, unsupported_certificate from 3.6.7
+    usage_alert = by_version(info, CERTIFICATE_UNKNOWN, UNSUPPORTED_CERTIFICATE)
     first, second = GROUPS[groups[0]], "secp256r1"
     grouplist = [(first, 0), (second, 0 if first == second else 1)]
     for srv in ("openssl", "gnutls"):
@@ -875,9 +927,11 @@ def matrix(suites, groups):
                ("expired", dict(cert="expired"), {}, "-0x2700", CERTIFICATE_EXPIRED),
                ("not_yet_valid", dict(cert="notyet"), {}, "-0x2700", CERTIFICATE_UNKNOWN),
                ("forged_signature", dict(cert="forged"), {}, "-0x2700", UNKNOWN_CA),
-               ("eku_client_only", dict(cert="eku_client"), {}, "-0x7a00", USAGE_ALERTS)]
+               ("eku_client_only", dict(cert="eku_client"), {}, "-0x7a00", usage_alert),
+               ("not_yet_valid_20_days", dict(cert="win_notyet20"), {}, "-0x2700", CERTIFICATE_UNKNOWN),
+               ("expired_20_days_ago", dict(cert="win_expired20"), {}, "-0x2700", CERTIFICATE_EXPIRED)]
         if srv == "openssl":
-            bad.append(("ku_no_digital_signature", dict(cert="ku_no_ds"), {}, "-0x7a00", USAGE_ALERTS))
+            bad.append(("ku_no_digital_signature", dict(cert="ku_no_ds"), {}, "-0x7a00", usage_alert))
         if srv == "gnutls":
             bad.append(("key_mismatch", dict(key="other"), {}, "-0x6e00", None))
         for label, sa, ca, err, alert in bad:
@@ -896,9 +950,24 @@ def matrix(suites, groups):
         for label, sa in refused:
             cases.append(Case("%s/server-refuses/%s" % (srv, label), srv, dict(tickets=2, **sa), dict(echo=3000),
                               dict(ok=False, err="-0x7780", refused=True)))
-    # No clock at all: OPEN refuses to verify (reason NO_TIME), before any byte goes out
+    # No clock at all: OPEN refuses to verify (reason NO_TIME), before any byte goes out; and no entropy:
+    # OPEN refuses (reason NO_ENTROPY)
     cases.append(Case("openssl/clock/none", "openssl", dict(tickets=2), dict(echo=100, clock="none"),
-                      dict(ok=False, open_refused=True)))
+                      dict(ok=False, open_refused=True, reason=2)))
+    cases.append(Case("openssl/refused/no_entropy", "openssl", dict(tickets=2), dict(echo=100, no_entropy=1),
+                      dict(ok=False, open_refused=True, reason=1)))
+    # A leaf valid only within 2 days of now: it passes only if the device's clock is the Ultimate's, as
+    # the certificate check sees it (not as the module reports it). Also after an earlier OPEN set the
+    # clock 30 days ahead: the second OPEN's clock must count. And 30 days ahead, it must fail.
+    for srv in ("openssl", "gnutls"):
+        cases.append(Case("%s/clock/window_2_days" % srv, srv, dict(tickets=2, cert="win_pm2"),
+                          dict(echo=100), dict(ok=True, tickets=2)))
+        cases.append(Case("%s/clock/window_2_days_after_open_30_days_ahead" % srv, srv,
+                          dict(tickets=2, cert="win_pm2"), dict(echo=100, pre_open=30 * 86400),
+                          dict(ok=True, tickets=2)))
+        cases.append(Case("%s/clock/window_2_days_30_days_ahead" % srv, srv, dict(tickets=2, cert="win_pm2"),
+                          dict(echo=100, clock="+%d" % (30 * 86400)),
+                          dict(ok=False, err="-0x2700", alert=CERTIFICATE_EXPIRED if srv == "openssl" else None)))
     # KeyUpdate from the server, mid-stream (GnuTLS; s_server -quiet cannot be told to). A positive case:
     # a client that implements KeyUpdate passes it; mbedTLS 3.6 is an XFAIL in KNOWN.
     cases.append(Case("gnutls/keyupdate/after1024", "gnutls", dict(tickets=2, keyupdate_after=1024),
@@ -911,7 +980,7 @@ def matrix(suites, groups):
             ("serverhello_flip", "flip", 0, "-0x6600", ILLEGAL_PARAMETER),
             # the rest of the message is missing: DECODE_ERROR on 3.6.0; 3.6.7 reassembles handshake messages
             # across records (3.6.3) and then meets the leftover bytes as a record: INVALID_RECORD
-            ("serverhello_shortened", "shorten", 0, ("-0x7080", "-0x7200"), None),
+            ("serverhello_shortened", "shorten", 0, by_version(info, "-0x7080", "-0x7200"), None),
             ("record_flip_certificate", "flip", 3, "-0x7180", BAD_RECORD_MAC),
             ("record_flip_certificateverify", "flip", 4, "-0x7180", BAD_RECORD_MAC),
             ("record_flip_finished", "flip", 5, "-0x7180", BAD_RECORD_MAC)):
@@ -989,7 +1058,9 @@ def run_case(c, a, out, info=""):
            "--pt-chunk", str(p.get("pt", 512)), "--ct-chunk", str(p.get("ct", 0)), "--after", p.get("after", "none"),
            "--seed", str(seed), "--settle-ms", str(p.get("settle", 0)), "--settle-at", str(p.get("settle_at", 0))]
     cmd += (["--ct-caps", p["caps"]] if "caps" in p else [])
-    cmd += (["--clock-offset", p["clock"]] if "clock" in p else []) + (a.client_arg or [])
+    cmd += (["--clock-offset", p["clock"]] if "clock" in p else [])
+    cmd += (["--pre-open-offset", str(p["pre_open"])] if "pre_open" in p else [])
+    cmd += (["--no-entropy", "1"] if p.get("no_entropy") else []) + (a.client_arg or [])
     proc = track(subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True), "client " + base)
     try:
         out_, err = proc.communicate(timeout=60)
@@ -1044,6 +1115,14 @@ def judge(c, res, facts, err, rc, proxy, seed):
         why.append("the client left %s allocations after the session was closed" % res["leaked"])
     if res.get("clock_ok") == "0":
         why.append("the module's clock is not the unix_time the Ultimate sent")
+    # The module let the session go by itself (FAILED, CLOSED) or on the Ultimate's CLOSE: the table
+    # is empty, STATS for it says NOT_FOUND, and PSA holds no key
+    if res.get("sessions_open", "0") != "0":
+        why.append("the module still holds %s session(s) at the end" % res["sessions_open"])
+    if res.get("stats_after", "0x0000") not in ("0x0000", "0x0105"):
+        why.append("STATS for the ended session gave %s, not NOT_FOUND" % res["stats_after"])
+    if res.get("psa_keys", "0") not in ("0", "-1"):
+        why.append("PSA still holds %s key(s) at the end" % res["psa_keys"])
     want_sni = c.client.get("sni", "localhost")
     # (A server that refuses early, gnutls-serv on its own certificate, may not have stored the name)
     if "sni" in facts and facts["sni"] != want_sni and not e.get("open_refused") and not e.get("refused"):
@@ -1072,8 +1151,10 @@ def judge(c, res, facts, err, rc, proxy, seed):
                                                        str(facts.get("after_hrr")).startswith("alert:"))):
                 why.append("server saw %s after its message, want %s" % (facts.get("after_hrr"), want))
     elif e.get("open_refused"):
-        if outcome != "OPEN_FAILED" or res.get("esp_err") != "0x0103":
-            why.append("outcome %s %s, want OPEN_FAILED 0x0103 (reason NO_TIME)" % (outcome, res.get("esp_err")))
+        if outcome != "OPEN_FAILED" or res.get("esp_err") != "0x0103" or \
+                ("open_reason" in res and res["open_reason"] != str(e["reason"])):
+            why.append("outcome %s %s reason %s, want OPEN_FAILED 0x0103 reason %d" % (
+                outcome, res.get("esp_err"), res.get("open_reason"), e["reason"]))
     elif e.get("ok", True):
         want = e.get("outcome", "ECHO_OK")
         if outcome != want:
@@ -1161,7 +1242,8 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--only")
     ap.add_argument("--client-arg", action="append", help="passed to the client as it is (repeatable)")
-    ap.add_argument("--peers", help="the peer versions the matrix was made with (KEY=VALUE lines)")
+    ap.add_argument("--peers", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "PEERS"),
+                    help="the peer versions the matrix was made with (KEY=VALUE lines; default: PEERS here)")
     ap.add_argument("--allow-peer-drift", action="store_true", help="run although a peer's version differs")
     ap.add_argument("--label", default="", help="what was built: printed with the summary line")
     a = ap.parse_args()
@@ -1174,6 +1256,7 @@ def main():
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGHUP, on_signal)
     os.makedirs(a.out, exist_ok=True)
+    reap_previous(os.path.join(a.out, "pids.txt"))
     PIDS_FILE.append(os.path.join(a.out, "pids.txt"))
     suites, groups, info = client_offer(a.client)
     versions = peer_versions(a)
@@ -1195,9 +1278,13 @@ def main():
     print("CLIENT %s %s: %s" % (a.client, " ".join(a.client_arg or []), info))
     print("CLIENT offers suites %s; groups %s" % (
         ", ".join(SUITES.get(x, hex(x)) for x in suites), ", ".join(GROUPS.get(g, hex(g)) for g in groups)))
-    cases = matrix(suites, groups)
+    cases = matrix(suites, groups, info)
     if a.only:
-        cases = [c for c in cases if re.search(a.only, c.name)]
+        try:
+            cases = [c for c in cases if re.search(a.only, c.name)]
+        except re.error as err:
+            print("TLS_INTEROP FAIL 0/0 (--only %r is not a regular expression: %s)" % (a.only, err))
+            return 2
     if not cases:
         print("TLS_INTEROP FAIL 0/0 (no case matches --only %r)" % a.only)
         return 2

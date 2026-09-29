@@ -40,6 +40,36 @@ from tlslite import messages, tlsconnection
 from tlslite.keyexchange import KeyExchange
 
 
+def client_hello_sni(s):
+    """The server_name in the ClientHello, read with MSG_PEEK so that tlslite still gets every byte:
+    known whatever the handshake then does."""
+    import struct
+    end = None
+    data = b""
+    for _ in range(100):
+        data = s.recv(16389, socket.MSG_PEEK)
+        if len(data) >= 5:
+            end = 5 + struct.unpack(">H", data[3:5])[0]
+            if len(data) >= end:
+                break
+    if end is None or len(data) < end or data[5] != 1:
+        return None
+    b = data[9:end]
+    p = 2 + 32
+    p += 1 + b[p]
+    p += 2 + struct.unpack(">H", b[p:p + 2])[0]
+    p += 1 + b[p]
+    stop = p + 2 + struct.unpack(">H", b[p:p + 2])[0]
+    p += 2
+    while p + 4 <= stop:
+        t, ln = struct.unpack(">HH", b[p:p + 4])
+        d = b[p + 4:p + 4 + ln]
+        if t == 0 and len(d) >= 5 and d[2] == 0:
+            return d[5:5 + int.from_bytes(d[3:5], "big")].decode(errors="replace")
+        p += 4 + ln
+    return ""
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, required=True)
@@ -105,6 +135,7 @@ def main():
     s, _ = ls.accept()
     ls.close()
     s.settimeout(20)
+    print("SERVER_SNI %s" % (client_hello_sni(s) or "-"))
     conn = TLSConnection(s)
     received, h, end = 0, hashlib.sha256(), "eof"
     try:
@@ -134,6 +165,7 @@ def main():
                     conn.write(b"")
     except Exception as e:
         end = "%s" % type(e).__name__
+        print("SERVER_ECHO_FAILED %r" % e)
     print("SERVER_DONE received=%d echoed=%d sha256=%s tickets_sent=%d keyupdates_sent=0 end=%s" % (
         received, received, h.hexdigest(), tickets[0], end))
     s.close()
