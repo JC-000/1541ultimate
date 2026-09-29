@@ -383,7 +383,13 @@ class Suite:
         if observed != want:
             return self.fail("%s: %s, expected %s" % (label, observed, want))
         if note and note.startswith("fail-open:"):
-            self.fail_open.append((note.split(":", 1)[1], tc))
+            # in listed order (x509-misordered) the same behaviour is one more insecure outcome
+            self.fail_open.append(
+                (
+                    note.split(":", 1)[1],
+                    "%s%s" % (tc, "@given" if source.endswith("/given") else ""),
+                )
+            )
             if self.expectations.strict:
                 return self.fail(
                     "%s: %s, security-relevant fail-open %s (CRYPTO_STRICT)"
@@ -877,19 +883,31 @@ def limbo_suite(lim, name, source, cases, exp, order="path", missing=()):
 def signatures(lim, accepted, exp):
     """Every valid chain accepted above (in CA and in bundle mode), with one byte of a signature
     flipped: the leaf's, and in turn each certificate's above it on the path to the trusted
-    certificate. Each must be refused. A certificate that another presented or trusted one could
-    stand in for is not applicable."""
+    certificate. Each broken chain is presented twice, as the path in order and "spaced", with a
+    filler certificate in front of every parent (so mbedTLS's parent search, not adjacency, finds
+    it), and must be refused both times. A flip on a certificate that another presented or trusted
+    one also verifies the child of (so could stand in) is not applicable."""
     suite = Suite("x509-signatures", exp)
     for t, mode, trusted in accepted:
         for depth in range(64):
             flip = "path%d" % depth if depth else "leaf"
-            seen, _ = lim(t, mode=mode, flip=flip, trusted=trusted)
+            seen = None
+            for layout in ("", "+spaced"):
+                seen, _ = lim(t, mode=mode, flip=flip + layout, trusted=trusted)
+                if seen == "end":
+                    break
+                if seen == "n/a":
+                    suite.not_applicable()
+                else:
+                    suite.judge(
+                        "signatures",
+                        "%s/%s/%s%s" % (t["id"], mode, flip, layout),
+                        "invalid",
+                        [],
+                        seen,
+                    )
             if seen == "end":
                 break
-            if seen == "n/a":
-                suite.not_applicable()
-            else:
-                suite.judge("signatures", "%s/%s/%s" % (t["id"], mode, flip), "invalid", [], seen)
     return suite
 
 
@@ -1073,21 +1091,57 @@ def regressions(h, exp, conditions):
 
 # ---- coverage ------------------------------------------------------------------------------
 
-# How tls_engine.c configures a session, which offer() in vectors.c and limbo.c's two ways to
-# verify copy: the code from mbedtls_ssl_config_defaults() to mbedtls_ssl_set_bio(), with the
-# arguments and the conditions around each call (the verify callback, CA chain, bundle, authmode),
-# comments and blank lines left out. It must equal engine_config.txt, or the coverage suite fails:
-# the copies have to be looked at, and the file updated in the same commit.
+# tls_engine.c's verification surface, which offer() in vectors.c and limbo.c's two ways to
+# verify copy, as text: every #define that names an mbedtls_ or esp_crt_ symbol; the whole of
+# tls_setup() and tls_open() (the argument checks, the verify and clock gates, the session
+# configuration); every other function that touches the configuration, the BIO, the verify
+# callback or the host name; and the functions installed as verify callbacks. Comments and blank
+# lines are left out. It must equal engine_config.txt, or the coverage suite fails: the copies
+# have to be looked at, and the file updated in the same commit. A text check catches edits, not
+# a determined evasion; a test of the engine's behaviour would be stronger (M3).
 ENGINE = os.path.join(HERE, "..", "..", "software", "wifi", "raw_u64", "main", "tls_engine.c")
 ENGINE_CONFIG = os.path.join(HERE, "engine_config.txt")
+ENGINE_FUNCTIONS = ("tls_setup", "tls_open")
+SURFACE = re.compile(
+    r"\b(mbedtls_ssl_conf_\w+|mbedtls_ssl_config_\w+|mbedtls_ssl_set_\w+|mbedtls_ssl_setup|esp_crt_\w+)\("
+)
 
 
 def engine_config(text):
-    lines = [re.sub(r"\s*//.*$", "", line).strip() for line in text.split("\n")]
-    lines = [line for line in lines if line]
-    start = next(i for i, line in enumerate(lines) if "mbedtls_ssl_config_defaults(" in line)
-    end = next(i for i, line in enumerate(lines) if "mbedtls_ssl_set_bio(" in line)
-    return lines[start : end + 1]
+    lines = [re.sub(r"\s*//.*$", "", line).rstrip() for line in text.split("\n")]
+    # Top-level functions: a line at column 0 naming one, to the "}" at column 0 that ends it
+    functions, i = {}, 0
+    while i < len(lines):
+        m = re.match(r"^[A-Za-z].*?\b(\w+)\(", lines[i])
+        if m and not lines[i].rstrip().endswith(";"):
+            end = next((j for j in range(i + 1, len(lines)) if lines[j] == "}"), None)
+            if end is not None and any("{" in line for line in lines[i : end + 1]):
+                functions.setdefault(m.group(1), []).extend(lines[i : end + 1])
+                i = end + 1
+                continue
+        i += 1
+    names = [f for f in ENGINE_FUNCTIONS if f in functions]
+    names += [
+        f
+        for f in functions
+        if f not in names and any(SURFACE.search(line) for line in functions[f])
+    ]
+    callbacks = set(
+        re.findall(
+            r"mbedtls_ssl_conf_verify\([^,]*,\s*(\w+)",
+            "\n".join(line for body in functions.values() for line in body),
+        )
+    )
+    names += sorted(c for c in callbacks if c in functions and c not in names)
+    out = [
+        line.strip()
+        for line in lines
+        if line.lstrip().startswith("#define") and re.search(r"mbedtls_|esp_crt_", line)
+    ]
+    for f in names:
+        out += ["== %s" % f] + [line.strip() for line in functions[f] if line.strip()]
+    missing = [f for f in ENGINE_FUNCTIONS if f not in functions]
+    return [*out, "== missing: %s" % " ".join(missing)] if missing else out
 
 
 # What a certificate chain may use under the default profile ("vectors profile"), and the
@@ -1147,7 +1201,7 @@ def coverage(vectors_exe, suites, exp):
                 d for d in difflib.unified_diff(recorded, now, lineterm="", n=0) if d[:1] in "+-"
             ][2:]
             suite.fail(
-                "tls_engine.c's session configuration changed: look at offer() in vectors.c and limbo.c, "
+                "tls_engine.c's verification surface changed: look at offer() in vectors.c and limbo.c, "
                 "then update engine_config.txt (%s)" % " | ".join(diff[:6])
             )
         else:
@@ -1269,7 +1323,9 @@ def main():
     stale = Suite("expectations", exp)
     for n, key in exp.unused():
         stale.fail("line %d (%s %s) matched no vector: remove it, or find out why" % (n, *key))
-    stale.passed = len(exp.rules) - stale.failed
+    # The lines behind insecure outcomes are counted with them, not as passed
+    insecure_lines = sum(1 for key in exp.used if key in exp.notes)
+    stale.passed = len(exp.rules) - stale.failed - insecure_lines
     suites.append(stale)
 
     with open(os.path.join(args.out, "sources.txt"), "w") as f:
@@ -1313,7 +1369,7 @@ def main():
     insecure = len(known) + len(deviations) + len(fail_open)
     print(
         "CRYPTO_CONFORMANCE %s %d passed %d failed %d suites; insecure outcomes %d (known-vulnerable %d, "
-        "security-deviation %d, fail-open %d), not in passed"
+        "security-deviation %d, fail-open %d) and their %d expectation lines, not in passed"
         % (
             "PASS" if ok else "FAIL",
             passed,
@@ -1323,6 +1379,7 @@ def main():
             len(known),
             len(deviations),
             len(fail_open),
+            insecure_lines,
         )
     )
     return 0 if ok else 1

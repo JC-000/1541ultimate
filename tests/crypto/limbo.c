@@ -188,17 +188,21 @@ static int server_orders(der_t leaf, der_t *inter, int n, const mbedtls_x509_crt
             }
         }
     }
-    // For each certificate on the first path: whether nothing else presented or trusted has its
-    // name (else a flipped signature on it could be routed around)
+    // For each certificate on the first path: whether no other presented or trusted certificate
+    // also verifies the certificate below it (one that does could stand in for it, and a flipped
+    // signature on this one would be routed around). Checked, not assumed from the names: a
+    // self-issued certificate shares its parent's name, but its parent does not verify its child.
     *path_len = s->count ? s->paths[0][0] : 0;
+    s->budget = 20000;
     for (int k = 0; k < *path_len; k++) {
         int cert = s->paths[0][1 + k];
+        const mbedtls_x509_crt *child = &s->c[k ? s->paths[0][k] : n];
         alone[k] = 1;
         for (int i = 0; alone[k] && (i < n); i++) {
-            alone[k] = (i == cert) || !same(&s->c[i].subject_raw, &s->c[cert].subject_raw);
+            alone[k] = (i == cert) || !issued(s, &s->c[i], child);
         }
         for (const mbedtls_x509_crt *t = trusted; alone[k] && t && t->raw.p; t = t->next) {
-            alone[k] = !same(&t->subject_raw, &s->c[cert].subject_raw);
+            alone[k] = !issued(s, t, child);
         }
     }
     for (int i = 0; i <= n; i++) {
@@ -318,7 +322,28 @@ static void run_line(char *line)
     // first path; "end" when there is none, "na" when another certificate could stand in for it
     const char *na = NULL;
     int k = !strncmp(flip, "path", 4) ? atoi(flip + 4) : 0;
-    if (!strcmp(flip, "leaf") && leaf.len) {
+    // "+spaced": the first path with a filler (a copy of the leaf, which issues nothing) in front
+    // of each certificate above the leaf, so that no parent is the next certificate presented and
+    // mbedTLS's parent search, not the order, has to find it
+    static int spaced_order[2 * MAX_CERTS];
+    int total = n, *order0 = orders[0];
+    if (strstr(flip, "+spaced") && (n < MAX_CERTS)) {
+        inter[n].len = leaf.len;
+        inter[n].p = malloc(leaf.len ? leaf.len : 1);
+        memcpy(inter[n].p, leaf.p, leaf.len);
+        total = 0;
+        for (int i = 0; i < n; i++) {
+            if (i < path_len) {
+                spaced_order[total++] = n;
+            }
+            spaced_order[total++] = orders[0][i];
+        }
+        if (path_len == 0) {
+            spaced_order[total++] = n; // no path: the filler ahead of the rest
+        }
+        order0 = spaced_order;
+    }
+    if (!strncmp(flip, "leaf", 4) && leaf.len) {
         leaf.p[leaf.len - 1] ^= 1;
     } else if (k && (k > path_len)) {
         na = "end";
@@ -344,7 +369,8 @@ static void run_line(char *line)
         int first = 0;
         for (int p = 0; p < count; p++) {
             uint32_t f;
-            int r = verify(leaf, inter, orders[p], n, &trusted, bundle, host, &f);
+            int r = p ? verify(leaf, inter, orders[p], n, &trusted, bundle, host, &f)
+                      : verify(leaf, inter, order0, total, &trusted, bundle, host, &f);
             if (r == 0) {
                 first = 0;
                 flags = 0;
@@ -367,6 +393,9 @@ static void run_line(char *line)
     free(leaf.p);
     for (int i = 0; i < n; i++) {
         free(inter[i].p);
+    }
+    if (order0 == spaced_order) {
+        free(inter[n].p); // the filler
     }
     mbedtls_x509_crt_free(&trusted);
 }

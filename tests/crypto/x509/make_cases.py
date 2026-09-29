@@ -351,6 +351,63 @@ def main():
             "FAILURE",
         ),
     ]
+    # A forged leaf (another key, the real intermediate's name as issuer) with an unrelated filler
+    # in front of the real intermediate: the parent is not the next certificate presented
+    filler_key = p256()
+    filler = cert("sig filler", filler_key, "sig filler", filler_key, CA)
+    forged = cert("victim.example", leaf_key, "sig ICA", other, server("victim.example"))
+    for order in ("path", "given"):
+        cases.append(
+            case(
+                "signatures::forged-leaf-filler-first::%s" % order,
+                "forged leaf, [filler, real ICA]",
+                root,
+                [filler, ica],
+                forged,
+                "victim.example",
+                "FAILURE",
+                order=order,
+            )
+        )
+    good = cert("victim.example", leaf_key, "sig ICA", ica_key, server("victim.example"))
+    cases.append(
+        case(
+            "signatures::good-leaf-filler-first",
+            "root -> ICA -> leaf, [filler, ICA]",
+            root,
+            [filler, ica],
+            good,
+            "victim.example",
+            "SUCCESS",
+            order="given",
+        )
+    )
+    # A self-issued intermediate (same name, next key) under the real one, and a forged one (same
+    # name, signed with another key) between the leaf and the real one
+    ica2_key = p256()
+    self_issued = cert("sig ICA", ica2_key, "sig ICA", ica_key, CA)
+    forged_self = cert("sig ICA", other, "sig ICA", other, CA)
+    cases += [
+        case(
+            "signatures::self-issued-intermediate",
+            "root -> ICA -> ICA (self-issued, next key) -> leaf",
+            root,
+            [self_issued, ica],
+            cert("victim.example", p256(), "sig ICA", ica2_key, server("victim.example")),
+            "victim.example",
+            "SUCCESS",
+        ),
+        case(
+            "signatures::forged-self-issued",
+            "root -> ICA -> forged self-issued ICA -> leaf",
+            root,
+            [forged_self, ica],
+            cert("victim.example", p256(), "sig ICA", other, server("victim.example")),
+            "victim.example",
+            "FAILURE",
+            order="given",
+        ),
+    ]
     write("signatures.json", cases)
 
     # What the certificate bundle does not check: each chain with the root as the CA chain and
@@ -385,6 +442,21 @@ def main():
         not_before=old,
         not_after=datetime.datetime(2021, 1, 1, tzinfo=datetime.UTC),
     )
+    new_ica_key = p256()
+    new_ica = cert(
+        "bundle ICA new",
+        new_ica_key,
+        "bundle root",
+        broot_key,
+        CA,
+        not_before=datetime.datetime(2030, 1, 1, tzinfo=datetime.UTC),
+        not_after=datetime.datetime(2040, 1, 1, tzinfo=datetime.UTC),
+    )
+    b_ica1_key, b_ica2_key = p256(), p256()
+    b_ica1 = cert("bundle ICA 1", b_ica1_key, "bundle root", broot_key, CA)
+    b_ica2 = cert("bundle ICA 2", b_ica2_key, "bundle ICA 1", b_ica1_key, CA)
+    b_leaf1 = cert("victim.example", p256(), "bundle ICA 1", b_ica1_key, server("victim.example"))
+    b_leaf2 = cert("victim.example", p256(), "bundle ICA 2", b_ica2_key, server("victim.example"))
     sha1_ica_key = p256()
     sha1_ica = cert("bundle ICA sha1", sha1_ica_key, "bundle root", broot_key, CA, sha1=True)
     chains = {
@@ -467,6 +539,47 @@ def main():
             broot,
             [old_ica],
             cert("victim.example", p256(), "bundle ICA old", old_ica_key, server("victim.example")),
+            "victim.example",
+            "FAILURE",
+        ),
+        "future-intermediate": (
+            "root -> ICA valid from 2030 -> leaf",
+            broot,
+            [new_ica],
+            cert("victim.example", p256(), "bundle ICA new", new_ica_key, server("victim.example")),
+            "victim.example",
+            "FAILURE",
+        ),
+        # With intermediates: the callback decides for the top one, not the leaf
+        "control-depth1": (
+            "root -> ICA -> leaf",
+            broot,
+            [b_ica1],
+            b_leaf1,
+            "victim.example",
+            "SUCCESS",
+        ),
+        "control-depth2": (
+            "root -> ICA -> ICA2 -> leaf",
+            broot,
+            [b_ica2, b_ica1],
+            b_leaf2,
+            "victim.example",
+            "SUCCESS",
+        ),
+        "root-not-in-bundle-depth1": (
+            "root -> ICA -> leaf, another root in the bundle",
+            other_root,
+            [b_ica1],
+            b_leaf1,
+            "victim.example",
+            "FAILURE",
+        ),
+        "root-not-in-bundle-depth2": (
+            "root -> ICA -> ICA2 -> leaf, another root in the bundle",
+            other_root,
+            [b_ica2, b_ica1],
+            b_leaf2,
             "victim.example",
             "FAILURE",
         ),

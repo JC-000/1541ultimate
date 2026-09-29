@@ -194,9 +194,10 @@ limbo.json tc=bettertls::pathbuilding::tc71 accept fail-open:intermediate-eku DE
 limbo.json tc=bettertls::pathbuilding::tc77 accept fail-open:intermediate-eku DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls13_generic.c:715-730); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
 
 # Security-relevant fail-open deviations are marked "fail-open:<tag>" at the head of their
-# reason: they print on the FAIL-OPEN DEVIATIONS line of every run, and are counted as insecure
-# outcomes, not as passed: intermediate-eku, noncritical-nameconstraints, cn-fallback, any-eku,
-# public-suffix-wildcard.
+# reason: they print on the FAIL-OPEN DEVIATIONS line of every run, and are counted, with their
+# lines, as insecure outcomes, not as passed: intermediate-eku, noncritical-nameconstraints,
+# cn-fallback, any-eku, public-suffix-wildcard. The same behaviour in listed order (the
+# x509-misordered section) is marked too and shows as <id>@given.
 
 # A cross-signed pair in the order listed, the ICA that does not verify first: mbedTLS takes the
 # first same-named untrusted issuer and does not try the other (it skips a candidate that does
@@ -211,16 +212,16 @@ x509 tc=signatures::cross-signed-one-good reject fail-closed, as listed: the fir
 # these cases get the outcome recorded there.
 limbo.json/given tc=pathlen::intermediate-pathlen-may-increase reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2400); in server order it is accepted
 limbo.json/given tc=pathlen::max-chain-depth-1-self-issued reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2400); in server order it is accepted
-limbo.json/given tc=bettertls::nameconstraints::tc736 accept DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2400); the outcome in server order is in the x509-limbo section
-limbo.json/given tc=bettertls::nameconstraints::tc7297 accept DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2400); the outcome in server order is in the x509-limbo section
+limbo.json/given tc=bettertls::nameconstraints::tc736 accept fail-open:cn-fallback DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2400); the outcome in server order is in the x509-limbo section
+limbo.json/given tc=bettertls::nameconstraints::tc7297 accept fail-open:cn-fallback DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2400); the outcome in server order is in the x509-limbo section
 limbo.json/given tc=bettertls::pathbuilding::tc2 reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2400); in server order it is accepted
 limbo.json/given tc=bettertls::pathbuilding::tc23 reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2400); in server order it is accepted
 limbo.json/given tc=bettertls::pathbuilding::tc30 reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2400); in server order it is accepted
 limbo.json/given tc=bettertls::pathbuilding::tc32 reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2400); in server order it is accepted
 limbo.json/given tc=bettertls::pathbuilding::tc35 reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2400); in server order it is accepted
-limbo.json/given tc=bettertls::pathbuilding::tc38 accept DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2400); the outcome in server order is in the x509-limbo section
-limbo.json/given tc=bettertls::pathbuilding::tc71 accept DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2400); the outcome in server order is in the x509-limbo section
-limbo.json/given tc=bettertls::pathbuilding::tc77 accept DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2400); the outcome in server order is in the x509-limbo section
+limbo.json/given tc=bettertls::pathbuilding::tc38 accept fail-open:intermediate-eku DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2400); the outcome in server order is in the x509-limbo section
+limbo.json/given tc=bettertls::pathbuilding::tc71 accept fail-open:intermediate-eku DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2400); the outcome in server order is in the x509-limbo section
+limbo.json/given tc=bettertls::pathbuilding::tc77 accept fail-open:intermediate-eku DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2400); the outcome in server order is in the x509-limbo section
 
 
 # ---- Security deviations: ESP-IDF's certificate bundle (x509-bundle) ------------------------
