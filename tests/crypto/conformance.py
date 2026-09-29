@@ -663,8 +663,7 @@ def main():
     ok = all(s.ok() for s in suites)
     known = [k for s in suites for k in s.known]
     cves = sorted(set(cve for cve, _ in known))
-    if cves:
-        print('KNOWN VULNERABILITIES %d: %s' % (len(cves), ', '.join(cves)))
+    print('KNOWN VULNERABILITIES %d%s' % (len(cves), (': ' + ', '.join(cves)) if cves else ''))
     print('CRYPTO_CONFORMANCE %s %d passed %d failed %d suites%s' % (
         'PASS' if ok else 'FAIL', passed, failed, len(suites), ' known-vulnerable %d' % len(known) if known else ''))
     return 0 if ok else 1
