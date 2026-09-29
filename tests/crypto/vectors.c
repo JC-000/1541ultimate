@@ -1,10 +1,15 @@
 /*
  * The crypto conformance suite's view of mbedTLS: each primitive is reached through the same
  * public call the TLS 1.3 client makes for it in this configuration (mbedTLS 3.6, without
- * MBEDTLS_USE_PSA_CRYPTO), so the vectors check what the handshake and the records use.
+ * MBEDTLS_USE_PSA_CRYPTO). So the vectors check the primitives the handshake and the records
+ * use; they do not check that the TLS layer calls them correctly (nonces, transcript, Finished,
+ * CertificateVerify content), which only a handshake can show.
  *
  *   vectors offer      prints what a client configured like tls_engine.c offers in its
  *                      ClientHello: "suite XXXX", "group XXXX", "sigalg XXXX", "keyshare XXXX"
+ *                      (the calls it copies are listed in conformance.py ENGINE_CALLS)
+ *   vectors profile    prints what the default certificate profile accepts in a chain:
+ *                      "md NAME", "curve NAME", "rsa-min BITS"
  *   vectors            reads one operation per line on stdin, writes one result per line:
  *                      "<rc> <output hex>", rc 0 on success, the mbedTLS or PSA error otherwise
  *
@@ -27,6 +32,8 @@
 #include "mbedtls/entropy.h"
 #include "mbedtls/cipher.h"
 #include "mbedtls/pk.h"
+#include "mbedtls/x509_crt.h"
+#include "mbedtls/ecp.h"
 #include "psa/crypto.h"
 
 #define MAX_FIELDS 8
@@ -356,6 +363,33 @@ static int offer(void)
     return 0;
 }
 
+// What a certificate chain may use: the profile ssl_config_defaults() sets (PRESET_DEFAULT)
+static int profile(void)
+{
+    static const struct {
+        const char *name;
+        mbedtls_md_type_t md;
+    } mds[] = { { "md5", MBEDTLS_MD_MD5 }, { "sha1", MBEDTLS_MD_SHA1 }, { "sha224", MBEDTLS_MD_SHA224 },
+                { "sha256", MBEDTLS_MD_SHA256 }, { "sha384", MBEDTLS_MD_SHA384 }, { "sha512", MBEDTLS_MD_SHA512 },
+                { "sha3_224", MBEDTLS_MD_SHA3_224 }, { "sha3_256", MBEDTLS_MD_SHA3_256 },
+                { "sha3_384", MBEDTLS_MD_SHA3_384 }, { "sha3_512", MBEDTLS_MD_SHA3_512 },
+                { "ripemd160", MBEDTLS_MD_RIPEMD160 } };
+    const mbedtls_x509_crt_profile *p = &mbedtls_x509_crt_profile_default;
+    for (size_t i = 0; i < sizeof(mds) / sizeof(mds[0]); i++) {
+        if (p->allowed_mds & MBEDTLS_X509_ID_FLAG(mds[i].md)) {
+            printf("md %s\n", mds[i].name);
+        }
+    }
+    // Curve names as Wycheproof spells them
+    for (const mbedtls_ecp_curve_info *c = mbedtls_ecp_curve_list(); c->grp_id != MBEDTLS_ECP_DP_NONE; c++) {
+        if (p->allowed_curves & MBEDTLS_X509_ID_FLAG(c->grp_id)) {
+            printf("curve %s\n", c->name);
+        }
+    }
+    printf("rsa-min %u\n", (unsigned)p->rsa_min_bitlen);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (psa_crypto_init() != PSA_SUCCESS) {
@@ -364,6 +398,9 @@ int main(int argc, char **argv)
     }
     if ((argc == 2) && !strcmp(argv[1], "offer")) {
         return offer();
+    }
+    if ((argc == 2) && !strcmp(argv[1], "profile")) {
+        return profile();
     }
     char *line = NULL;
     size_t cap = 0;

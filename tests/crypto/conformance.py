@@ -15,17 +15,22 @@ does an expectations line that no vector used.
 import argparse
 import base64
 import datetime
+import fnmatch
 import hashlib
 import io
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 import urllib.request
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# CRYPTO_OFFLINE=1: use what the cache holds, fetch nothing, and fail on anything missing
+OFFLINE = os.environ.get('CRYPTO_OFFLINE', '0') == '1'
 
 # Documents fetched by URL: they are immutable, so the sha256 pins them.
 DOCUMENTS = {
@@ -47,11 +52,11 @@ DOCUMENTS = {
 # coverage suite: a new mbedTLS that offers something new needs vectors for it first.
 AEAD_SHA256 = ['sha256', 'hmac/sha256', 'hkdf/sha256']
 OFFERS = {
-    'suite 1301': ['aes-gcm/k128/t128'] + AEAD_SHA256,      # TLS_AES_128_GCM_SHA256
+    'suite 1301': ['aes-gcm/k128/t128', *AEAD_SHA256],      # TLS_AES_128_GCM_SHA256
     'suite 1302': ['aes-gcm/k256/t128', 'sha384', 'hmac/sha384', 'hkdf/sha384'],  # TLS_AES_256_GCM_SHA384
-    'suite 1303': ['chacha20-poly1305/k256/t128'] + AEAD_SHA256,  # TLS_CHACHA20_POLY1305_SHA256
-    'suite 1304': ['aes-ccm/k128/t128'] + AEAD_SHA256,      # TLS_AES_128_CCM_SHA256
-    'suite 1305': ['aes-ccm/k128/t64'] + AEAD_SHA256,       # TLS_AES_128_CCM_8_SHA256
+    'suite 1303': ['chacha20-poly1305/k256/t128', *AEAD_SHA256],  # TLS_CHACHA20_POLY1305_SHA256
+    'suite 1304': ['aes-ccm/k128/t128', *AEAD_SHA256],      # TLS_AES_128_CCM_SHA256
+    'suite 1305': ['aes-ccm/k128/t64', *AEAD_SHA256],       # TLS_AES_128_CCM_8_SHA256
     'suite 00ff': [],                                       # renegotiation SCSV, no algorithm
     'group 001d': ['x25519'],
     'group 0017': ['ecdh/secp256r1'],
@@ -81,7 +86,10 @@ WYCHEPROOF = {
     # CertificateVerify binds curve and hash; a certificate's signature does not, hence the mixes
     'ecdsa': ['ecdsa_secp256r1_sha256_test.json', 'ecdsa_secp256r1_sha512_test.json',
               'ecdsa_secp384r1_sha256_test.json', 'ecdsa_secp384r1_sha384_test.json',
-              'ecdsa_secp384r1_sha512_test.json', 'ecdsa_secp521r1_sha512_test.json'],
+              'ecdsa_secp384r1_sha512_test.json', 'ecdsa_secp521r1_sha512_test.json',
+              # the certificate profile accepts brainpool curves in a chain (vectors profile)
+              'ecdsa_brainpoolP256r1_sha256_test.json', 'ecdsa_brainpoolP384r1_sha384_test.json',
+              'ecdsa_brainpoolP512r1_sha512_test.json'],
     'rsa-pkcs1': ['rsa_signature_%d_%s_test.json' % (b, h) for b in (2048, 3072, 4096)
                   for h in ('sha256', 'sha384', 'sha512')],
     # TLS 1.3 only uses rsa_pss_rsae with the salt as long as the hash (ssl_tls13_generic.c)
@@ -94,9 +102,14 @@ HASHES = {'SHA-1': 'sha1', 'SHA-224': 'sha224', 'SHA-256': 'sha256', 'SHA-384': 
 CURVE_BYTES = {'secp256r1': 32, 'secp384r1': 48, 'secp521r1': 66}
 
 
+def read(path, mode='r'):
+    with open(path, mode) as f:
+        return f.read()
+
+
 def read_pins(path):
     pins = {}
-    for line in open(path):
+    for line in read(path).split('\n'):
         line = line.split('#', 1)[0].strip()
         if line:
             key, value = line.split('=', 1)
@@ -113,7 +126,7 @@ class Sources:
         self.used = []
         os.makedirs(cache, exist_ok=True)
 
-    def _note(self, name, data):
+    def note(self, name, data):
         self.used.append((name, hashlib.sha256(data).hexdigest()))
         return data
 
@@ -124,29 +137,36 @@ class Sources:
         name = repo.rstrip('/').split('/')[-1]
         work = os.path.join(self.cache, '%s-%s' % (name, commit))
         if not os.path.isdir(os.path.join(work, '.git')):
+            if OFFLINE:
+                sys.exit('offline, and %s is not in the cache (%s): run once with the network' % (key, work))
             # A partial clone of the one commit: only the files read below are downloaded
-            subprocess.run(['git', 'init', '-q', work], check=True)
+            subprocess.run(['git', 'init', '-q', work], check=True, timeout=60)
             subprocess.run(['git', '-C', work, 'fetch', '-q', '--depth', '1', '--filter=blob:none',
-                            repo, commit], check=True)
-        # git checks every object against its hash, so the content is what the commit says
+                            repo, commit], check=True, timeout=600)
+        # git checks every object against its hash, so the content is what the commit says;
+        # offline, a file the cache does not hold yet is an error rather than a download
+        env = dict(os.environ, GIT_NO_LAZY_FETCH='1') if OFFLINE else None
         data = subprocess.run(['git', '-C', work, 'cat-file', '-p', '%s:%s' % (commit, path)],
-                              check=True, capture_output=True).stdout
-        return self._note('%s@%s:%s' % (name, commit, path), data)
+                              check=True, capture_output=True, env=env, timeout=600).stdout
+        return self.note('%s@%s:%s' % (name, commit, path), data)
 
     def document(self, key):
         url, sha = DOCUMENTS[key]
         path = os.path.join(self.cache, 'sha256-' + sha)
         if not os.path.exists(path):
+            if OFFLINE:
+                sys.exit('offline, and %s is not in the cache (%s): run once with the network' % (url, path))
             # csrc.nist.gov refuses Python's default User-Agent
             req = urllib.request.Request(url, headers={'User-Agent': 'curl/8 (1541u crypto conformance)'})
-            data = urllib.request.urlopen(req, timeout=60).read()
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = r.read()
             with open(path + '.tmp', 'wb') as f:
                 f.write(data)
             os.replace(path + '.tmp', path)
-        data = open(path, 'rb').read()
+        data = read(path, 'rb')
         if hashlib.sha256(data).hexdigest() != sha:
             sys.exit('%s: sha256 mismatch (%s)' % (url, path))
-        return self._note(url, data)
+        return self.note(url, data)
 
 
 class Harness:
@@ -166,17 +186,21 @@ class Harness:
 
 
 class Expectations:
-    """Lines of "<vector file> tc=<id>|flag=<name> accept|reject|skip <reason>", or
-    "<vector file> tc=<id>|flag=<name> known-vulnerable <CVE> <first fixed mbedTLS version> <reason>".
-    A tc= line wins over flag= lines; among flag= lines the first in the file that names one of
-    the vector's flags wins. With strict set a vector that shows a known vulnerability fails."""
+    """Lines of "<vector file> tc=<id>|flag=<name> <outcome> <reason>", where <outcome> is one of
+      accept | reject | skip       the outcome mbedTLS gives, where it is not the vector's own
+      known-vulnerable <CVE> <v>   a vulnerability of the pinned mbedTLS, fixed in version <v>
+      security-deviation <tag>     accepted where it should be refused, by design (bundle mode)
+    The last two must show the opposite of the vector's verdict: when they no longer do, the run
+    fails until the line is removed. A tc= line wins over flag= lines; among flag= lines the first
+    in the file that names one of the vector's flags wins. With strict set, a vector under either
+    of the last two fails."""
 
     def __init__(self, path, strict=False):
         self.strict = strict
         self.rules = {}
-        self.cves = {}
+        self.notes = {}
         self.used = set()
-        for n, line in enumerate(open(path), 1):
+        for n, line in enumerate(read(path).split('\n'), 1):
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
@@ -185,7 +209,9 @@ class Expectations:
                 cve = fields[3].split(None, 2)
                 if len(cve) < 3 or not re.fullmatch(r'CVE-\d{4}-\d+', cve[0]):
                     sys.exit('%s:%d: want "... known-vulnerable <CVE> <fixed in> <reason>"' % (path, n))
-                self.cves[(fields[0], fields[1])] = '%s (fixed in mbedTLS %s)' % (cve[0], cve[1])
+                self.notes[(fields[0], fields[1])] = '%s (fixed in mbedTLS %s)' % (cve[0], cve[1])
+            elif len(fields) == 4 and fields[2] == 'security-deviation':
+                self.notes[(fields[0], fields[1])] = fields[3].split(None, 1)[0]
             elif len(fields) < 4 or fields[2] not in ('accept', 'reject', 'skip') or '=' not in fields[1]:
                 sys.exit('%s:%d: want "<file> tc=N|flag=F accept|reject|skip <reason>"' % (path, n))
             if (fields[0], fields[1]) in self.rules:
@@ -193,13 +219,13 @@ class Expectations:
             self.rules[(fields[0], fields[1])] = (fields[2], n)
 
     def lookup(self, source, tc, flags):
-        keys = [(source, 'tc=%s' % tc)] + sorted(((source, 'flag=' + f) for f in flags),
-                                                 key=lambda k: self.rules.get(k, (0, 0))[1])
+        keys = [(source, 'tc=%s' % tc), *sorted(((source, 'flag=' + f) for f in flags),
+                                                key=lambda k: self.rules.get(k, (0, 0))[1])]
         for key in keys:
             if key in self.rules:
                 self.used.add(key)
-                return self.rules[key][0], self.cves.get(key)
-        return None, None
+                return self.rules[key][0], self.notes.get(key), key
+        return None, None, None
 
     def unused(self):
         return sorted((self.rules[k][1], k) for k in self.rules if k not in self.used)
@@ -210,9 +236,12 @@ class Suite:
         self.name = name
         self.expectations = expectations
         self.passed = self.failed = 0
-        # vectors an expectations line judged: its outcome against the vector's own verdict
-        self.decided = {'deviate': 0, 'acceptable': 0, 'agree': 0, 'known-vulnerable': 0}
-        self.known = []  # (CVE text, vector) for each vector that still shows a known vulnerability
+        # how each vector was judged: by its own verdict, or by which expectations line and how
+        self.own = self.na = 0
+        self.by_line = {}
+        self.kinds = {'fail-closed': 0, 'fail-open': 0, 'acceptable': 0, 'agree': 0}
+        self.known = []       # (CVE, vector) for each vector that still shows a known vulnerability
+        self.deviations = []  # (tag, vector) for each security deviation
         self.failures = []
         self.covered = set()
 
@@ -220,29 +249,34 @@ class Suite:
         self.failed += 1
         self.failures.append(what)
 
+    def not_applicable(self):
+        self.na += 1
+
     def judge(self, source, tc, result, flags, observed, cover=None):
-        """observed: 'accept', 'reject', or 'wrong' (reported success with the wrong output)."""
-        want, cve = self.expectations.lookup(source, tc, flags)
+        """observed: 'accept', 'reject', 'skip', or 'wrong' (reported success with the wrong output)."""
+        want, note, key = self.expectations.lookup(source, tc, flags)
         label = '%s tc=%s (%s, %s)' % (source, tc, result, ' '.join(flags) or '-')
         if observed == 'wrong':
             return self.fail('%s: WRONG OUTPUT' % label)
         own = {'valid': 'accept', 'invalid': 'reject'}.get(result)
-        if want == 'known-vulnerable':
-            # The vector must still show the vulnerability; once it does not, the line has to go
+        if key:
+            self.by_line[key] = self.by_line.get(key, 0) + 1
+        if want in ('known-vulnerable', 'security-deviation'):
             if observed == own:
-                return self.fail('%s: %s no longer shows: remove its known-vulnerable line' % (label, cve))
-            self.decided['known-vulnerable'] += 1
-            self.known.append((cve, tc))
+                return self.fail('%s: %s no longer shows: remove its %s line' % (label, note, want))
+            (self.known if want == 'known-vulnerable' else self.deviations).append((note, tc))
             if self.expectations.strict:
-                return self.fail('%s: %s, known vulnerability %s (CRYPTO_STRICT)' % (label, observed, cve))
+                return self.fail('%s: %s, %s %s (CRYPTO_STRICT)' % (label, observed, want, note))
             self.passed += 1
             return
         if want is None:
             if result == 'acceptable':
                 return self.fail('%s: %s, and no expectation says which outcome is right' % (label, observed))
             want = own
+            self.own += 1
         else:
-            self.decided['acceptable' if own is None else 'agree' if want == own else 'deviate'] += 1
+            self.kinds['acceptable' if own is None else 'agree' if want == own else
+                       'fail-closed' if own == 'accept' else 'fail-open'] += 1
         if observed != want:
             return self.fail('%s: %s, expected %s' % (label, observed, want))
         self.passed += 1
@@ -250,14 +284,23 @@ class Suite:
             self.covered.add(cover)
 
     def ok(self):
-        return self.failed == 0 and (self.passed > 0 or self.name == 'expectations')
+        return self.failed == 0 and (self.passed > 0 or self.na > 0 or self.name == 'expectations')
 
     def line(self, detail=''):
         text = 'SUITE %-18s %s %5d passed %3d failed' % (self.name, 'PASS' if self.ok() else 'FAIL', self.passed,
                                                           self.failed)
-        if any(self.decided.values()):
-            text += ' (expectations: %(deviate)d deviate, %(acceptable)d acceptable, %(agree)d agree' % self.decided
-            text += (', %(known-vulnerable)d known-vulnerable)' % self.decided) if self.known else ')'
+        by_lines = sum(self.by_line.values())
+        if by_lines:
+            parts = ['own verdict %d' % self.own, 'by expectations %d' % by_lines]
+            biggest = max(self.by_line.values())
+            if biggest > 1:
+                parts[-1] += ' (largest line %d)' % biggest
+            parts += ['%s %d' % (k, n) for k, n in self.kinds.items() if n]
+            parts += ['known-vulnerable %d' % len(self.known)] if self.known else []
+            parts += ['security-deviation %d' % len(self.deviations)] if self.deviations else []
+            text += ': ' + ', '.join(parts)
+        if self.na:
+            text += '; not applicable %d' % self.na
         return text + (' ' + detail if detail else '')
 
 
@@ -486,61 +529,140 @@ def cavp_sha(h, src, exp):
     return suite
 
 
-# ---- x509-limbo ----------------------------------------------------------------------------
+# ---- X.509 ---------------------------------------------------------------------------------
 
 def pem_to_hex(pem):
-    body = ''.join(l for l in pem.strip().split('\n') if not l.startswith('-----'))
+    body = ''.join(line for line in pem.strip().split('\n') if not line.startswith('-----'))
     return base64.b64decode(body).hex()
 
 
-def limbo(exe, name, source, cases, exp):
-    """SERVER cases in x509-limbo's format through limbo.c. Not applicable, and counted as such:
-    CLIENT cases (the engine only verifies servers), cases with CRLs (it configures none:
-    tls_engine.c passes no CRL to mbedtls_ssl_conf_ca_chain()), and cases without a peer name
-    (it refuses to verify without one)."""
-    suite = Suite(name, exp)
-    skipped = {'CLIENT': 0, 'has-crl': 0, 'no peer name': 0}
-    run = []
-    for t in cases:
-        if t['validation_kind'] != 'SERVER':
-            skipped['CLIENT'] += 1
-        elif 'has-crl' in (t.get('features') or []) or t.get('crls'):
-            skipped['has-crl'] += 1
-        elif not t.get('expected_peer_name'):
-            skipped['no peer name'] += 1
-        else:
-            run.append(t)
-    proc = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
-    for t in run:
+def pems_to_hex(text):
+    return [pem_to_hex(m) for m in re.findall(r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', text, re.S)]
+
+
+# The limbo cases whose outcome depends on the order the intermediates come in: mbedTLS only
+# looks for a parent after the child in the presented list (x509_crt.c:2400). x509-limbo runs
+# every case in path order, as a server sends it; x509-misordered runs these in limbo's own
+# order and records what mbedTLS does with a chain that is out of order.
+MISORDERED = [
+    'pathlen::intermediate-pathlen-may-increase', 'pathlen::max-chain-depth-1-self-issued',
+    'pathlen::intermediate-violates-pathlen-0',
+    'bettertls::pathbuilding::tc2', 'bettertls::pathbuilding::tc23', 'bettertls::pathbuilding::tc30',
+    'bettertls::pathbuilding::tc32', 'bettertls::pathbuilding::tc35', 'bettertls::pathbuilding::tc38',
+    'bettertls::pathbuilding::tc71', 'bettertls::pathbuilding::tc77',
+    'bettertls::nameconstraints::tc736', 'bettertls::nameconstraints::tc7297',
+]
+
+
+def not_applicable(t):
+    """Why the engine cannot meet a case, or None: it only verifies servers (tls_engine.c), with
+    no CRL (it passes NULL to mbedtls_ssl_conf_ca_chain()), and never without a peer name."""
+    if t['validation_kind'] != 'SERVER':
+        return 'CLIENT'
+    if 'has-crl' in (t.get('features') or []) or t.get('crls'):
+        return 'has-crl'
+    if not t.get('expected_peer_name'):
+        return 'no peer name'
+    return None
+
+
+class Limbo:
+    """The limbo program: one case per line, one "<ret> <flags>" per line."""
+
+    def __init__(self, exe):
+        self.exe = exe
+        self.proc = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
+
+    def __call__(self, t, order='path', mode='ca', flip='none', trusted=None):
         when = t['validation_time']
-        when = int(datetime.datetime.fromisoformat(when).timestamp()) if when else int(datetime.datetime.now().timestamp())
+        when = int(datetime.datetime.fromisoformat(when).timestamp() if when else time.time())
         chain = [pem_to_hex(c) for c in t['untrusted_intermediates']]
-        trusted = [pem_to_hex(c) for c in t['trusted_certs']]
+        trusted = trusted if trusted is not None else [pem_to_hex(c) for c in t['trusted_certs']]
         leaf = pem_to_hex(t['peer_certificate'])
-        proc.stdin.write(' '.join([str(when), t['expected_peer_name']['value'], leaf, str(len(chain))] + chain +
-                                  [str(len(trusted))] + trusted) + '\n')
-        answer = proc.stdout.readline()
+        self.proc.stdin.write(' '.join([str(when), t['expected_peer_name']['value'], order, mode, flip, leaf,
+                                        str(len(chain)), *chain, str(len(trusted)), *trusted]) + '\n')
+        answer = self.proc.stdout.readline()
         if not answer:
             raise RuntimeError('the limbo harness died on %s' % t['id'])
-        ret, flags = answer.split()
-        seen = 'accept' if int(ret) == 0 else 'reject'
-        result = 'valid' if t['expected_result'] == 'SUCCESS' else 'invalid'
+        ret, _ = answer.split()
+        if ret == 'na':
+            return 'n/a', []
         # Expectations can name a group of cases by an id prefix ("bettertls::nameconstraints"),
         # or by what is in the certificates: a critical nameConstraints extension (the DER of
         # its OID 2.5.29.30 followed by critical TRUE)
         parts = t['id'].split('::')
         flags = ['::'.join(parts[:n]) for n in range(1, len(parts))]
-        if any('0603551d1e0101ff' in c for c in [leaf] + chain + trusted):
+        if any('0603551d1e0101ff' in c for c in [leaf, *chain, *trusted]):
             flags.append('critical-nameConstraints')
+        return 'accept' if int(ret) == 0 else 'reject', flags
+
+    def bundle(self, certs):
+        return subprocess.run([self.exe, 'bundle', *certs], capture_output=True, text=True,
+                              check=True, timeout=60).stdout.strip()
+
+
+def limbo_suite(lim, name, source, cases, exp, order='path', missing=()):
+    """Cases in x509-limbo's format; returns the suite, a note, and the valid cases it accepted.
+    A case that needs code this build does not have (missing) is not applicable."""
+    suite = Suite(name, exp)
+    skipped = {}
+    accepted = []
+    for t in cases:
+        why = not_applicable(t) or next((n for n in t.get('needs', []) if n in missing), None)
+        if why:
+            skipped[why] = skipped.get(why, 0) + 1
+            suite.not_applicable()
+            continue
+        seen, flags = lim(t, order=order, mode=t.get('mode', 'ca'))
+        result = 'valid' if t['expected_result'] == 'SUCCESS' else 'invalid'
         suite.judge(source, t['id'], result, flags, seen)
-    proc.stdin.close()
-    proc.wait()
-    return suite, 'not applicable: %s' % ', '.join('%d %s' % (n, k) for k, n in skipped.items())
+        if result == 'valid' and seen == 'accept':
+            accepted.append(t)
+    note = ('(not applicable: %s)' % ', '.join('%d %s' % (n, k) for k, n in sorted(skipped.items()))) if skipped else ''
+    return suite, note, accepted
+
+
+def signatures(lim, accepted, exp):
+    """Every valid chain accepted above, with one byte of a signature flipped: the leaf's, and
+    the signature on the leaf's issuer where there is an intermediate. Each must be refused. An
+    issuer that another presented certificate could stand in for is not applicable."""
+    suite = Suite('x509-signatures', exp)
+    for t in accepted:
+        for flip in ('leaf', 'issuer') if t['untrusted_intermediates'] else ('leaf',):
+            seen, _ = lim(t, mode=t.get('mode', 'ca'), flip=flip)
+            if seen == 'n/a':
+                suite.not_applicable()
+            else:
+                suite.judge('signatures', '%s/%s' % (t['id'], flip), 'invalid', [], seen)
+    return suite
+
+
+def bundle_mode(lim, out, cases, local, exp):
+    """tls_engine.c's TLS_OPEN_CA_BUNDLE path: ESP-IDF's esp_crt_bundle.c at ESP_IDF_COMMIT, as
+    esp_crt_bundle_attach() sets it up (an empty CA chain and esp_crt_verify_callback()), on
+    chains made here (x509/, mode "bundle", each with a bundle of its trusted certificates) and on
+    real servers' chains from x509-limbo against the image's own bundle."""
+    suite = Suite('x509-bundle', exp)
+    b = os.path.join(out, 'esp_crt_bundle')
+    # The bundle limbo.c makes, against the one ESP-IDF's generator made for its own test
+    made = lim.bundle([read(os.path.join(b, 'baltimore.der'), 'rb').hex()])
+    fixture = read(os.path.join(b, 'baltimore_crt_bundle'), 'rb').hex()
+    suite.judge('x509-bundle', 'format', 'valid', [], 'accept' if made == fixture else 'reject')
+    # The image's bundle (CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL) and real servers' chains
+    real = pems_to_hex(read(os.path.join(b, 'cacrt_all.pem')) + read(os.path.join(b, 'cacrt_local.pem')))
+    for t in cases:
+        if t['id'].startswith('online::') and not not_applicable(t):
+            seen, _ = lim(t, mode='bundle', trusted=real)
+            suite.judge('x509-bundle', t['id'], 'valid' if t['expected_result'] == 'SUCCESS' else 'invalid', [], seen)
+    for t in local:
+        seen, flags = lim(t, mode='bundle')
+        suite.judge('x509', t['id'], 'valid' if t['expected_result'] == 'SUCCESS' else 'invalid', flags, seen)
+    return suite, '(image bundle: %d certificates)' % len(real)
 
 
 # ---- mbedTLS's own TLS 1.3 key schedule tests -----------------------------------------------
 
-def mbedtls_tls13(out, exp):
+def mbedtls_tls13(out, exp, conditions):
     """mbedTLS's test_suite_ssl cases for the TLS 1.3 key schedule, built with the configuration
     under test: they check HKDF-Expand-Label, Derive-Secret, the secret evolution, traffic keys
     and the PSK binder (mostly against RFC 8448) through the library's internal functions, which
@@ -550,28 +672,27 @@ def mbedtls_tls13(out, exp):
     The rest of test_suite_ssl drives both ends of a connection."""
     suite = Suite('mbedtls-tls13-ks', exp)
     tests = os.path.join(out, 'build', 'tests')
-    macros = subprocess.run(['cc', '-E', '-dM', '-I', os.path.join(out, 'config'), '-I', os.path.join(out, 'src', 'include'),
-                             '-DMBEDTLS_CONFIG_FILE="mbedtls_host.h"',
-                             os.path.join(out, 'src', 'include', 'mbedtls', 'build_info.h')],
-                            capture_output=True, text=True, check=True).stdout
     prefixes = ('SSL TLS 1.3 Key schedule',)
-    if re.search(r'^#define MBEDTLS_SSL_SRV_C\b', macros, re.M):
+    if 'ssl-srv' in conditions:
         prefixes += ('SSL TLS 1.3 Record Encryption',)
-    cases = open(os.path.join(tests, 'test_suite_ssl.datax')).read().split('\n\n')
+    cases = read(os.path.join(tests, 'test_suite_ssl.datax')).split('\n\n')
     selected = [e for e in cases if e.startswith(prefixes)]
     na = sum(1 for e in cases if e.startswith('SSL TLS 1.3 Record Encryption')) - \
         sum(1 for e in selected if e.startswith('SSL TLS 1.3 Record Encryption'))
     datax = os.path.join(out, 'tls13_key_schedule.datax')
     with open(datax, 'w') as f:
         f.write('\n\n'.join(selected) + '\n')
-    run = subprocess.run([os.path.join(tests, 'test_suite_ssl'), datax], cwd=tests, capture_output=True, text=True)
+    run = subprocess.run([os.path.join(tests, 'test_suite_ssl'), datax], cwd=tests, capture_output=True, text=True,
+                         check=False, timeout=300)
     results = re.findall(r'^(SSL TLS 1\.3 .*?) ?\.* (PASS|FAILED|----)$', run.stdout, re.M)
     if len(results) != len(selected):
         suite.fail('test_suite_ssl ran %d of the %d selected cases (exit %d)' % (len(results), len(selected), run.returncode))
     for name, result in results:
         seen = {'PASS': 'accept', 'FAILED': 'reject', '----': 'skip'}[result]
         suite.judge('test_suite_ssl', name.replace(' ', '_'), 'valid', [], seen)
-    return suite, ('not applicable: %d record protection (no server side)' % na) if na else ''
+    for _ in range(na):
+        suite.not_applicable()
+    return suite, '(not applicable: %d record protection, no server side)' % na if na else ''
 
 
 # ---- regressions ---------------------------------------------------------------------------
@@ -579,19 +700,46 @@ def mbedtls_tls13(out, exp):
 # Inputs made here for fixed mbedTLS bugs that no vector set above reaches. The verdict is the
 # same before and after the fix; the bug is a memory error, which a sanitizer build of the
 # older version turns into a crash (run.sh with CRYPTO_CFLAGS='-fsanitize=address,undefined').
+# Each names the build condition of the code it reaches, and is not applicable without it.
 REGRESSIONS = [
     # mbedTLS 3.6.7 ChangeLog: 1-byte overread parsing a malformed ECC public key
-    # (library/pk_ecc.c read the point format byte of an empty point). That code is only built
-    # with MBEDTLS_PK_USE_PSA_EC_DATA (USE_PSA_CRYPTO without ECP_C), which the ESP32's
-    # configuration does not have; a main-CPU configuration may.
-    ('CVE-2026-50583 P-256 key with an empty point',
+    # (library/pk_ecc.c read the point format byte of an empty point)
+    ('CVE-2026-50583 P-256 key with an empty point', 'pk-psa-ec-data',
      ('verify', 'ecdsa', '3018301306072a8648ce3d020106082a8648ce3d030107030100', 'sha256', '', '3006020101020101', 0)),
 ]
 
 
-def regressions(h, exp):
+def build_conditions(out):
+    """Which conditional code of mbedTLS this build has, for the checks that need it:
+    pk-psa-ec-data   MBEDTLS_PK_USE_PSA_EC_DATA (pk.h: USE_PSA_CRYPTO without ECP_C)
+    sw-inet-pton     mbedTLS's own inet_pton (x509_crt.c: no AF_INET6, or MBEDTLS_TEST_SW_INET_PTON)
+    ssl-srv          MBEDTLS_SSL_SRV_C"""
+    probe = os.path.join(out, 'conditions.c')
+    with open(probe, 'w') as f:
+        f.write('#include "mbedtls/build_info.h"\n#include "mbedtls/pk.h"\n'
+                '#if defined(__has_include)\n#if __has_include(<sys/socket.h>)\n#include <sys/socket.h>\n#endif\n'
+                '#if __has_include(<arpa/inet.h>)\n#include <arpa/inet.h>\n#endif\n#endif\n')
+    flags = [f for f in os.environ.get('CRYPTO_CFLAGS', '').split() if f.startswith(('-D', '-U', '-I'))]
+    macros = subprocess.run(['cc', '-E', '-dM', *flags, '-I', os.path.join(out, 'config'),
+                             '-I', os.path.join(out, 'src', 'include'), '-DMBEDTLS_CONFIG_FILE="mbedtls_host.h"', probe],
+                            capture_output=True, text=True, check=True, timeout=60).stdout
+    have = set(re.findall(r'^#define (\w+)', macros, re.M))
+    found = set()
+    if 'MBEDTLS_PK_USE_PSA_EC_DATA' in have:
+        found.add('pk-psa-ec-data')
+    if 'AF_INET6' not in have or 'MBEDTLS_TEST_SW_INET_PTON' in have:
+        found.add('sw-inet-pton')
+    if 'MBEDTLS_SSL_SRV_C' in have:
+        found.add('ssl-srv')
+    return found
+
+
+def regressions(h, exp, conditions):
     suite = Suite('regressions', exp)
-    for name, op in REGRESSIONS:
+    for name, needs, op in REGRESSIONS:
+        if needs not in conditions:
+            suite.not_applicable()  # not compiled in this configuration: nothing to check
+            continue
         rc, _ = h(*op)
         suite.judge('regressions', name.split()[0], 'invalid', [], 'accept' if rc == 0 else 'reject')
     return suite
@@ -599,20 +747,60 @@ def regressions(h, exp):
 
 # ---- coverage ------------------------------------------------------------------------------
 
+# The mbedtls_ssl_* configuration calls tls_engine.c makes, which offer() in vectors.c copies.
+# When the engine's calls change, the copy has to be looked at: the coverage suite fails.
+ENGINE = os.path.join(HERE, '..', '..', 'software', 'wifi', 'raw_u64', 'main', 'tls_engine.c')
+ENGINE_CALLS = ['mbedtls_ssl_conf_authmode', 'mbedtls_ssl_conf_ca_chain', 'mbedtls_ssl_conf_max_tls_version',
+                'mbedtls_ssl_conf_min_tls_version', 'mbedtls_ssl_conf_rng', 'mbedtls_ssl_conf_verify',
+                'mbedtls_ssl_config_defaults', 'mbedtls_ssl_set_hostname', 'mbedtls_ssl_setup']
+
+# What a certificate chain may use under the default profile ("vectors profile"), and the
+# passing valid vectors each needs: a signature with every allowed hash, on every allowed curve
+PROFILE = {
+    'md': lambda v: ['pkcs1/' + v, 'ecdsa/*/' + v],
+    'curve': lambda v: ['ecdsa/%s/*' % v],
+    'rsa-min': lambda v: ['pkcs1/*', 'pss/*'],
+}
+
+
 def coverage(vectors_exe, suites, exp):
     suite = Suite('coverage', exp)
-    offer = subprocess.run([vectors_exe, 'offer'], capture_output=True, text=True, check=True).stdout.split('\n')
     covered = set().union(*(s.covered for s in suites if s.ok()))
-    for item in filter(None, offer):
-        if item not in OFFERS:
-            suite.fail('%s is offered, and no vectors are mapped to it' % item)
-            continue
-        missing = [a for a in OFFERS[item] if a not in covered]
+
+    def check(item, needs):
+        missing = [a for a in needs if not fnmatch.filter(covered, a)]
         if missing:
-            suite.fail('%s is offered, and has no passing valid vector for %s' % (item, ', '.join(missing)))
+            suite.fail('%s, and there is no passing valid vector for %s' % (item, ', '.join(missing)))
         else:
             suite.passed += 1
-    return suite, [i for i in offer if i]
+
+    offer = [i for i in subprocess.run([vectors_exe, 'offer'], capture_output=True, text=True, check=True,
+                                       timeout=60).stdout.split('\n') if i]
+    for item in offer:
+        if item not in OFFERS:
+            suite.fail('%s is offered, and no vectors are mapped to it' % item)
+        else:
+            check('%s is offered' % item, OFFERS[item])
+    profile = [i for i in subprocess.run([vectors_exe, 'profile'], capture_output=True, text=True, check=True,
+                                         timeout=60).stdout.split('\n') if i]
+    for item in profile:
+        kind, value = item.split()
+        check('the certificate profile accepts %s' % item, PROFILE[kind](value))
+    if os.environ.get('CRYPTO_CONFIG') or not os.path.exists(ENGINE):
+        suite.not_applicable()  # another client's configuration, or no engine source to compare
+    else:
+        calls = sorted(set(re.findall(r'\b(mbedtls_ssl_(?:conf_\w+|config_defaults|set_hostname|setup))\(',
+                                      read(ENGINE))))
+        if calls != ENGINE_CALLS:
+            suite.fail("tls_engine.c's configuration calls changed (%s): update offer() in vectors.c and ENGINE_CALLS"
+                       % ', '.join(sorted(set(calls) ^ set(ENGINE_CALLS))))
+        else:
+            suite.passed += 1
+    return suite, offer
+
+
+OVERRIDES = ('CRYPTO_PINS', 'CRYPTO_SDKCONFIG', 'CRYPTO_MACROS', 'CRYPTO_CACHE', 'CRYPTO_CONFIG', 'CRYPTO_CFLAGS',
+             'CRYPTO_EXPECTATIONS', 'CRYPTO_STRICT', 'CRYPTO_OFFLINE')
 
 
 def main():
@@ -624,24 +812,53 @@ def main():
     ap.add_argument('--verbose', action='store_true', help='list every failure, not the first ten')
     args = ap.parse_args()
     args.out = os.path.abspath(args.out)
+    unknown = sorted(k for k in os.environ if k.startswith('CRYPTO_') and k not in OVERRIDES)
+    if unknown:
+        sys.exit('unknown setting %s (known: %s)' % (', '.join(unknown), ', '.join(OVERRIDES)))
+    signal.signal(signal.SIGALRM, lambda *_: sys.exit('timed out after 30 minutes'))
+    signal.alarm(1800)
 
+    strict = os.environ.get('CRYPTO_STRICT', '0') == '1'
+    print('expectations %s sha256 %s' % (args.expectations, hashlib.sha256(read(args.expectations, 'rb')).hexdigest()))
+    print('strict %s, offline %s%s' % ('on' if strict else 'off', 'on' if OFFLINE else 'off',
+                                       ', cflags %s' % os.environ['CRYPTO_CFLAGS'] if os.environ.get('CRYPTO_CFLAGS') else ''))
     src = Sources(args.cache, read_pins(args.pins))
-    # CRYPTO_STRICT=1 counts the vectors that show a known vulnerability as failures
-    exp = Expectations(args.expectations, os.environ.get('CRYPTO_STRICT', '0') == '1')
+    # A build directory from other pins would test another mbedTLS than the summary names
+    if os.path.isdir(os.path.join(args.out, 'src', '.git')):
+        head = subprocess.run(['git', '-C', os.path.join(args.out, 'src'), 'rev-parse', 'HEAD'], capture_output=True,
+                              text=True, check=True, timeout=60).stdout.strip()
+        if head != src.pins['MBEDTLS_COMMIT']:
+            sys.exit('%s was built from mbedTLS %s, not MBEDTLS_COMMIT %s: run run.sh' % (args.out, head,
+                                                                                      src.pins['MBEDTLS_COMMIT']))
+    exp = Expectations(args.expectations, strict)
+    conditions = build_conditions(args.out)
     vectors = os.path.join(args.out, 'vectors')
     h = Harness(vectors)
     suites = [wycheproof(h, src, exp, name) for name in WYCHEPROOF]
-    suites += [rfc_vectors(h, src, exp), cavp_sha(h, src, exp), regressions(h, exp)]
-    lim, lim_note = limbo(os.path.join(args.out, 'limbo'), 'x509-limbo', 'limbo.json',
-                          json.loads(src.git('X509_LIMBO', 'limbo.json'))['testcases'], exp)
+    suites += [rfc_vectors(h, src, exp), cavp_sha(h, src, exp), regressions(h, exp, conditions)]
+
+    lim = Limbo(os.path.join(args.out, 'limbo'))
+    limbo_cases = json.loads(src.git('X509_LIMBO', 'limbo.json'))['testcases']
+    x_limbo, note_limbo, accepted = limbo_suite(lim, 'x509-limbo', 'limbo.json', limbo_cases, exp)
+    x_mis, note_mis, _ = limbo_suite(lim, 'x509-misordered', 'limbo.json/given',
+                                     [t for t in limbo_cases if t['id'] in MISORDERED], exp, order='given')
     # Chains made here for what limbo has no case for (x509/, each with the script that made it)
-    local = [(f, json.load(open(os.path.join(HERE, 'x509', f)))['testcases'])
-             for f in sorted(os.listdir(os.path.join(HERE, 'x509'))) if f.endswith('.json')]
-    cve, _ = limbo(os.path.join(args.out, 'limbo'), 'x509-local', 'x509', [t for _, ts in local for t in ts], exp)
-    ks, ks_note = mbedtls_tls13(args.out, exp)
-    suites += [lim, cve, ks]
+    local = []
+    for f in sorted(os.listdir(os.path.join(HERE, 'x509'))):
+        if f.endswith('.json'):
+            data = src.note('tests/crypto/x509/' + f, read(os.path.join(HERE, 'x509', f), 'rb'))
+            local += json.loads(data)['testcases']
+    x_local, note_local, accepted_local = limbo_suite(lim, 'x509-local', 'x509',
+                                                      [t for t in local if t.get('mode') != 'bundle'], exp,
+                                                      missing={'sw-inet-pton'} - conditions)
+    x_sig = signatures(lim, accepted + accepted_local, exp)
+    x_bundle, note_bundle = bundle_mode(lim, args.out, limbo_cases, [t for t in local if t.get('mode') == 'bundle'], exp)
+    ks, ks_note = mbedtls_tls13(args.out, exp, conditions)
+    suites += [x_limbo, x_mis, x_local, x_sig, x_bundle, ks]
+    notes = {x_limbo: note_limbo, x_mis: note_mis, x_local: note_local, x_bundle: note_bundle, ks: ks_note}
     cov, offer = coverage(vectors, suites, exp)
     suites.append(cov)
+    notes[cov] = 'offer: ' + ' '.join(offer)
 
     stale = Suite('expectations', exp)
     for n, key in exp.unused():
@@ -653,8 +870,7 @@ def main():
         for name, sha in src.used:
             f.write('%s %s\n' % (sha, name))
     for s in suites:
-        detail = ('offer: ' + ' '.join(offer)) if s is cov else lim_note if s is lim else ks_note if s is ks else ''
-        print(s.line(detail))
+        print(s.line(notes.get(s, '')))
         for what in s.failures[:None if args.verbose else 10]:
             print('    ' + what)
         if len(s.failures) > 10 and not args.verbose:
@@ -662,11 +878,20 @@ def main():
     passed = sum(s.passed for s in suites)
     failed = sum(s.failed for s in suites)
     ok = all(s.ok() for s in suites)
+    replaced = os.path.join(args.out, 'config', 'replaced.txt')
+    alts = read(replaced).split() if os.path.exists(replaced) else []
+    if alts:
+        print('NOT COVERED: the device uses ESP-IDF hardware code for %s; this host run tests mbedTLS software paths'
+              % ' '.join(alts))
+    deviations = [d for s in suites for d in s.deviations]
+    tags = sorted(set(tag for tag, _ in deviations))
+    print('SECURITY DEVIATIONS %d%s' % (len(tags), (': ' + ', '.join(tags)) if tags else ''))
     known = [k for s in suites for k in s.known]
     cves = sorted(set(cve for cve, _ in known))
     print('KNOWN VULNERABILITIES %d%s' % (len(cves), (': ' + ', '.join(cves)) if cves else ''))
-    print('CRYPTO_CONFORMANCE %s %d passed %d failed %d suites%s' % (
-        'PASS' if ok else 'FAIL', passed, failed, len(suites), ' known-vulnerable %d' % len(known) if known else ''))
+    print('CRYPTO_CONFORMANCE %s %d passed %d failed %d suites%s%s' % (
+        'PASS' if ok else 'FAIL', passed, failed, len(suites),
+        ' known-vulnerable %d' % len(known) if known else '', ' security-deviation %d' % len(deviations) if deviations else ''))
     return 0 if ok else 1
 
 

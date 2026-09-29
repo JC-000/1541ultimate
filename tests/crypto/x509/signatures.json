@@ -1,0 +1,84 @@
+{
+ "version": 1,
+ "testcases": [
+  {
+   "id": "signatures::leaf-signed-by-other-key",
+   "description": "root -> leaf, the leaf signed by a key not the root's",
+   "validation_kind": "SERVER",
+   "trusted_certs": [
+    "-----BEGIN CERTIFICATE-----\nMIIBYTCCAQegAwIBAgIUdbxqu6swcKozmfpXI5JdPKH9WBswCgYIKoZIzj0EAwIw\nHjEcMBoGA1UEAwwTY3ZlLTIwMjYtNDkzMDAgcm9vdDAeFw0yNjAxMDEwMDAwMDBa\nFw0zNjAxMDEwMDAwMDBaMB4xHDAaBgNVBAMME2N2ZS0yMDI2LTQ5MzAwIHJvb3Qw\nWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASb8qrDfLuwLmnRNhInxFTG940PZaRs\njRXvtomQw+SK5NQh1Z9KD8H6clEN4LiwwQQL/byz38nKKP15qGeHIaR+oyMwITAP\nBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBBjAKBggqhkjOPQQDAgNIADBF\nAiAQzCANbb5FHE1CCWo0uYpWnwlYFsTArEJps+TvRCBXtQIhAI59iTD8ccmJCa1e\nMg+wmUWTWPceB5q3tAk0/QCE6oNO\n-----END CERTIFICATE-----\n"
+   ],
+   "untrusted_intermediates": [],
+   "peer_certificate": "-----BEGIN CERTIFICATE-----\nMIIBiTCCAS+gAwIBAgIUdKKS726jwTLQsU8uRg2NPCqpxfUwCgYIKoZIzj0EAwIw\nHjEcMBoGA1UEAwwTY3ZlLTIwMjYtNDkzMDAgcm9vdDAeFw0yNjAxMDEwMDAwMDBa\nFw0zNjAxMDEwMDAwMDBaMBkxFzAVBgNVBAMMDnZpY3RpbS5leGFtcGxlMFkwEwYH\nKoZIzj0CAQYIKoZIzj0DAQcDQgAENrSm0wSILKOLNXcCwaQFoPOgOCaOW8JyfEJO\nsu3vx/ehdHxfF5qJhYnYCw5YLiDDSJgjIEWYsGVIc8fuUJeKcqNQME4wDAYDVR0T\nAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwGQYDVR0RBBIwEIIOdmljdGltLmV4YW1w\nbGUwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIgP/NoOE4N\n7NaSj3eac/AURg4LeC7YQoTFJz7eKk/8uW8CIQCCqJyTUgCE5B8t34b5zLuKU6AL\n+EdXpv5aR7a8nUIDsg==\n-----END CERTIFICATE-----\n",
+   "validation_time": "2027-01-01T00:00:00+00:00",
+   "expected_peer_name": {
+    "kind": "DNS",
+    "value": "victim.example"
+   },
+   "expected_result": "FAILURE",
+   "features": [],
+   "crls": []
+  },
+  {
+   "id": "signatures::intermediate-signed-by-other-key",
+   "description": "root -> ICA (signed by another key) -> leaf",
+   "validation_kind": "SERVER",
+   "trusted_certs": [
+    "-----BEGIN CERTIFICATE-----\nMIIBYTCCAQegAwIBAgIUdbxqu6swcKozmfpXI5JdPKH9WBswCgYIKoZIzj0EAwIw\nHjEcMBoGA1UEAwwTY3ZlLTIwMjYtNDkzMDAgcm9vdDAeFw0yNjAxMDEwMDAwMDBa\nFw0zNjAxMDEwMDAwMDBaMB4xHDAaBgNVBAMME2N2ZS0yMDI2LTQ5MzAwIHJvb3Qw\nWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASb8qrDfLuwLmnRNhInxFTG940PZaRs\njRXvtomQw+SK5NQh1Z9KD8H6clEN4LiwwQQL/byz38nKKP15qGeHIaR+oyMwITAP\nBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBBjAKBggqhkjOPQQDAgNIADBF\nAiAQzCANbb5FHE1CCWo0uYpWnwlYFsTArEJps+TvRCBXtQIhAI59iTD8ccmJCa1e\nMg+wmUWTWPceB5q3tAk0/QCE6oNO\n-----END CERTIFICATE-----\n"
+   ],
+   "untrusted_intermediates": [
+    "-----BEGIN CERTIFICATE-----\nMIIBVDCB+6ADAgECAhRXOo+CeOYKK3tUR6IEQfYxyPgxIzAKBggqhkjOPQQDAjAe\nMRwwGgYDVQQDDBNjdmUtMjAyNi00OTMwMCByb290MB4XDTI2MDEwMTAwMDAwMFoX\nDTM2MDEwMTAwMDAwMFowEjEQMA4GA1UEAwwHc2lnIElDQTBZMBMGByqGSM49AgEG\nCCqGSM49AwEHA0IABOAA1SprINZBXr6+4+FiT/xq9vMOdTXeRkb5ba4agOR/fOc9\nrZ+6cyetbp+0TzzMvkCUzH0wTN79xoq+bvfwjYqjIzAhMA8GA1UdEwEB/wQFMAMB\nAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49BAMCA0gAMEUCIERhfBHv5A1PGB/N\naqgucEADsTJqvUltTxGG2uRKsDOEAiEA2DbXaWShZTK25I67TXuf3zrUIJN490Eo\nK7GVUdCfmbQ=\n-----END CERTIFICATE-----\n"
+   ],
+   "peer_certificate": "-----BEGIN CERTIFICATE-----\nMIIBfjCCASOgAwIBAgIULKTWAzeuEOm+j32/1gapvxsH0sIwCgYIKoZIzj0EAwIw\nEjEQMA4GA1UEAwwHc2lnIElDQTAeFw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAw\nMDBaMBkxFzAVBgNVBAMMDnZpY3RpbS5leGFtcGxlMFkwEwYHKoZIzj0CAQYIKoZI\nzj0DAQcDQgAENrSm0wSILKOLNXcCwaQFoPOgOCaOW8JyfEJOsu3vx/ehdHxfF5qJ\nhYnYCw5YLiDDSJgjIEWYsGVIc8fuUJeKcqNQME4wDAYDVR0TAQH/BAIwADAOBgNV\nHQ8BAf8EBAMCB4AwGQYDVR0RBBIwEIIOdmljdGltLmV4YW1wbGUwEwYDVR0lBAww\nCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSQAwRgIhAJw6ir7jfgnjzqgq6/DPsIA8\nAfrAQc5dLoIAUwms2WB4AiEAvJxcOQWvzY/VQnsFFQl6ZX0hT5KYQzuvjg/HxJi7\naJw=\n-----END CERTIFICATE-----\n",
+   "validation_time": "2027-01-01T00:00:00+00:00",
+   "expected_peer_name": {
+    "kind": "DNS",
+    "value": "victim.example"
+   },
+   "expected_result": "FAILURE",
+   "features": [],
+   "crls": []
+  },
+  {
+   "id": "signatures::cross-signed-one-good",
+   "description": "two ICAs of one name and key, only one signed by the root",
+   "validation_kind": "SERVER",
+   "trusted_certs": [
+    "-----BEGIN CERTIFICATE-----\nMIIBYTCCAQegAwIBAgIUdbxqu6swcKozmfpXI5JdPKH9WBswCgYIKoZIzj0EAwIw\nHjEcMBoGA1UEAwwTY3ZlLTIwMjYtNDkzMDAgcm9vdDAeFw0yNjAxMDEwMDAwMDBa\nFw0zNjAxMDEwMDAwMDBaMB4xHDAaBgNVBAMME2N2ZS0yMDI2LTQ5MzAwIHJvb3Qw\nWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASb8qrDfLuwLmnRNhInxFTG940PZaRs\njRXvtomQw+SK5NQh1Z9KD8H6clEN4LiwwQQL/byz38nKKP15qGeHIaR+oyMwITAP\nBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBBjAKBggqhkjOPQQDAgNIADBF\nAiAQzCANbb5FHE1CCWo0uYpWnwlYFsTArEJps+TvRCBXtQIhAI59iTD8ccmJCa1e\nMg+wmUWTWPceB5q3tAk0/QCE6oNO\n-----END CERTIFICATE-----\n"
+   ],
+   "untrusted_intermediates": [
+    "-----BEGIN CERTIFICATE-----\nMIIBVDCB+6ADAgECAhRXOo+CeOYKK3tUR6IEQfYxyPgxIzAKBggqhkjOPQQDAjAe\nMRwwGgYDVQQDDBNjdmUtMjAyNi00OTMwMCByb290MB4XDTI2MDEwMTAwMDAwMFoX\nDTM2MDEwMTAwMDAwMFowEjEQMA4GA1UEAwwHc2lnIElDQTBZMBMGByqGSM49AgEG\nCCqGSM49AwEHA0IABOAA1SprINZBXr6+4+FiT/xq9vMOdTXeRkb5ba4agOR/fOc9\nrZ+6cyetbp+0TzzMvkCUzH0wTN79xoq+bvfwjYqjIzAhMA8GA1UdEwEB/wQFMAMB\nAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49BAMCA0gAMEUCIERhfBHv5A1PGB/N\naqgucEADsTJqvUltTxGG2uRKsDOEAiEA2DbXaWShZTK25I67TXuf3zrUIJN490Eo\nK7GVUdCfmbQ=\n-----END CERTIFICATE-----\n",
+    "-----BEGIN CERTIFICATE-----\nMIIBVDCB+6ADAgECAhQlOiajX66e7QenHRlNHNRZrU2eGDAKBggqhkjOPQQDAjAe\nMRwwGgYDVQQDDBNjdmUtMjAyNi00OTMwMCByb290MB4XDTI2MDEwMTAwMDAwMFoX\nDTM2MDEwMTAwMDAwMFowEjEQMA4GA1UEAwwHc2lnIElDQTBZMBMGByqGSM49AgEG\nCCqGSM49AwEHA0IABOAA1SprINZBXr6+4+FiT/xq9vMOdTXeRkb5ba4agOR/fOc9\nrZ+6cyetbp+0TzzMvkCUzH0wTN79xoq+bvfwjYqjIzAhMA8GA1UdEwEB/wQFMAMB\nAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49BAMCA0gAMEUCIQCDy+4SdF0vf0Xp\nqYbk9NoVJkHy+ujN83dqPK6VCuLwzgIgPxOBzVsJ8jm4l+brq5+Fy1r00TIs22bI\nke6Qw2Mxgow=\n-----END CERTIFICATE-----\n"
+   ],
+   "peer_certificate": "-----BEGIN CERTIFICATE-----\nMIIBfTCCASOgAwIBAgIUGn755s23SeKn6lJuCJYRM5m7tgEwCgYIKoZIzj0EAwIw\nEjEQMA4GA1UEAwwHc2lnIElDQTAeFw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAw\nMDBaMBkxFzAVBgNVBAMMDnZpY3RpbS5leGFtcGxlMFkwEwYHKoZIzj0CAQYIKoZI\nzj0DAQcDQgAENrSm0wSILKOLNXcCwaQFoPOgOCaOW8JyfEJOsu3vx/ehdHxfF5qJ\nhYnYCw5YLiDDSJgjIEWYsGVIc8fuUJeKcqNQME4wDAYDVR0TAQH/BAIwADAOBgNV\nHQ8BAf8EBAMCB4AwGQYDVR0RBBIwEIIOdmljdGltLmV4YW1wbGUwEwYDVR0lBAww\nCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIgSCssbSoHIySI4Jdom/pTL9tw\ncIxkF60eHlHCvOZ3WMECIQCct2fu3bjVqUefsxpI7JOr0uwBP4EahDplJnhXP/xA\nyQ==\n-----END CERTIFICATE-----\n",
+   "validation_time": "2027-01-01T00:00:00+00:00",
+   "expected_peer_name": {
+    "kind": "DNS",
+    "value": "victim.example"
+   },
+   "expected_result": "SUCCESS",
+   "features": [],
+   "crls": []
+  },
+  {
+   "id": "signatures::control",
+   "description": "root -> ICA -> leaf",
+   "validation_kind": "SERVER",
+   "trusted_certs": [
+    "-----BEGIN CERTIFICATE-----\nMIIBYTCCAQegAwIBAgIUdbxqu6swcKozmfpXI5JdPKH9WBswCgYIKoZIzj0EAwIw\nHjEcMBoGA1UEAwwTY3ZlLTIwMjYtNDkzMDAgcm9vdDAeFw0yNjAxMDEwMDAwMDBa\nFw0zNjAxMDEwMDAwMDBaMB4xHDAaBgNVBAMME2N2ZS0yMDI2LTQ5MzAwIHJvb3Qw\nWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASb8qrDfLuwLmnRNhInxFTG940PZaRs\njRXvtomQw+SK5NQh1Z9KD8H6clEN4LiwwQQL/byz38nKKP15qGeHIaR+oyMwITAP\nBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBBjAKBggqhkjOPQQDAgNIADBF\nAiAQzCANbb5FHE1CCWo0uYpWnwlYFsTArEJps+TvRCBXtQIhAI59iTD8ccmJCa1e\nMg+wmUWTWPceB5q3tAk0/QCE6oNO\n-----END CERTIFICATE-----\n"
+   ],
+   "untrusted_intermediates": [
+    "-----BEGIN CERTIFICATE-----\nMIIBVDCB+6ADAgECAhQlOiajX66e7QenHRlNHNRZrU2eGDAKBggqhkjOPQQDAjAe\nMRwwGgYDVQQDDBNjdmUtMjAyNi00OTMwMCByb290MB4XDTI2MDEwMTAwMDAwMFoX\nDTM2MDEwMTAwMDAwMFowEjEQMA4GA1UEAwwHc2lnIElDQTBZMBMGByqGSM49AgEG\nCCqGSM49AwEHA0IABOAA1SprINZBXr6+4+FiT/xq9vMOdTXeRkb5ba4agOR/fOc9\nrZ+6cyetbp+0TzzMvkCUzH0wTN79xoq+bvfwjYqjIzAhMA8GA1UdEwEB/wQFMAMB\nAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49BAMCA0gAMEUCIQCDy+4SdF0vf0Xp\nqYbk9NoVJkHy+ujN83dqPK6VCuLwzgIgPxOBzVsJ8jm4l+brq5+Fy1r00TIs22bI\nke6Qw2Mxgow=\n-----END CERTIFICATE-----\n"
+   ],
+   "peer_certificate": "-----BEGIN CERTIFICATE-----\nMIIBfTCCASOgAwIBAgIUfisUi/idqWi9C850ILjiPwe4O7owCgYIKoZIzj0EAwIw\nEjEQMA4GA1UEAwwHc2lnIElDQTAeFw0yNjAxMDEwMDAwMDBaFw0zNjAxMDEwMDAw\nMDBaMBkxFzAVBgNVBAMMDnZpY3RpbS5leGFtcGxlMFkwEwYHKoZIzj0CAQYIKoZI\nzj0DAQcDQgAENrSm0wSILKOLNXcCwaQFoPOgOCaOW8JyfEJOsu3vx/ehdHxfF5qJ\nhYnYCw5YLiDDSJgjIEWYsGVIc8fuUJeKcqNQME4wDAYDVR0TAQH/BAIwADAOBgNV\nHQ8BAf8EBAMCB4AwGQYDVR0RBBIwEIIOdmljdGltLmV4YW1wbGUwEwYDVR0lBAww\nCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIgLnloRNa+JcUxLT/3lliCY7Se\nxvIMuC1fBa+yWFtcZAYCIQC/brMxwRMnHR6q2v0XugYhlo+tn+VfSjc1ZmLs5TMU\nJQ==\n-----END CERTIFICATE-----\n",
+   "validation_time": "2027-01-01T00:00:00+00:00",
+   "expected_peer_name": {
+    "kind": "DNS",
+    "value": "victim.example"
+   },
+   "expected_result": "SUCCESS",
+   "features": [],
+   "crls": []
+  }
+ ]
+}

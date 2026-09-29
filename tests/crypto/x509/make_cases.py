@@ -17,6 +17,15 @@ subjectAltName and the name has a ':'. The verdict does not change with the fix:
 build shows the read. mbedTLS only compiles that parser where the platform has no inet_pton
 (no AF_INET6) or with MBEDTLS_TEST_SW_INET_PTON; a macOS or Linux host uses the libc one.
 
+signatures.json: chains where one signature does not verify, which must be refused, and a
+cross-signed pair where only one of two same-named issuers verifies, which must be accepted.
+
+bundle.json: the checks ESP-IDF's certificate bundle (esp_crt_verify_callback() in
+esp_crt_bundle.c) leaves out, each chain once with the root as the CA chain ("ca") and once with
+the root in a bundle ("bundle"): a SHA-1 signature under the root, an expired root, an RSA-1024
+root. The bundle keeps only a root's name and key, and its callback clears the flags once that
+key verifies the signature below it.
+
 The keys are made fresh and thrown away; only the certificates are written. Needs the
 "cryptography" package; conformance.py only reads the JSON.
 """
@@ -27,12 +36,12 @@ import os
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-NOT_BEFORE = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
-NOT_AFTER = datetime.datetime(2036, 1, 1, tzinfo=datetime.timezone.utc)
+NOT_BEFORE = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+NOT_AFTER = datetime.datetime(2036, 1, 1, tzinfo=datetime.UTC)
 VALIDATION_TIME = '2027-01-01T00:00:00+00:00'
 BASIC_CONSTRAINTS = x509.ObjectIdentifier('2.5.29.19')
 
@@ -54,25 +63,71 @@ def name(cn):
     return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
 
 
-def cert(subject, key, issuer, issuer_key, extensions):
+def der(tag, body):
+    n = len(body)
+    length = bytes([n]) if n < 0x80 else bytes([0x80 | ((n.bit_length() + 7) // 8)]) + n.to_bytes((n.bit_length() + 7) // 8, 'big')
+    return bytes([tag]) + length + body
+
+
+def children(data):
+    """The TLVs inside a DER constructed value, whole."""
+    out, i = [], 2 + (data[1] & 0x7f if data[1] & 0x80 else 0)
+    while i < len(data):
+        n, h = data[i + 1], 2
+        if n & 0x80:
+            n, h = int.from_bytes(data[i + 2:i + 2 + (n & 0x7f)], 'big'), 2 + (n & 0x7f)
+        out.append(data[i:i + h + n])
+        i += h + n
+    return out
+
+
+def resign_sha1(c, issuer_key):
+    """The certificate re-signed with ecdsa-with-SHA1 (cryptography refuses to make one): the
+    signature algorithm in the TBS and outside it replaced, and the TBS signed again."""
+    sha1 = der(0x30, der(0x06, bytes.fromhex('2a8648ce3d0401')))  # 1.2.840.10045.4.1
+    tbs = children(c.public_bytes(serialization.Encoding.DER))[0]
+    fields = children(tbs)
+    fields[2] = sha1
+    tbs = der(0x30, b''.join(fields))
+    sig = issuer_key.sign(tbs, ec.ECDSA(hashes.SHA1()))
+    return x509.load_der_x509_certificate(der(0x30, tbs + sha1 + der(0x03, b'\0' + sig)))
+
+
+def cert(subject, key, issuer, issuer_key, extensions, sha1=False, not_after=NOT_AFTER, not_before=NOT_BEFORE):
     builder = (x509.CertificateBuilder().subject_name(name(subject)).issuer_name(name(issuer))
                .public_key(key.public_key()).serial_number(x509.random_serial_number())
-               .not_valid_before(NOT_BEFORE).not_valid_after(NOT_AFTER))
+               .not_valid_before(not_before).not_valid_after(not_after))
     for ext, critical in extensions:
         builder = builder.add_extension(ext, critical)
-    return builder.sign(issuer_key, hashes.SHA256())
+    c = builder.sign(issuer_key, hashes.SHA256())
+    return resign_sha1(c, issuer_key) if sha1 else c
+
+
+CA = [(x509.BasicConstraints(ca=True, path_length=None), True),
+      (x509.KeyUsage(False, False, False, False, False, True, True, False, False), True)]
+
+
+def server(host):
+    return [(x509.BasicConstraints(ca=False, path_length=None), True),
+            (x509.KeyUsage(True, False, False, False, False, False, False, False, False), True),
+            (x509.SubjectAlternativeName([x509.DNSName(host)]), False),
+            (x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), False)]
+
+
+def p256():
+    return ec.generate_private_key(ec.SECP256R1())
 
 
 def pem(c):
     return c.public_bytes(serialization.Encoding.PEM).decode()
 
 
-def case(case_id, description, root, intermediates, leaf, peer_name, result):
+def case(case_id, description, root, intermediates, leaf, peer_name, result, **extra):
     return {'id': case_id, 'description': description, 'validation_kind': 'SERVER',
             'trusted_certs': [pem(root)], 'untrusted_intermediates': [pem(c) for c in intermediates],
             'peer_certificate': pem(leaf), 'validation_time': VALIDATION_TIME,
             'expected_peer_name': {'kind': 'IP' if peer_name[0].isdigit() else 'DNS', 'value': peer_name},
-            'expected_result': result, 'features': [], 'crls': []}
+            'expected_result': result, 'features': [], 'crls': [], **extra}
 
 
 def write(filename, cases):
@@ -121,9 +176,69 @@ def main():
     write('cve-2026-25833.json', [
         # IPv4 digits first and a ':' later: the old parser walked back past the name's start
         case('cve-2026-25833::ipv4-then-colons', 'IP SAN 192.0.2.1, peer name "1.2.3.4::"',
-             root, [], leaf, '1.2.3.4::', 'FAILURE'),
+             root, [], leaf, '1.2.3.4::', 'FAILURE', needs=['sw-inet-pton']),
         case('cve-2026-25833::control', 'IP SAN 192.0.2.1, peer name "192.0.2.1"',
              root, [], leaf, '192.0.2.1', 'SUCCESS')])
+
+    # One signature that does not verify: the names chain, the key is another one
+    ica_key, other = p256(), p256()
+    ica = cert('sig ICA', ica_key, 'cve-2026-49300 root', root_key, CA)
+    ica_wrong = cert('sig ICA', ica_key, 'cve-2026-49300 root', other, CA)
+    leaf_key = p256()
+    cases = [
+        case('signatures::leaf-signed-by-other-key', 'root -> leaf, the leaf signed by a key not the root\'s',
+             root, [], cert('victim.example', leaf_key, 'cve-2026-49300 root', other, server('victim.example')),
+             'victim.example', 'FAILURE'),
+        case('signatures::intermediate-signed-by-other-key', 'root -> ICA (signed by another key) -> leaf',
+             root, [ica_wrong], cert('victim.example', leaf_key, 'sig ICA', ica_key, server('victim.example')),
+             'victim.example', 'FAILURE'),
+        case('signatures::cross-signed-one-good', 'two ICAs of one name and key, only one signed by the root',
+             root, [ica_wrong, ica], cert('victim.example', leaf_key, 'sig ICA', ica_key, server('victim.example')),
+             'victim.example', 'SUCCESS'),
+        case('signatures::control', 'root -> ICA -> leaf', root, [ica],
+             cert('victim.example', leaf_key, 'sig ICA', ica_key, server('victim.example')), 'victim.example', 'SUCCESS'),
+    ]
+    write('signatures.json', cases)
+
+    # What the certificate bundle does not check: each chain with the root as the CA chain and
+    # with the root in a bundle. SHA-1 signatures come from the old crypto the ESP-IDF note on
+    # esp_crt_verify_callback() ("a weak signature hash alg" on "a trusted cert") has in mind.
+    cases = []
+    broot_key = p256()
+    broot = cert('bundle root', broot_key, 'bundle root', broot_key, CA)
+    old = datetime.datetime(2015, 1, 1, tzinfo=datetime.UTC)
+    expired_key = p256()
+    expired = cert('bundle root expired', expired_key, 'bundle root expired', expired_key, CA,
+                   not_before=old, not_after=datetime.datetime(2021, 1, 1, tzinfo=datetime.UTC))
+    rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    rsa_root = cert('bundle root rsa1024', rsa_key, 'bundle root rsa1024', rsa_key, CA)
+    sha1_ica_key = p256()
+    sha1_ica = cert('bundle ICA sha1', sha1_ica_key, 'bundle root', broot_key, CA, sha1=True)
+    chains = {
+        # tag: (description, root, intermediates, leaf, peer name, result)
+        'control': ('root -> leaf', broot, [], cert('victim.example', p256(), 'bundle root', broot_key,
+                                                     server('victim.example')), 'victim.example', 'SUCCESS'),
+        'wrong-name': ('root -> leaf, another host name', broot, [],
+                       cert('victim.example', p256(), 'bundle root', broot_key, server('victim.example')),
+                       'other.example', 'FAILURE'),
+        'sha1-leaf': ('root -> leaf signed with ecdsa-with-SHA1', broot, [],
+                      cert('victim.example', p256(), 'bundle root', broot_key, server('victim.example'),
+                           sha1=True), 'victim.example', 'FAILURE'),
+        'sha1-intermediate': ('root -> ICA signed with ecdsa-with-SHA1 -> leaf', broot, [sha1_ica],
+                              cert('victim.example', p256(), 'bundle ICA sha1', sha1_ica_key, server('victim.example')),
+                              'victim.example', 'FAILURE'),
+        'expired-root': ('root expired 2021 -> leaf', expired, [],
+                         cert('victim.example', p256(), 'bundle root expired', expired_key, server('victim.example')),
+                         'victim.example', 'FAILURE'),
+        'rsa1024-root': ('RSA-1024 root -> leaf', rsa_root, [],
+                         cert('victim.example', p256(), 'bundle root rsa1024', rsa_key, server('victim.example')),
+                         'victim.example', 'FAILURE'),
+    }
+    for tag, (description, root_cert, inter, leaf_cert, host, result) in chains.items():
+        for mode in ('ca', 'bundle'):
+            cases.append(case('bundle::%s::%s' % (tag, mode), description, root_cert, inter, leaf_cert, host,
+                              result, mode=mode))
+    write('bundle.json', cases)
 
 
 if __name__ == '__main__':

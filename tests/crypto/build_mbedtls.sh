@@ -26,7 +26,8 @@
 #
 # CRYPTO_PINS names a different pin file, CRYPTO_SDKCONFIG a different sdkconfig (a candidate
 # release's, regenerated with its kconfgen), CRYPTO_MACROS a different macro list to match,
-# CRYPTO_CACHE a different cache directory, CRYPTO_CFLAGS extra compiler flags (a sanitizer).
+# CRYPTO_CACHE a different cache directory, CRYPTO_CFLAGS extra compiler flags (a sanitizer);
+# CRYPTO_OFFLINE=1 builds from the cache alone.
 #
 set -euo pipefail
 
@@ -52,11 +53,21 @@ mkdir -p "$1" "$CACHE"
 OUT=$(cd "$1" && pwd)
 echo "pins $PINS sha256 $(shasum -a 256 < "$PINS" | cut -d' ' -f1)"
 
+# CRYPTO_OFFLINE=1: build from the cache only; anything not cached yet is an error, not a download
+offline_check() {
+    if [ "${CRYPTO_OFFLINE:-0}" = 1 ]; then
+        echo "offline, and $1 is not in the cache: run once with the network" >&2
+        exit 1
+    fi
+}
+[ "${CRYPTO_OFFLINE:-0}" = 1 ] && export GIT_NO_LAZY_FETCH=1
+
 # fetch <repo> <commit> <dir>: a clean checkout of exactly <commit> and its submodules, fetched
 # once and cached. A checkout that is not at <commit> or has local changes is refused, never used.
 fetch() {
     local repo=$1 commit=$2 dir=$3
     if [ ! -d "$dir/.git" ]; then
+        offline_check "$dir"
         rm -rf "$dir.tmp"
         git init -q "$dir.tmp"
         git -C "$dir.tmp" fetch -q --depth 1 "$repo" "$commit"
@@ -77,6 +88,7 @@ idf_tree() {
     local dir=$1
     shift
     if [ ! -d "$dir/.git" ]; then
+        offline_check "$dir"
         rm -rf "$dir.tmp"
         git init -q "$dir.tmp"
         git -C "$dir.tmp" fetch -q --depth 1 --filter=blob:none https://github.com/espressif/esp-idf "$@"
@@ -174,10 +186,13 @@ derive_esp32_config() {
     echo "target $TARGET, esp_config.h sha256 $(shasum -a 256 < "$CFG/mbedtls/esp_config.h" | cut -d' ' -f1)"
     kept=0
     replaced=0
+    : > "$CFG/replaced.txt"
     while read -r _ name value; do
         if why=$(replace "$name" "$value"); then
             echo "REPLACED $name${value:+ $value}: $why"
             replaced=$((replaced + 1))
+            # the device's own implementations, which no host run tests
+            case $name in *_ALT|*_ALT_FALLBACK|*_ALT_SOFT_FALLBACK) echo "${name#MBEDTLS_}" >> "$CFG/replaced.txt";; esac
         else
             echo "#define $name${value:+ $value}" >> "$HDR"
             kept=$((kept + 1))
@@ -203,6 +218,17 @@ else
     derive_esp32_config
 fi
 echo "#include \"$HDR\"" > "$CFG/mbedtls_host.h"
+
+# The engine's other way to verify: ESP-IDF's certificate bundle, with the certificates the
+# image's bundle is made from (CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL) and the bundle
+# generator's own test fixture
+B=$OUT/esp_crt_bundle
+rm -rf "$B"
+mkdir -p "$B/include"
+for f in esp_crt_bundle.c include/esp_crt_bundle.h cacrt_all.pem cacrt_local.pem \
+         test_gen_crt_bundle/baltimore.der test_gen_crt_bundle/baltimore_crt_bundle; do
+    idf_file "components/mbedtls/esp_crt_bundle/$f" > "$B/$(echo "$f" | sed 's|^test_gen_crt_bundle/||')"
+done
 
 BUILD=$OUT/build
 # Later 3.6.x releases link framework/data_files into the build tree without creating its parent

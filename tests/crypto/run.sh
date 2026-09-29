@@ -6,7 +6,8 @@
 #
 # CRYPTO_PINS, CRYPTO_SDKCONFIG, CRYPTO_MACROS and CRYPTO_CACHE are passed on to build_mbedtls.sh;
 # CRYPTO_EXPECTATIONS names a different expectations file (a candidate's), and
-# CRYPTO_STRICT=1 counts known vulnerabilities as failures.
+# CRYPTO_STRICT=1 counts known vulnerabilities and security deviations as failures.
+# CRYPTO_OFFLINE=1 uses the cache alone (fill it with one run that has the network).
 # CRYPTO_CONFIG names an mbedTLS config header to use instead of the ESP32's; CRYPTO_CFLAGS
 # builds the library and the harnesses with extra flags, e.g. '-fsanitize=address,undefined'.
 #
@@ -19,6 +20,11 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
+# A misspelt setting would be silently ignored: refuse any CRYPTO_ variable not listed here
+KNOWN=" CRYPTO_PINS CRYPTO_SDKCONFIG CRYPTO_MACROS CRYPTO_CACHE CRYPTO_CONFIG CRYPTO_CFLAGS CRYPTO_EXPECTATIONS CRYPTO_STRICT CRYPTO_OFFLINE "
+for v in $(env | sed -n 's/^\(CRYPTO_[A-Za-z0-9_]*\)=.*/\1/p'); do
+    [[ $KNOWN == *" $v "* ]] || { echo "unknown setting $v (known:$KNOWN)"; echo "CRYPTO_CONFORMANCE FAIL setup"; exit 1; }
+done
 OUT=${1:-$HERE/output}
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
@@ -35,7 +41,10 @@ LIB=$OUT/build/library
 CFLAGS=(${CRYPTO_CFLAGS:-} -std=c11 -O1 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -I"$OUT/config" -I"$OUT/src/include"
         -DMBEDTLS_CONFIG_FILE='"mbedtls_host.h"')
 cc "${CFLAGS[@]}" "$HERE/vectors.c" "$LIB/libmbedtls.a" "$LIB/libmbedx509.a" "$LIB/libmbedcrypto.a" -o "$OUT/vectors"
-cc "${CFLAGS[@]}" "$HERE/limbo.c" "$LIB/libmbedx509.a" "$LIB/libmbedcrypto.a" -o "$OUT/limbo"
+# esp_crt_bundle.c is ESP-IDF's, as it is: GNU C (asm labels), its warnings not ours to fix
+cc "${CFLAGS[@]}" -std=gnu11 -Wno-unused-parameter -I"$HERE/stub" -I"$OUT/esp_crt_bundle/include" \
+    "$HERE/limbo.c" "$OUT/esp_crt_bundle/esp_crt_bundle.c" \
+    "$LIB/libmbedtls.a" "$LIB/libmbedx509.a" "$LIB/libmbedcrypto.a" -o "$OUT/limbo"
 cmake --build "$OUT/build" --target test_suite_ssl -j "$(sysctl -n hw.ncpu 2>/dev/null || nproc)" \
     > "$OUT/test_suite_ssl_build.txt" 2>&1 ||
     { tail -20 "$OUT/test_suite_ssl_build.txt"; echo "CRYPTO_CONFORMANCE FAIL build"; exit 1; }
