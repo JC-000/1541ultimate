@@ -1,12 +1,15 @@
 # The Mozilla root store the ESP32 modules trust for TLS: cacert.pem beside this file, as curl
 # extracts it from Mozilla's certdata.txt. Each module's sdkconfig points
 # CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH at it, and ESP-IDF builds the device's bundle
-# from it at every build. `python3 tools/ca_store/ca_store.py refresh` rewrites the first three
-# values; the build checks them with `ca_store.py check`.
+# from it at every build. `python3 tools/ca_store/ca_store.py refresh` rewrites the date, sum and
+# certdata reference; the build checks them with `ca_store.py check`.
 CA_SOURCE_URL=https://curl.se/ca/cacert.pem
 # The "Certificate data from Mozilla as of:" line of cacert.pem, in UTC as ISO 8601.
 CA_MOZILLA_DATE=2026-09-25T03:12:01Z
 CA_SHA256=a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
+# The certdata.txt, on GitHub, that cacert.pem was regenerated from with curl's mk-ca-bundle.pl
+# to check it byte for byte: a second origin besides curl.se.
+CA_CERTDATA_REF=mozilla-firefox/firefox@f6dd0159931e536991eaaa02d839bdffb92c3f22
 # The ESP32 build warns when CA_MOZILLA_DATE is older than this, and `make RELEASE=1` fails.
 # Mozilla's data changed at most 107 days apart in the ten updates to 2026-09-25.
 CA_MAX_AGE_DAYS=180
