@@ -184,12 +184,13 @@ limbo.json tc=bettertls::pathbuilding::tc64 reject fail-closed: one presented ce
 limbo.json tc=bettertls::pathbuilding::tc71 accept DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls13_generic.c:715-730); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
 limbo.json tc=bettertls::pathbuilding::tc77 accept DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls13_generic.c:715-730); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
 
-# ---- mbedTLS's own TLS 1.3 key schedule tests (test_suite_ssl) -----------------------------
-# These four record-protection cases depend on MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
-# (tests/suites/test_suite_ssl.data:2891 and the like), a TLS 1.2 key exchange this TLS 1.3-only
-# configuration does not have, so the suite skips them. The RFC 8448 records they use are
-# opened with the trace's keys in the rfc suite instead (conformance.py rfc8448()).
-test_suite_ssl tc=SSL_TLS_1.3_Record_Encryption,_tls13.ulfheim.net_Example_#1 skip needs the TLS 1.2 ECDHE_ECDSA key exchange, not in this config
-test_suite_ssl tc=SSL_TLS_1.3_Record_Encryption,_tls13.ulfheim.net_Example_#2 skip needs the TLS 1.2 ECDHE_ECDSA key exchange, not in this config
-test_suite_ssl tc=SSL_TLS_1.3_Record_Encryption_RFC_8448_Example_#1 skip needs the TLS 1.2 ECDHE_ECDSA key exchange, not in this config; covered by rfc8448 in the rfc suite
-test_suite_ssl tc=SSL_TLS_1.3_Record_Encryption_RFC_8448_Example_#2 skip needs the TLS 1.2 ECDHE_ECDSA key exchange, not in this config; covered by rfc8448 in the rfc suite
+# ---- Known vulnerabilities of the pinned mbedTLS -------------------------------------------
+# known-vulnerable <CVE> <first fixed version>: the vector must still show the vulnerable outcome.
+# The run stays usable as a regression gate, prints the CVE on a line of its own before the
+# final one, and fails once mbedTLS behaves correctly, so the line is removed with the bump.
+# CRYPTO_KNOWN_VULNERABLE=0 ignores these lines (the run is then red on them).
+# CVE-2026-49300: a malformed basicConstraints read as cA=TRUE (x509_crt.c:492-554 at 72aa6873),
+# so a certificate with no keyUsage that other parsers take for an end entity can issue
+# certificates (tests/crypto/x509/make_cases.py).
+x509 tc=cve-2026-49300::integer-as-ca known-vulnerable CVE-2026-49300 3.6.7 SEQUENCE { INTEGER 1 } read as cA=TRUE; fixed by Mbed-TLS/mbedtls f67b8e5b
+x509 tc=cve-2026-49300::bool-after-empty-sequence known-vulnerable CVE-2026-49300 3.6.7 parsing runs past the empty SEQUENCE to a BOOLEAN TRUE; fixed by Mbed-TLS/mbedtls 07f45b87
