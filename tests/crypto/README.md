@@ -9,9 +9,15 @@ default gate (`run-tests`): run it when mbedTLS, ESP-IDF or `tls_engine.c` chang
 The last lines say what matters:
 
     NOT COVERED: the device uses ESP-IDF hardware code for AES_ALT ... ; this host run tests mbedTLS software paths
-    SECURITY DEVIATIONS 3: ...
+    SECURITY DEVIATIONS 3: ...            (accepted by design: ESP-IDF's certificate bundle)
+    FAIL-OPEN DEVIATIONS 5: ...           (accepted where x509-limbo refuses, security-relevant)
     KNOWN VULNERABILITIES 1: CVE-2026-49300 (fixed in mbedTLS 3.6.7)
-    CRYPTO_CONFORMANCE PASS <n> passed 0 failed <m> suites known-vulnerable 2 security-deviation 4
+    CRYPTO_CONFORMANCE PASS <n> passed 0 failed <m> suites; insecure outcomes 21 (...), not in passed
+
+"passed" counts three kinds of thing: vectors whose outcome is the one required (by their own
+verdict, or by an expectations line, as each suite line splits it), the coverage suite's checks,
+and the expectations lines that matched a vector. Vectors that show an insecure outcome as
+recorded (known-vulnerable, security-deviation, fail-open) are counted apart, not as passed.
 
 ## What it needs
 
@@ -21,7 +27,7 @@ The last lines say what matters:
   checked against the sha256 in `conformance.py`. All of it is cached in
   `~/.cache/1541u-build/crypto` (`CRYPTO_CACHE`). After one run, `CRYPTO_OFFLINE=1` uses the
   cache alone and fails on anything missing instead of downloading it.
-- About 15 s with a warm cache.
+- About 32 s with a warm cache (offline), mbedTLS build included.
 
 ## Files
 
@@ -40,8 +46,18 @@ The last lines say what matters:
 `CRYPTO_PINS`, `CRYPTO_SDKCONFIG`, `CRYPTO_MACROS` (a candidate release's files),
 `CRYPTO_EXPECTATIONS`, `CRYPTO_CONFIG` (an mbedTLS config header instead of the ESP32's),
 `CRYPTO_CFLAGS` (e.g. `-fsanitize=address,undefined`), `CRYPTO_CACHE`, `CRYPTO_OFFLINE=1`,
-`CRYPTO_STRICT=1` (known vulnerabilities and security deviations count as failures). Any other
-`CRYPTO_` variable is refused, so a misspelt one cannot be silently ignored.
+`CRYPTO_STRICT=1` (known vulnerabilities, security deviations and fail-open deviations count as
+failures). The two switches take 0 or 1 only. Any other `CRYPTO_` variable is refused, so a
+misspelt one cannot be silently ignored.
+
+## What the tls_engine.c check sees
+
+The coverage suite compares the code that configures a session in `tls_engine.c` (from
+`mbedtls_ssl_config_defaults()` to `mbedtls_ssl_set_bio()`: every call with its arguments and the
+conditions around it) with `engine_config.txt`, and fails when it differs or the file is gone.
+That is what keeps `vectors.c`'s ClientHello and `limbo.c`'s two ways to verify in step with the
+engine. It says nothing about what the engine does at run time; handshakes against the engine
+(the interop lane) do.
 
 ## Moving to a new mbedTLS / ESP-IDF
 
@@ -52,7 +68,8 @@ The last lines say what matters:
 3. Update `esp32_macros.txt` from the diff the build prints, and explain each line in the commit.
 4. Remove the `known-vulnerable` lines the run says no longer show.
 5. Run until green. The ESP-IDF the firmware builds with (`docker/Dockerfile`) must move with
-   `PINS`; that tie is checked by the vendor lane's `check_pins.sh`, not here.
+   `PINS`. Nothing on this branch checks that tie: `check_pins.sh` on esp-tls/m2-vendor
+   (tests/crypto/vendor/) does, once that branch is merged.
 
 ## What it does not test
 

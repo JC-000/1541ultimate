@@ -24,12 +24,13 @@
  * One test case per line on stdin, certificates as DER in hex:
  *   <time, unix> <host name> <path|given> <ca|bundle> <none|leaf|issuer> <leaf> <n> <intermediate>...
  *   <m> <trusted>...
- * The fifth field flips the last byte (inside the signature) of the leaf, or of the leaf's issuer
- * on the first path; "issuer" answers "na 0" unless there is a path and no other certificate has
- * that issuer's name (another could stand in for it).
+ * The fifth field flips the last byte (inside the signature) of the leaf ("leaf"), or of the K-th
+ * certificate above it on the first path ("pathK"); that answers "end 0" when the path is shorter,
+ * and "na 0" when another presented or trusted certificate has its name (it could stand in).
  * One result per line on stdout: "<ret> <verify flags in hex>", ret 0 when the chain is accepted.
  *
- *   limbo bundle <cert hex>...   prints the bundle those certificates make, in hex
+ *   limbo bundle <cert hex>...            prints the bundle those certificates make, in hex
+ *   limbo expired <unix time> <cert hex>... prints "<notAfter> <subject>" of each one expired then
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -108,14 +109,15 @@ typedef struct {
     int path[MAX_CERTS];
     int paths[MAX_PATHS][MAX_CERTS + 1]; // each: its length, then the intermediates in order
     int count;
-    int budget;                    // signature checks left: limbo has chains made to exhaust builders
+    int budget;                    // signature checks left: limbo has chains made to exhaust builders;
+                                   // an exhausted search, like one that stops at MAX_PATHS, uses what it found
 } search_t;
 
 // Whether parent issued child: the names chain and parent's key verifies child's signature.
 // Private fields: only to order the chain; the verdict is mbedtls_x509_crt_verify_with_profile()'s
 static int issued(search_t *s, const mbedtls_x509_crt *parent, const mbedtls_x509_crt *child)
 {
-    if ((--s->budget < 0) || !same(&parent->subject_raw, &child->issuer_raw)) {
+    if (!same(&parent->subject_raw, &child->issuer_raw) || (--s->budget < 0)) {
         return 0;
     }
     mbedtls_md_type_t md_type = child->MBEDTLS_PRIVATE(sig_md);
@@ -153,7 +155,7 @@ static void extend(search_t *s, int cur, int k)
 // The orders to try, each a full permutation of the intermediates: the paths found, each
 // followed by the rest as given; or the case's own order when no path is found
 static int server_orders(der_t leaf, der_t *inter, int n, const mbedtls_x509_crt *trusted,
-                         int orders[][MAX_CERTS], int *alone)
+                         int orders[][MAX_CERTS], int *path_len, int *alone)
 {
     search_t *s = calloc(1, sizeof(*s));
     s->c = calloc(n + 1, sizeof(*s->c));
@@ -186,14 +188,18 @@ static int server_orders(der_t leaf, der_t *inter, int n, const mbedtls_x509_crt
             }
         }
     }
-    // The leaf's issuer on the first path, if nothing else has its name
-    *alone = s->count && (s->paths[0][0] > 0);
-    int issuer = *alone ? s->paths[0][1] : 0;
-    for (int i = 0; *alone && (i < n); i++) {
-        *alone = (i == issuer) || !same(&s->c[i].subject_raw, &s->c[issuer].subject_raw);
-    }
-    for (const mbedtls_x509_crt *t = trusted; *alone && t && t->raw.p; t = t->next) {
-        *alone = !same(&t->subject_raw, &s->c[issuer].subject_raw);
+    // For each certificate on the first path: whether nothing else presented or trusted has its
+    // name (else a flipped signature on it could be routed around)
+    *path_len = s->count ? s->paths[0][0] : 0;
+    for (int k = 0; k < *path_len; k++) {
+        int cert = s->paths[0][1 + k];
+        alone[k] = 1;
+        for (int i = 0; alone[k] && (i < n); i++) {
+            alone[k] = (i == cert) || !same(&s->c[i].subject_raw, &s->c[cert].subject_raw);
+        }
+        for (const mbedtls_x509_crt *t = trusted; alone[k] && t && t->raw.p; t = t->next) {
+            alone[k] = !same(&t->subject_raw, &s->c[cert].subject_raw);
+        }
     }
     for (int i = 0; i <= n; i++) {
         mbedtls_x509_crt_free(&s->c[i]);
@@ -303,17 +309,27 @@ static void run_line(char *line)
         ret = ret ? ret : parse(&trusted, d, 0);
         free(d.p);
     }
-    int count = 1, alone = 0;
+    static int alone[MAX_CERTS];
+    int count = 1, path_len = 0;
     if (!given) {
-        count = server_orders(leaf, inter, n, &trusted, orders, &alone);
+        count = server_orders(leaf, inter, n, &trusted, orders, &path_len, alone);
     }
-    int na = 0;
+    // "leaf" flips the leaf's signature, "pathK" the one of the K-th certificate above it on the
+    // first path; "end" when there is none, "na" when another certificate could stand in for it
+    const char *na = NULL;
+    int k = !strncmp(flip, "path", 4) ? atoi(flip + 4) : 0;
     if (!strcmp(flip, "leaf") && leaf.len) {
         leaf.p[leaf.len - 1] ^= 1;
-    } else if (!strcmp(flip, "issuer") && alone) {
-        inter[orders[0][0]].p[inter[orders[0][0]].len - 1] ^= 1;
-    } else if (!strcmp(flip, "issuer")) {
-        na = 1;
+    } else if (k && (k > path_len)) {
+        na = "end";
+    } else if (k && !alone[k - 1]) {
+        na = "na";
+    } else if (k) {
+        der_t *d = &inter[orders[0][k - 1]];
+        d->p[d->len - 1] ^= 1;
+    }
+    if (strcmp(flip, "none")) {
+        count = 1; // the broken chain is the first path's: another path would route around it
     }
     uint32_t flags = 0;
     unsigned char *b = NULL;
@@ -342,7 +358,7 @@ static void run_line(char *line)
         ret = first;
     }
     if (na) {
-        printf("na 0\n");
+        printf("%s 0\n", na);
     } else {
         printf("%d %08x\n", ret, (unsigned)flags);
     }
@@ -357,6 +373,22 @@ static void run_line(char *line)
 
 int main(int argc, char **argv)
 {
+    if ((argc > 2) && !strcmp(argv[1], "expired")) {
+        validation_time = (time_t)strtoll(argv[2], NULL, 10);
+        for (int i = 3; i < argc; i++) {
+            mbedtls_x509_crt c;
+            mbedtls_x509_crt_init(&c);
+            der_t d = unhex(argv[i]);
+            if ((mbedtls_x509_crt_parse_der(&c, d.p, d.len) == 0) && mbedtls_x509_time_is_past(&c.valid_to)) {
+                char name[256];
+                mbedtls_x509_dn_gets(name, sizeof(name), &c.subject);
+                printf("%04d-%02d-%02d %s\n", c.valid_to.year, c.valid_to.mon, c.valid_to.day, name);
+            }
+            free(d.p);
+            mbedtls_x509_crt_free(&c);
+        }
+        return 0;
+    }
     if ((argc > 1) && !strcmp(argv[1], "bundle")) {
         mbedtls_x509_crt list;
         mbedtls_x509_crt_init(&list);

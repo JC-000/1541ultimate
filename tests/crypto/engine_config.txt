@@ -1,0 +1,41 @@
+ret = mbedtls_ssl_config_defaults(&s->conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
+MBEDTLS_SSL_PRESET_DEFAULT);
+}
+if (ret == 0) {
+mbedtls_ssl_conf_min_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
+mbedtls_ssl_conf_max_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
+mbedtls_ssl_conf_rng(&s->conf, mbedtls_ctr_drbg_random, &s->drbg);
+mbedtls_ssl_conf_authmode(&s->conf, verify ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
+#if CONFIG_TLS_SPIKE
+if (!verify) {
+mbedtls_ssl_conf_ca_chain(&s->conf, &s->ca, NULL);
+mbedtls_ssl_conf_verify(&s->conf, tls_accept_any, NULL);
+}
+#endif
+if (verify && (cas == TLS_OPEN_CA_TEST)) {
+ret = mbedtls_x509_crt_parse(&s->ca, tls_test_ca_pem_start, tls_test_ca_pem_end - tls_test_ca_pem_start);
+if (ret > 0) {
+ret = MBEDTLS_ERR_X509_INVALID_FORMAT;
+}
+if (ret == 0) {
+mbedtls_ssl_conf_ca_chain(&s->conf, &s->ca, NULL);
+}
+}
+#if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+if (verify && (cas == TLS_OPEN_CA_BUNDLE)) {
+ret = esp_crt_bundle_attach(&s->conf);
+}
+#endif
+}
+if (ret == 0) {
+ret = mbedtls_ssl_setup(&s->ssl, &s->conf);
+}
+if ((ret == 0) && sni_len) {
+ret = mbedtls_ssl_set_hostname(&s->ssl, hostname);
+}
+if (ret != 0) {
+ESP_LOGW(TAG, "Open failed: -0x%04x", (unsigned)-ret);
+tls_free(s);
+return ret;
+}
+mbedtls_ssl_set_bio(&s->ssl, s, tls_bio_send, tls_bio_recv, NULL);
