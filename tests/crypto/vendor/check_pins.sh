@@ -3,11 +3,12 @@
 # tests/crypto/PINS, and prints the PINS lines for a new ESP-IDF release.
 #
 #   check_pins.sh [--offline] [--image] [PINS]   check the tree against PINS (default tests/crypto/PINS)
-#   check_pins.sh --suggest <idf-tag>            print ESP_IDF_TAG / MBEDTLS_COMMIT for that tag
+#   check_pins.sh --suggest <idf-tag>            print the PINS lines for that tag
 #
 # Offline checks: PINS shape, docker/Dockerfile's esp-idf clone tag, the version header of every
-# ESP32 project's sdkconfig. Online (GitHub API, read-only): MBEDTLS_COMMIT is the mbedtls
-# submodule of ESP_IDF_TAG. --image also reads the published build image's history
+# ESP32 project's sdkconfig. Online (GitHub API, read-only): ESP_IDF_COMMIT (if set) is the
+# commit of ESP_IDF_TAG, and MBEDTLS_COMMIT is the mbedtls submodule of ESP_IDF_TAG.
+# --image also reads the published build image's history
 # (ghcr.io/gideonz/riscv:latest) and checks that it cloned ESP_IDF_TAG.
 # Last line: CHECK_PINS_OK or CHECK_PINS_FAIL <n>.
 set -u
@@ -29,6 +30,14 @@ json() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
 submodule_of() { # submodule_of <idf-tag> : SHA of components/mbedtls/mbedtls at that tag
     api "repos/$IDF_REPO/contents/components/mbedtls/mbedtls?ref=$1" | json 'd["sha"] if d.get("type")=="submodule" else ""'
 }
+tag_commit() { # tag_commit <idf-tag> : the commit an ESP-IDF tag points at (annotated or not)
+    local o
+    o=$(api "repos/$IDF_REPO/git/refs/tags/$1" | json 'd["object"]["type"]+" "+d["object"]["sha"]')
+    case $o in
+        tag\ *) api "repos/$IDF_REPO/git/tags/${o#tag }" | json 'd["object"]["sha"]' ;;
+        *) echo "${o#* }" ;;
+    esac
+}
 mbedtls_version() { # mbedtls_version <commit> : MBEDTLS_VERSION_STRING at that espressif/mbedtls commit
     api "repos/espressif/mbedtls/contents/include/mbedtls/build_info.h?ref=$1" | json 'd["content"]' |
         python3 -c 'import sys,base64,re; m=re.search(r"#define MBEDTLS_VERSION_STRING\s+\"([^\"]+)\"", base64.b64decode(sys.stdin.read()).decode()); print(m.group(1) if m else "?")'
@@ -40,6 +49,7 @@ if [ "${1:-}" = "--suggest" ]; then
     [ -n "$sha" ] || { echo "no mbedtls submodule at $IDF_REPO $tag"; exit 1; }
     echo "# mbedTLS $(mbedtls_version "$sha") (espressif/mbedtls), the submodule of ESP-IDF $tag"
     echo "ESP_IDF_TAG=$tag"
+    echo "ESP_IDF_COMMIT=$(tag_commit "$tag")"
     echo "MBEDTLS_COMMIT=$sha"
     echo "# Also change: docker/Dockerfile (--branch $tag), then regenerate the sdkconfig of: $PROJECTS"
     exit 0
@@ -66,7 +76,7 @@ fail() { echo "FAIL $*"; fails=$((fails + 1)); }
 for k in ESP_IDF_TAG MBEDTLS_REPO MBEDTLS_COMMIT; do
     [ -n "${!k:-}" ] || fail "PINS has no $k"
 done
-for k in MBEDTLS_COMMIT WYCHEPROOF_COMMIT X509_LIMBO_COMMIT; do
+for k in ESP_IDF_COMMIT MBEDTLS_COMMIT WYCHEPROOF_COMMIT X509_LIMBO_COMMIT; do
     v=${!k:-}
     if [ -n "$v" ] && ! [[ $v =~ ^[0-9a-f]{40}$ ]]; then
         fail "PINS $k is not a full commit SHA: $v"
@@ -85,6 +95,10 @@ for p in $PROJECTS; do
 done
 
 if [ $offline -eq 0 ]; then
+    if [ -n "${ESP_IDF_COMMIT:-}" ]; then
+        c=$(tag_commit "$tag")
+        if [ "$c" = "$ESP_IDF_COMMIT" ]; then ok "ESP_IDF_COMMIT is the commit of ESP-IDF $tag"; else fail "ESP-IDF $tag is commit ${c:-?}, PINS says $ESP_IDF_COMMIT"; fi
+    fi
     s=$(submodule_of "$tag")
     if [ "$s" = "${MBEDTLS_COMMIT:-}" ]; then
         ok "MBEDTLS_COMMIT is the mbedtls submodule of ESP-IDF $tag (mbedTLS $(mbedtls_version "$s"))"
