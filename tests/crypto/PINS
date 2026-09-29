@@ -1,0 +1,17 @@
+# The one place the crypto conformance suite (tests/crypto/run.sh) and its build helper
+# (build_mbedtls.sh) take their sources from. Moving to a new ESP-IDF / mbedTLS release is a
+# change to this file (and the ESP-IDF image the firmware builds with), and nothing else.
+# Fetched sources are pinned by full 40-character commit SHA, never by branch or tag.
+
+# ESP-IDF release the ESP32 image builds with; its components/mbedtls/port/include/mbedtls/esp_config.h
+# (at this tag) turns software/wifi/raw_u64/sdkconfig into the mbedTLS configuration.
+ESP_IDF_TAG=v5.3.1
+# The mbedtls submodule of ESP-IDF at ESP_IDF_TAG (mbedTLS 3.6.0 with Espressif's changes).
+MBEDTLS_REPO=https://github.com/espressif/mbedtls
+MBEDTLS_COMMIT=72aa687352a469044cbb946f3fdb261430e41ce1
+# Independent test vectors (Project Wycheproof, testvectors_v1/).
+WYCHEPROOF_REPO=https://github.com/C2SP/wycheproof
+WYCHEPROOF_COMMIT=3fa63dd0344abb611f1fb1d77e119938603ea230
+# X.509 path validation test cases (limbo.json).
+X509_LIMBO_REPO=https://github.com/C2SP/x509-limbo
+X509_LIMBO_COMMIT=554528a9b0c0d95e071f55de018326f0b65a8364
