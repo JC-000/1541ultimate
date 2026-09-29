@@ -552,7 +552,7 @@ def coverage(vectors_exe, suites, exp):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True, help='the build directory run.sh made')
-    ap.add_argument('--cache', default=os.path.expanduser('~/.cache/1541u-build/crypto'))
+    ap.add_argument('--cache', default=os.environ.get('CRYPTO_CACHE', os.path.expanduser('~/.cache/1541u-build/crypto')))
     ap.add_argument('--pins', default=os.environ.get('CRYPTO_PINS', os.path.join(HERE, 'PINS')))
     ap.add_argument('--expectations', default=os.path.join(HERE, 'expectations'))
     ap.add_argument('--verbose', action='store_true', help='list every failure, not the first ten')
@@ -595,4 +595,12 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (SystemExit, Exception) as e:
+        if isinstance(e, SystemExit) and not isinstance(e.code, str):
+            raise
+        # A source that cannot be fetched or does not match its pin is a failed run too
+        print('%s: %s' % (type(e).__name__, e))
+        print('CRYPTO_CONFORMANCE FAIL setup')
+        sys.exit(1)
