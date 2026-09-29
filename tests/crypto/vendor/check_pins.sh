@@ -7,15 +7,20 @@
 #   check_pins.sh --suggest <idf-tag>            print the PINS lines for that tag
 #
 # The pin file is the argument, else $CRYPTO_PINS, else tests/crypto/PINS; the one used is printed.
-# The file is parsed, never sourced: every line is blank, a comment, or KEY=VALUE with an optional
-# trailing "# comment"; anything else (export, quotes, $, spaces in a value, a repeated key) fails.
+# The file is parsed, never sourced by this parse: every line is blank, a comment (first non-blank
+# character #), or KEY=VALUE at column 1 with an optional trailing "# comment"; anything else
+# (indentation, export, quotes, $, spaces in a value, a repeated key) fails. Then the two consumers'
+# readings are replayed (build_mbedtls.sh sources it, conformance.py splits at #) and must match.
 # A C1 key already set in the environment also fails. ESP_IDF_TAG, ESP_IDF_COMMIT, MBEDTLS_REPO and
 # MBEDTLS_COMMIT are required (C1 + amendment 2), and a key C1 does not name is a failure.
 # Tree checks (skipped by --pins-only): the version header of every ESP32 project's sdkconfig, and
 # docker/Dockerfile, whose live (uncommented) lines must hold exactly one esp-idf clone, from
-# https://github.com/espressif/esp-idf at --branch ESP_IDF_TAG, and no command that could move or
-# patch a tree after a clone (git checkout/switch/reset/am/apply/fetch/pull/-C, patch). What a
-# script the Dockerfile runs does is not seen.
+# https://github.com/espressif/esp-idf at --branch ESP_IDF_TAG; no git command, with any options,
+# that moves or patches a checkout (checkout switch reset restore am apply fetch pull merge rebase
+# cherry-pick, -C, submodule ... --remote), no patch, no ADD/COPY into the ESP-IDF tree, and one
+# ENV IDF_PATH. A guard against accidents, not an adversary: a script the Dockerfile runs, a
+# download, or an unusual spelling is not seen. The image's own mbedTLS is checked by the bump
+# procedure (B8), not here.
 # Online (GitHub API, read-only; skipped by --offline): ESP_IDF_TAG resolves to ESP_IDF_COMMIT; at
 # ESP_IDF_COMMIT the mbedtls submodule is MBEDTLS_COMMIT and its URL is MBEDTLS_REPO.
 # --image also reads the published build image's history (ghcr.io/gideonz/riscv:latest) and
@@ -115,10 +120,14 @@ n=0
 seen=" "
 while IFS= read -r line || [ -n "$line" ]; do
     n=$((n + 1))
-    case $line in
-        ''|[[:space:]]*'#'*|'#'*) continue ;;
-    esac
+    # A comment is a line whose first non-blank character is #. Any other line with leading
+    # blanks is refused: the consumers would read an indented KEY=VALUE, this checker must not skip it
     [[ $line =~ ^[[:space:]]*$ ]] && continue
+    [[ $line =~ ^[[:space:]]*# ]] && continue
+    if [[ $line =~ ^[[:space:]] ]]; then
+        fail "PINS line $n is indented: $line"
+        continue
+    fi
     if [[ $line =~ $PINS_LINE ]]; then
         k=${BASH_REMATCH[1]}
         v=${BASH_REMATCH[2]}
@@ -138,6 +147,29 @@ done < "$pins"
 for k in $REQUIRED_KEYS; do
     [ -n "${!k:-}" ] || fail "PINS has no $k"
 done
+# The consumers must read what this checker read: build_mbedtls.sh sources the file, conformance.py
+# splits each line at '#' and takes KEY=VALUE, last one winning. Both are replayed here and compared
+# key by key. The file is sourced only once the parse above found nothing but plain KEY=VALUE lines.
+if [ $fails -eq 0 ]; then
+    sourced=$(env -i /bin/bash -c '. "$1" >/dev/null 2>&1; shift; for k in "$@"; do printf "%s=%s\n" "$k" "${!k-}"; done' _ "$pins" $C1_KEYS)
+    pythoned=$(python3 - "$pins" $C1_KEYS <<'PY' 2>/dev/null
+import sys
+pins = {}
+for line in open(sys.argv[1]):
+    line = line.split('#', 1)[0].strip()
+    if line:
+        key, value = line.split('=', 1)
+        pins[key] = value
+for k in sys.argv[2:]:
+    print("%s=%s" % (k, pins.get(k, "")))
+PY
+)
+    for k in $C1_KEYS; do
+        mine="$k=${!k:-}"
+        printf '%s\n' "$sourced" | grep -qxF -- "$mine" || fail "build_mbedtls.sh would read $(printf '%s\n' "$sourced" | grep "^$k=" || echo "$k unset"), this checker read $mine"
+        printf '%s\n' "$pythoned" | grep -qxF -- "$mine" || fail "conformance.py would read $(printf '%s\n' "$pythoned" | grep "^$k=" || echo "$k unset"), this checker read $mine"
+    done
+fi
 for k in ESP_IDF_COMMIT MBEDTLS_COMMIT WYCHEPROOF_COMMIT X509_LIMBO_COMMIT; do
     v=${!k:-}
     if [ -n "$v" ] && ! [[ $v =~ ^[0-9a-f]{40}$ ]]; then
@@ -169,7 +201,16 @@ if [ $pinsonly -eq 0 ]; then
             ok "docker/Dockerfile clones espressif/esp-idf $branch"
         fi
     fi
-    moves=$(printf '%s\n' "$live" | grep -o -E 'git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(checkout|switch|reset|am|apply|fetch|pull)\b|git[[:space:]]+-C\b|(^|[[:space:];&|])patch[[:space:]]' | sort -u | tr '\n' ' ' || true)
+    moves=$(printf '%s\n' "$live" | grep -o -E 'git([[:space:]][^;&|]*)?[[:space:]](checkout|switch|reset|restore|am|apply|fetch|pull|merge|rebase|cherry-pick)([[:space:]]|$)|git[[:space:]]+-C[[:space:]]|submodule[[:space:]][^;&|]*--remote|(^|[[:space:];&|])patch[[:space:]]' | sort -u | tr '\n' ' ' || true)
+    # ADD or COPY cannot place files inside the ESP-IDF tree, and IDF_PATH is set once
+    copies=$(printf '%s\n' "$live" | grep -i -E '^[[:space:]]*(ADD|COPY)[[:space:]]' | grep -E 'esp-idf|IDF_PATH|/opt/esp' | tr '\n' ' ' || true)
+    if [ -n "$copies" ]; then
+        fail "docker/Dockerfile adds files into the ESP-IDF tree: $copies"
+    fi
+    idfpaths=$(printf '%s\n' "$live" | grep -c -E '^[[:space:]]*ENV[[:space:]]+IDF_PATH' || true)
+    if [ "$idfpaths" -ne 1 ]; then
+        fail "docker/Dockerfile sets IDF_PATH $idfpaths times, expected once"
+    fi
     if [ -n "$moves" ]; then
         fail "docker/Dockerfile runs commands that can move or patch a checkout: $moves"
     fi
