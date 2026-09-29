@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
@@ -165,22 +166,22 @@ class CheckTest(unittest.TestCase):
         self.tree = Tree(self.tmp)  # as of 2026-07-14, limit 180 days
 
     def test_a_fresh_store_passes(self):
-        self.assertEqual(ca_store.check(self.tree.root, today=datetime.date(2027, 1, 10)), ([], []))
+        self.assertEqual(ca_store.check(self.tree.root, today=datetime.date(2027, 1, 10), now=NOW), ([], []))
 
     def test_a_stale_store_warns(self):
-        errors, warnings = ca_store.check(self.tree.root, today=datetime.date(2027, 1, 11))
+        errors, warnings = ca_store.check(self.tree.root, today=datetime.date(2027, 1, 11), now=NOW)
         self.assertEqual(errors, [])
         self.assertIn("181 days old", warnings[0])
 
     def test_a_stale_store_fails_a_release(self):
         errors, warnings = ca_store.check(self.tree.root, release=True,
-                                          today=datetime.date(2027, 1, 11))
+                                          today=datetime.date(2027, 1, 11), now=NOW)
         self.assertEqual(warnings, [])
         self.assertIn("181 days old", errors[0])
 
     def test_a_fresh_store_passes_a_release(self):
         self.assertEqual(ca_store.check(self.tree.root, release=True,
-                                        today=datetime.date(2026, 9, 29)), ([], []))
+                                        today=datetime.date(2026, 9, 29), now=NOW), ([], []))
 
     def test_the_release_flag_sets_the_exit_status(self):
         arguments = ["check", "--repo-root", str(self.tree.root), "--today", "2027-06-01"]
@@ -190,24 +191,24 @@ class CheckTest(unittest.TestCase):
 
     def test_a_pins_date_that_disagrees_with_the_store_fails(self):
         self.tree.pins.write_text(self.tree.pins.read_text().replace(OLD_ISO, NEW_ISO))
-        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29))
+        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29), now=NOW)
         self.assertIn("is from %s, CA_MOZILLA_DATE says %s" % (OLD_ISO, NEW_ISO), errors[0])
 
     def test_a_pins_date_that_is_not_iso_fails(self):
         self.tree.pins.write_text(self.tree.pins.read_text().replace(OLD_ISO, "2026-07-14"))
         with self.assertRaisesRegex(ca_store.StoreError, "not of the form"):
-            ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29))
+            ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29), now=NOW)
 
     def test_more_certificates_than_the_bundle_allows_fails(self):
         shutil.rmtree(self.tree.root)
         limit = 20 + ANCHOR_COUNT
         self.tree = Tree(self.tree.root, max_certs=limit - 1)
-        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29))
+        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29), now=NOW)
         self.assertEqual(len(errors), 2)
         self.assertIn("MAX_CERTS=%d, the store has %d" % (limit - 1, limit), errors[0])
         shutil.rmtree(self.tree.root)
         self.tree = Tree(self.tree.root, max_certs=limit)
-        self.assertEqual(ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29)),
+        self.assertEqual(ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29), now=NOW),
                          ([], []))
 
     def test_a_date_in_the_future_fails(self):
@@ -216,7 +217,7 @@ class CheckTest(unittest.TestCase):
 
     def test_a_certdata_ref_that_is_not_a_commit_fails(self):
         self.tree.pins.write_text(self.tree.pins.read_text().replace(OLD_REF, "firefox@release"))
-        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29))
+        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29), now=NOW)
         self.assertIn("CA_CERTDATA_REF=firefox@release", errors[0])
 
     def test_a_malformed_pins_file_is_an_error_not_a_crash(self):
@@ -237,7 +238,7 @@ class CheckTest(unittest.TestCase):
         (other / "sdkconfig").parent.mkdir(parents=True)
         (other / "sdkconfig").write_text("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y\n"
                                          "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y\n")
-        self.assertEqual(ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29)),
+        self.assertEqual(ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29), now=NOW),
                          ([], []))
         self.assertEqual(len(ca_store.projects(self.tree.root)), 2)
 
@@ -266,7 +267,7 @@ class CheckTest(unittest.TestCase):
 
     def test_a_store_edited_by_hand_fails(self):
         self.tree.pem.write_text(self.tree.pem.read_text() + "\n")
-        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29))
+        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29), now=NOW)
         self.assertIn("does not match CA_SHA256", errors[0])
 
     def test_a_project_back_on_the_default_bundle_fails(self):
@@ -274,7 +275,7 @@ class CheckTest(unittest.TestCase):
         sdkconfig.write_text("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y\n"
                              "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y\n"
                              "# CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE is not set\n")
-        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29))
+        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29), now=NOW)
         self.assertEqual(len(errors), 2)
         self.assertIn("software/u64ctrl/sdkconfig", errors[0])
 
@@ -283,7 +284,7 @@ class CheckTest(unittest.TestCase):
         sdkconfig.write_text(sdkconfig.read_text().replace(
             "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_NONE=y",
             "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y"))
-        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29))
+        errors, _ = ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29), now=NOW)
         self.assertIn("DEFAULT_NONE", errors[0])
 
 
@@ -298,7 +299,7 @@ class BundleSetTest(unittest.TestCase):
         self.u64ctrl = self.tree.root / "software/u64ctrl/main/rpc_dispatch.h"
 
     def errors(self):
-        return ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29))[0]
+        return ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29), now=NOW)[0]
 
     def edit_anchors(self, data):
         # A reviewed hand edit: anchors.pem and its own pin, but not the set pin.
@@ -385,7 +386,9 @@ class BuildStampTest(unittest.TestCase):
         return out.getvalue()
 
     def test_a_build_without_a_stamp_has_its_bundle_made_again(self):
-        self.assertIn("raw_a was built", self.run_check())
+        out = self.run_check()
+        self.assertIn("raw_a has no stamp yet; its bundle will be made again", out)
+        self.assertNotIn("changed", out)
         self.assertFalse(self.bundle.exists())
         self.assertEqual((self.build / ca_store.STAMP_NAME).read_text().strip(),
                          ca_store.store_stamp(self.tree.anchors.parent))
@@ -409,6 +412,21 @@ class BuildStampTest(unittest.TestCase):
             hashlib.sha256(self.tree.pem.read_bytes()).hexdigest()))
         self.assertIn("raw_a was built", self.run_check())
         self.assertFalse(self.bundle.exists())
+
+    def test_a_bundle_removed_by_another_check_meanwhile_is_no_error(self):
+        # Two makes checking at once: the other one removes the bundle between our exists()
+        # and our unlink().
+        real = pathlib.Path.exists
+
+        def gone_after(path):
+            here = real(path)
+            if path == self.bundle and here:
+                path.unlink()
+            return here
+        with mock.patch.object(pathlib.Path, "exists", gone_after):
+            dropped = ca_store.restamp_builds(self.tree.root)
+        self.assertEqual([p.name for p, _ in dropped], ["raw_a"])
+        self.assertTrue((self.build / ca_store.STAMP_NAME).exists())
 
     def test_a_project_never_built_is_left_alone(self):
         self.run_check()
@@ -461,6 +479,12 @@ class AnchorFileTest(unittest.TestCase):
         sdkconfig.write_text(sdkconfig.read_text().replace(
             '"../wifi/ca_store"', '"../wifi/ca_store/cacert.pem"'))
         self.assertIn("leaves out anchors.pem", self.errors()[0][0])
+
+    def test_an_anchor_about_to_expire_is_reported_ninety_days_ahead(self):
+        _, warnings = self.errors(now=datetime.datetime(2027, 10, 31))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("GlobalSign Root CA expires on 2028-01-28 12:00:00 UTC", warnings[0])
+        self.assertEqual(self.errors(now=datetime.datetime(2027, 10, 29, 11, 59))[1], [])
 
     def test_an_expired_anchor_is_reported(self):
         _, warnings = self.errors(now=datetime.datetime(2028, 2, 1))
@@ -631,12 +655,12 @@ class CrossSignAnchorTest(unittest.TestCase):
 
     def test_an_anchor_retires_when_no_recorded_chain_uses_it(self):
         without_archive = [e for e in self.entries if "archive.org" not in e[1]]
-        gone = unneeded(self.anchors, self.store, without_archive, ca_store.utc_now())
+        gone = unneeded(self.anchors, self.store, without_archive, NOW)
         self.assertEqual(gone, [self.anchor("Go Daddy Class 2 CA")])
 
     def test_an_anchor_the_store_already_covers_counts_as_unneeded(self):
-        self.assertEqual(unneeded(self.anchors, self.store + self.anchors, self.entries,
-                                  ca_store.utc_now()), self.anchors)
+        self.assertEqual(unneeded(self.anchors, self.store + self.anchors, self.entries, NOW),
+                         self.anchors)
 
     def test_the_signature_check_rejects_a_wrong_key(self):
         google = next(top for _, hosts, top in self.entries if "www.google.com" in hosts)

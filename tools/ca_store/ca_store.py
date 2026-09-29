@@ -51,6 +51,9 @@ MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 # How far ahead of this host's clock a Mozilla date may be. A later one would make every real
 # update look like a rollback, and the age gate would never fire again.
 CLOCK_SLACK = datetime.timedelta(days=1)
+# How long before an anchor expires `check` starts to say so. The anchor tests fail from the
+# moment it expires, and CI runs them on every push, so this is the notice to remove it.
+ANCHOR_NOTICE = datetime.timedelta(days=90)
 # What a module's sources call when they verify servers against the bundle. A module that never
 # calls it has no bundle in its image.
 ATTACH = "esp_crt_bundle_attach"
@@ -335,7 +338,7 @@ def max_certs(text):
 def bump_ident(project, date):
     """IDENT_MINOR and IDENT_STRING up by one, with a line saying why, as the header keeps them.
 
-    Returns (header, new text, new version) and writes nothing, so refresh can check every
+    Returns (header, new text, new version) and writes nothing, so a caller can check every
     project before it changes any file."""
     header = project / "main" / "rpc_dispatch.h"
     if not header.exists():
@@ -401,7 +404,9 @@ def restamp_builds(repo_root):
     """ESP-IDF's build regenerates the bundle only when the store directory's own time changes,
     which an edit in place does not do. So each project's build directory keeps the stamp of the
     store its bundle came from; on a mismatch the generated bundle is deleted, and the next build
-    makes it again. Returns the projects whose bundle was dropped."""
+    makes it again. A build directory without a stamp gets one, and its bundle is dropped too,
+    since nothing says which store it came from. Returns [(project, whether it had a stamp)]
+    for every project whose bundle was dropped."""
     stamp = store_stamp(pathlib.Path(repo_root) / STORE_DIR)
     dropped = []
     for project, _ in projects(repo_root):
@@ -409,12 +414,14 @@ def restamp_builds(repo_root):
         if not build.is_dir():
             continue                            # a first build generates the bundle anyway
         stamp_file = build / STAMP_NAME
-        if stamp_file.exists() and stamp_file.read_text().strip() == stamp:
+        had_stamp = stamp_file.exists()
+        if had_stamp and stamp_file.read_text().strip() == stamp:
             continue
         bundle = build / BUNDLE_OUTPUT
         if bundle.exists():
-            bundle.unlink()
-            dropped.append(project)
+            # Another make may be checking at the same moment and remove it first.
+            bundle.unlink(missing_ok=True)
+            dropped.append((project, had_stamp))
         stamp_file.write_text(stamp + "\n")
     return dropped
 
@@ -449,6 +456,10 @@ def check_anchors(store_dir, pins, store, now):
         if not_after(der) < now:
             warnings.append("%s: %s expired on %s; remove it"
                             % (ANCHORS_NAME, label, not_after(der).date()))
+        elif not_after(der) < now + ANCHOR_NOTICE:
+            warnings.append("%s: %s expires on %s UTC; remove it from %s and run `ca_store.py "
+                            "pin` before then, since the anchor tests fail from that moment"
+                            % (ANCHORS_NAME, label, not_after(der), ANCHORS_NAME))
     return anchors, errors, warnings
 
 
@@ -530,9 +541,13 @@ def main(argv=None):
                 print("ca_store: wrote %s" % os.path.relpath(path, repo_root))
             return 0
         errors, warnings = check(repo_root, arguments.release, arguments.today)
-        for project in ([] if errors else restamp_builds(repo_root)):
-            print("ca_store: the store changed since %s was built; its bundle will be made again"
-                  % os.path.relpath(project, repo_root))
+        for project, had_stamp in ([] if errors else restamp_builds(repo_root)):
+            if had_stamp:
+                print("ca_store: the store changed since %s was built; its bundle will be made "
+                      "again" % os.path.relpath(project, repo_root))
+            else:
+                print("ca_store: %s has no stamp yet; its bundle will be made again"
+                      % os.path.relpath(project, repo_root))
     except (StoreError, OSError) as error:
         print("ca_store: %s" % error, file=sys.stderr)
         return 1

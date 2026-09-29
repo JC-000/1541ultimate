@@ -11,12 +11,13 @@ CA_SHA256=a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
 # to check it byte for byte: a second origin besides curl.se.
 CA_CERTDATA_REF=mozilla-firefox/firefox@f6dd0159931e536991eaaa02d839bdffb92c3f22
 # The sha256 of anchors.pem, the roots kept by hand for cross-signed chains. Only a reviewed
-# commit changes it, followed by `ca_store.py pin`; the refresh never does.
-CA_ANCHORS_SHA256=cbf8c89ba5579a51609a510f1c5ef7806e23f86faf36d2a9941160a40d65a3ea
+# commit changes it, followed by `ca_store.py pin`.
+CA_ANCHORS_SHA256=608414f1483ca3e18751531055af6b3861330ac101ef8924273d19c18cbdbd31
 # The sha256 over the sorted DER encodings of every certificate in cacert.pem and anchors.pem:
 # the set the bundle is built from. `check` fails when that set changes and this does not, and
-# whatever moves it (`ca_store.py pin`, or the refresh) bumps IDENT_MINOR of every module that
-# attaches the bundle, since the updater reflashes a module only for a new version.
+# whatever moves it (`ca_store.py pin`, or a tool that updates the store) bumps IDENT_MINOR of
+# every module that attaches the bundle, since the updater reflashes a module only for a new
+# version.
 CA_BUNDLE_SET_SHA256=a2560fc4433a4301a12122890cdc6817029f9d495f821ed520d7db5dbfcfe974
 # The ESP32 build warns when CA_MOZILLA_DATE is older than this, and `make RELEASE=1` fails.
 # Mozilla's data changed at most 107 days apart in the ten updates to 2026-09-25.
