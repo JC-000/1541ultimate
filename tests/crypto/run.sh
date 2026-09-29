@@ -4,6 +4,9 @@
 #
 #   tests/crypto/run.sh [outdir]      (default tests/crypto/output)
 #
+# CRYPTO_PINS, CRYPTO_SDKCONFIG and CRYPTO_CACHE are passed on to build_mbedtls.sh;
+# CRYPTO_CONFIG names an mbedTLS config header to use instead of the ESP32's.
+#
 # Builds mbedTLS as PINS says with the ESP32's configuration (build_mbedtls.sh), builds the two
 # harnesses and mbedTLS's own TLS 1.3 key schedule tests against it, fetches the vectors and runs
 # every suite (conformance.py). Prints one line per suite and ends with
@@ -17,15 +20,17 @@ OUT=${1:-$HERE/output}
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 
+echo "tree $(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo unknown)$(
+    [ -z "$(git -C "$HERE" status --porcelain -- . 2>/dev/null)" ] || echo ' (tests/crypto modified)')"
 # The build's own output (with every hardware option it replaced) goes to the log; the summary
-# keeps the pins and the count
-"$HERE/build_mbedtls.sh" "$OUT" > "$OUT/build_mbedtls.txt" 2>&1 ||
+# keeps the pins, the sdkconfig and the configuration used
+"$HERE/build_mbedtls.sh" "$OUT" ${CRYPTO_CONFIG:+"$CRYPTO_CONFIG"} > "$OUT/build_mbedtls.txt" 2>&1 ||
     { tail -20 "$OUT/build_mbedtls.txt"; echo "CRYPTO_CONFORMANCE FAIL build"; exit 1; }
-grep -E '^(mbedTLS|config:)' "$OUT/build_mbedtls.txt"
+grep -E '^(pins|mbedTLS|sdkconfig|config:)' "$OUT/build_mbedtls.txt"
 
 LIB=$OUT/build/library
 CFLAGS=(-std=c11 -O1 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -I"$OUT/config" -I"$OUT/src/include"
-        -DMBEDTLS_CONFIG_FILE='"mbedtls_esp32_host.h"')
+        -DMBEDTLS_CONFIG_FILE='"mbedtls_host.h"')
 cc "${CFLAGS[@]}" "$HERE/vectors.c" "$LIB/libmbedtls.a" "$LIB/libmbedx509.a" "$LIB/libmbedcrypto.a" -o "$OUT/vectors"
 cc "${CFLAGS[@]}" "$HERE/limbo.c" "$LIB/libmbedx509.a" "$LIB/libmbedcrypto.a" -o "$OUT/limbo"
 cmake --build "$OUT/build" --target test_suite_ssl -j "$(sysctl -n hw.ncpu 2>/dev/null || nproc)" \
