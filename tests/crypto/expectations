@@ -1,0 +1,87 @@
+# Expected outcomes where Wycheproof's own verdict does not decide: every "acceptable" vector,
+# and every known deviation from a "valid" or "invalid" verdict. Reviewed by hand; the reason is
+# part of the line. Format (see conformance.py):
+#
+#   <vector file> tc=<id>|flag=<name> accept|reject <reason>
+#
+# A tc= line wins over flag= lines; among flag= lines the first one in this file that names one
+# of the vector's flags wins, so the stricter rule comes first. "accept" means the call succeeded
+# and gave the vector's output. A line that no vector uses fails the run, so this file cannot go
+# stale: when a bump changes a behaviour, the line has to be looked at again.
+# Paths are mbedTLS's, at MBEDTLS_COMMIT (72aa6873, mbedTLS 3.6.0).
+
+# ---- X25519 (RFC 7748) ---------------------------------------------------------------------
+# A low-order public key gives an all-zero shared secret. RFC 8446 7.4.2 says a TLS 1.3 client
+# MUST abort on it. mbedTLS refuses it in the key agreement itself: PSA's ECDH
+# (library/psa_crypto_ecp.c:571) ends in ecdh_compute_shared_restartable(), which turns a
+# result at infinity into MBEDTLS_ERR_ECP_BAD_INPUT_DATA (library/ecdh.c:108).
+x25519_test.json flag=ZeroSharedSecret reject all-zero shared secret refused (ecdh.c:108), as RFC 8446 7.4.2 requires of TLS 1.3
+# RFC 7748 section 5 defines X25519 for every 32-byte u: points on the twist, u >= p (taken
+# mod p) and the special values are all inputs the function must compute on. mbedTLS does,
+# with the right result (an "accept" is checked against Wycheproof's shared secret).
+x25519_test.json flag=Twist accept RFC 7748 5: X25519 is defined on twist points; computed correctly
+x25519_test.json flag=NonCanonicalPublic accept RFC 7748 5: u >= 2^255-19 is reduced mod p; computed correctly
+x25519_test.json flag=SpecialPublicKey accept RFC 7748 5: special u values are ordinary inputs; computed correctly
+
+# ---- ECDH on the NIST curves (key_share) ---------------------------------------------------
+# TLS 1.3 only allows the uncompressed point format (RFC 8446 4.2.8.2), and PSA's raw key
+# agreement only takes that format.
+ecdh_secp256r1_ecpoint_test.json flag=CompressedPublic reject compressed points are not allowed in a TLS 1.3 key_share (RFC 8446 4.2.8.2)
+ecdh_secp384r1_ecpoint_test.json flag=CompressedPublic reject compressed points are not allowed in a TLS 1.3 key_share (RFC 8446 4.2.8.2)
+ecdh_secp521r1_ecpoint_test.json flag=CompressedPublic reject compressed points are not allowed in a TLS 1.3 key_share (RFC 8446 4.2.8.2)
+
+# ---- RSA PKCS#1 v1.5 (certificate signatures) ----------------------------------------------
+# A DigestInfo without the NULL parameters: RFC 8017 9.2 note 2 lets a verifier accept it or
+# not. mbedTLS encodes the one form with NULL and compares (library/rsa.c:2700-2720,
+# mbedtls_rsa_rsassa_pkcs1_v15_verify()), so it refuses the other.
+rsa_signature_2048_sha256_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_2048_sha384_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_2048_sha512_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_3072_sha256_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_3072_sha384_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_3072_sha512_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_4096_sha256_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_4096_sha384_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_4096_sha512_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+
+# ---- ECDSA: a known deviation, BER instead of DER ------------------------------------------
+# Wycheproof calls these "invalid"; mbedTLS accepts them. Each is a correct signature (r and s
+# have the right values) in a non-DER encoding: long-form or zero-padded lengths
+# (library/asn1parse.c:36-52, mbedtls_asn1_get_len() takes any length of 1 to 4 bytes), or an
+# INTEGER that lacks its sign byte or has extra leading zeros (asn1parse.c:174,
+# mbedtls_asn1_get_mpi() reads the contents as an unsigned magnitude). The effect is signature
+# malleability: one signature has more than one byte string. It is not a forgery, and TLS 1.3
+# does not rely on signatures being unique. Every other encoding error Wycheproof tries
+# (garbage, wrong tags, truncation, ...) is refused, which the run checks.
+ecdsa_secp256r1_sha256_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_secp256r1_sha256_test.json flag=MissingZero accept deviation: INTEGER without its sign byte read as unsigned (asn1parse.c:174); malleability
+ecdsa_secp256r1_sha256_test.json tc=84 accept deviation: zeros prepended to r read as the same value (asn1parse.c:174); malleability
+ecdsa_secp256r1_sha256_test.json tc=128 accept deviation: zeros prepended to s read as the same value (asn1parse.c:174); malleability
+ecdsa_secp256r1_sha512_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_secp256r1_sha512_test.json flag=MissingZero accept deviation: INTEGER without its sign byte read as unsigned (asn1parse.c:174); malleability
+ecdsa_secp256r1_sha512_test.json tc=84 accept deviation: zeros prepended to r read as the same value (asn1parse.c:174); malleability
+ecdsa_secp256r1_sha512_test.json tc=128 accept deviation: zeros prepended to s read as the same value (asn1parse.c:174); malleability
+ecdsa_secp384r1_sha256_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_secp384r1_sha256_test.json flag=MissingZero accept deviation: INTEGER without its sign byte read as unsigned (asn1parse.c:174); malleability
+ecdsa_secp384r1_sha256_test.json tc=84 accept deviation: zeros prepended to r read as the same value (asn1parse.c:174); malleability
+ecdsa_secp384r1_sha256_test.json tc=127 accept deviation: zeros prepended to s read as the same value (asn1parse.c:174); malleability
+ecdsa_secp384r1_sha384_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_secp384r1_sha384_test.json flag=MissingZero accept deviation: INTEGER without its sign byte read as unsigned (asn1parse.c:174); malleability
+ecdsa_secp384r1_sha384_test.json tc=84 accept deviation: zeros prepended to r read as the same value (asn1parse.c:174); malleability
+ecdsa_secp384r1_sha384_test.json tc=128 accept deviation: zeros prepended to s read as the same value (asn1parse.c:174); malleability
+ecdsa_secp384r1_sha512_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_secp384r1_sha512_test.json flag=MissingZero accept deviation: INTEGER without its sign byte read as unsigned (asn1parse.c:174); malleability
+ecdsa_secp384r1_sha512_test.json tc=85 accept deviation: zeros prepended to r read as the same value (asn1parse.c:174); malleability
+ecdsa_secp384r1_sha512_test.json tc=128 accept deviation: zeros prepended to s read as the same value (asn1parse.c:174); malleability
+ecdsa_secp521r1_sha512_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_secp521r1_sha512_test.json tc=82 accept deviation: zeros prepended to r read as the same value (asn1parse.c:174); malleability
+ecdsa_secp521r1_sha512_test.json tc=126 accept deviation: zeros prepended to s read as the same value (asn1parse.c:174); malleability
+# The one BER form mbedTLS refuses: an indefinite length (asn1parse.c:40, a length byte of 0x80).
+# Listed only because the BerEncodedSignature lines above would otherwise claim it.
+ecdsa_secp256r1_sha256_test.json tc=48 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_secp256r1_sha512_test.json tc=48 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_secp384r1_sha256_test.json tc=48 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_secp384r1_sha384_test.json tc=48 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_secp384r1_sha512_test.json tc=49 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_secp521r1_sha512_test.json tc=46 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+
