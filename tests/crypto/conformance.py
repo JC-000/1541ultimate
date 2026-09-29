@@ -35,6 +35,8 @@ DOCUMENTS = {
                 '279ca0ecc5e92e2962e27b846986aeb74729d9dd34bd4a04a362f80dcb596ad3'),
     'rfc8439': ('https://www.rfc-editor.org/rfc/rfc8439.txt',
                 '25bef70fbf7a07ff45c2fe4cb7c6ce954eac687413d8610603268b4e4415324c'),
+    'rfc8448': ('https://www.rfc-editor.org/rfc/rfc8448.txt',
+                '6564d1376d1ec744fc7a9993da15ebc1b9be361908b166091f47ef605c537fba'),
     'cavp-sha': ('https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/'
                  'documents/shs/shabytetestvectors.zip',
                  '929ef80b7b3418aca026643f6f248815913b60e01741a44bba9e118067f4c9b8'),
@@ -397,7 +399,48 @@ def rfc_vectors(h, src, exp):
     bad = bytes([tag[0] ^ 1]) + tag[1:]
     rc, out = h('open', 'chachapoly', key.hex(), nonce.hex(), aad.hex(), ct.hex(), bad.hex())
     suite.judge('rfc8439', 'A.5 tag flipped', 'invalid', [], outcome(rc, out, None))
+
+    rfc8448(h, suite, src)
     return suite
+
+
+def rfc8448_octets(text, anchor, label):
+    """A "label (n octets):  xx xx ..." value after an anchor line, checked against its n."""
+    i = text.index(label + ' (', text.index(anchor))
+    m = re.match(r'[^(]*\((\d+) octets\):(.*?)\n\s*\n', text[i:], re.S)
+    data = bytes.fromhex(m.group(2))
+    if len(data) != int(m.group(1)):
+        sys.exit('rfc8448: %s / %s: %d octets, the text says %s' % (anchor, label, len(data), m.group(1)))
+    return data
+
+
+def rfc8448(h, suite, src):
+    """RFC 8448 section 3 (the simple 1-RTT handshake): the X25519 exchange and the two
+    application data records, opened with the traffic keys the trace gives."""
+    text = src.document('rfc8448').decode()
+    text = text[text.index('\n3.  Simple 1-RTT Handshake'):text.index('\n4.  Resumed 0-RTT Handshake')]
+    cpriv = rfc8448_octets(text, '{client}  create an ephemeral x25519 key pair', 'private key')
+    cpub = rfc8448_octets(text, '{client}  create an ephemeral x25519 key pair', 'public key')
+    spriv = rfc8448_octets(text, '{server}  create an ephemeral x25519 key pair', 'private key')
+    spub = rfc8448_octets(text, '{server}  create an ephemeral x25519 key pair', 'public key')
+    shared = rfc8448_octets(text, '{server}  extract secret "handshake"', 'IKM')
+    for name, priv, pub in (('3 client', cpriv, spub), ('3 server', spriv, cpub)):
+        rc, out = h('ecdh', 'x25519', priv.hex(), pub.hex())
+        suite.judge('rfc8448', name + ' ECDHE', 'valid', [], outcome(rc, out, shared), 'x25519')
+    # The client's record is the first under its application keys; the server's comes after
+    # the NewSessionTicket record it sent under the same keys
+    for side, seq in (('client', 0), ('server', 1)):
+        keys = '{%s}  derive write traffic keys for application data' % side
+        key, iv = rfc8448_octets(text, keys, 'key expanded'), rfc8448_octets(text, keys, 'iv expanded')
+        record = '{%s}  send application_data record' % side
+        payload = rfc8448_octets(text, record, 'payload')
+        rec = rfc8448_octets(text, record, 'complete record')
+        # The nonce is the IV XOR the sequence number (RFC 8446 5.3), the additional data the
+        # record header, and the plaintext ends in the content type (5.2)
+        nonce = (int.from_bytes(iv, 'big') ^ seq).to_bytes(len(iv), 'big')
+        rc, out = h('open', 'gcm', key.hex(), nonce.hex(), rec[:5].hex(), rec[5:-16].hex(), rec[-16:].hex())
+        suite.judge('rfc8448', '3 %s application_data' % side, 'valid', [],
+                    outcome(rc, out, payload + b'\x17'), 'aes-gcm/k128/t128')
 
 
 def cavp_sha(h, src, exp):
@@ -463,6 +506,31 @@ def limbo(exe, src, exp):
     return suite, 'not applicable: %s' % ', '.join('%d %s' % (n, k) for k, n in skipped.items())
 
 
+# ---- mbedTLS's own TLS 1.3 key schedule tests -----------------------------------------------
+
+def mbedtls_tls13(out, exp):
+    """mbedTLS's test_suite_ssl cases for the TLS 1.3 key schedule and record protection, built
+    with the ESP32 configuration: they check HKDF-Expand-Label, Derive-Secret, the secret
+    evolution, traffic keys and the PSK binder (mostly against RFC 8448) through the library's
+    internal functions, which the public API cannot reach. The rest of test_suite_ssl drives
+    both ends of a connection, and this configuration has no server side."""
+    suite = Suite('mbedtls-tls13-ks', exp)
+    tests = os.path.join(out, 'build', 'tests')
+    selected = [e for e in open(os.path.join(tests, 'test_suite_ssl.datax')).read().split('\n\n')
+                if e.startswith(('SSL TLS 1.3 Key schedule', 'SSL TLS 1.3 Record Encryption'))]
+    datax = os.path.join(out, 'tls13_key_schedule.datax')
+    with open(datax, 'w') as f:
+        f.write('\n\n'.join(selected) + '\n')
+    run = subprocess.run([os.path.join(tests, 'test_suite_ssl'), datax], cwd=tests, capture_output=True, text=True)
+    results = re.findall(r'^(SSL TLS 1\.3 .*?) ?\.* (PASS|FAILED|----)$', run.stdout, re.M)
+    if len(results) != len(selected):
+        suite.fail('test_suite_ssl ran %d of the %d selected cases (exit %d)' % (len(results), len(selected), run.returncode))
+    for name, result in results:
+        seen = {'PASS': 'accept', 'FAILED': 'reject', '----': 'skip'}[result]
+        suite.judge('test_suite_ssl', name.replace(' ', '_'), 'valid', [], seen)
+    return suite
+
+
 # ---- coverage ------------------------------------------------------------------------------
 
 def coverage(vectors_exe, suites, exp):
@@ -498,7 +566,7 @@ def main():
     suites = [wycheproof(h, src, exp, name) for name in WYCHEPROOF]
     suites += [rfc_vectors(h, src, exp), cavp_sha(h, src, exp)]
     lim, lim_note = limbo(os.path.join(args.out, 'limbo'), src, exp)
-    suites.append(lim)
+    suites += [lim, mbedtls_tls13(args.out, exp)]
     cov, offer = coverage(vectors, suites, exp)
     suites.append(cov)
 
