@@ -81,6 +81,7 @@ host_tests:
 # warns when it is older than CA_MAX_AGE_DAYS; a release build (`make RELEASE=1 ...`) fails
 # instead. It also drops a module's generated bundle when the store changed since that module
 # was built, so an incremental build does not keep the old one.
+# `python3 tools/ca_store/refresh.py` brings the store up to date.
 ca_store_check:
 	@$(CA_STORE) check $(if $(filter-out 0,$(RELEASE)),--release)
 
