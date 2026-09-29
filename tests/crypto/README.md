@@ -17,7 +17,8 @@ The last lines say what matters:
 "passed" counts three kinds of thing: vectors whose outcome is the one required (by their own
 verdict, or by an expectations line, as each suite line splits it), the coverage suite's checks,
 and the expectations lines that matched a vector. Vectors that show an insecure outcome as
-recorded (known-vulnerable, security-deviation, fail-open) are counted apart, not as passed.
+recorded (known-vulnerable, security-deviation, fail-open, including the same fail-open
+behaviour in listed order) and the expectation lines behind them are counted apart, not as passed.
 
 ## What it needs
 
@@ -52,24 +53,15 @@ misspelt one cannot be silently ignored.
 
 ## What the tls_engine.c check sees
 
-The coverage suite compares the code that configures a session in `tls_engine.c` (from
-`mbedtls_ssl_config_defaults()` to `mbedtls_ssl_set_bio()`: every call with its arguments and the
-conditions around it) with `engine_config.txt`, and fails when it differs or the file is gone.
-That is what keeps `vectors.c`'s ClientHello and `limbo.c`'s two ways to verify in step with the
-engine. It says nothing about what the engine does at run time; handshakes against the engine
-(the interop lane) do.
-
-## Moving to a new mbedTLS / ESP-IDF
-
-1. Change `ESP_IDF_TAG`, `ESP_IDF_COMMIT` and `MBEDTLS_COMMIT` in `PINS`; the build checks that
-   the tag names the commit and that the commit carries that mbedTLS.
-2. Regenerate `software/wifi/raw_u64/sdkconfig` at the new ESP-IDF (`idf.py reconfigure`); the
-   build refuses an sdkconfig made for another release.
-3. Update `esp32_macros.txt` from the diff the build prints, and explain each line in the commit.
-4. Remove the `known-vulnerable` lines the run says no longer show.
-5. Run until green. The ESP-IDF the firmware builds with (`docker/Dockerfile`) must move with
-   `PINS`. Nothing on this branch checks that tie: `check_pins.sh` on esp-tls/m2-vendor
-   (tests/crypto/vendor/) does, once that branch is merged.
+The coverage suite compares `tls_engine.c`'s verification surface with `engine_config.txt` and
+fails when it differs or the file is gone: every `#define` naming an `mbedtls_` or `esp_crt_`
+symbol, all of `tls_setup()` and `tls_open()` (the argument checks such as "no verify without a
+host name", the spike and clock gates, the session configuration with its arguments), every other
+function that touches the configuration, BIO, verify callback or host name, and the functions
+installed as verify callbacks. That keeps `vectors.c`'s ClientHello and `limbo.c`'s two ways to
+verify in step with the engine. It is a text comparison: it catches edits, not a determined
+evasion, and says nothing about what the engine does at run time. A behavioural test of the
+engine (handshakes against it: the interop lane, and M3) is the stronger check.
 
 ## What it does not test
 
