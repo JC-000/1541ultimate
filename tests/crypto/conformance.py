@@ -169,9 +169,10 @@ class Expectations:
     """Lines of "<vector file> tc=<id>|flag=<name> accept|reject|skip <reason>", or
     "<vector file> tc=<id>|flag=<name> known-vulnerable <CVE> <first fixed mbedTLS version> <reason>".
     A tc= line wins over flag= lines; among flag= lines the first in the file that names one of
-    the vector's flags wins. With known_vulnerable False the known-vulnerable lines are ignored."""
+    the vector's flags wins. With strict set a vector that shows a known vulnerability fails."""
 
-    def __init__(self, path, known_vulnerable=True):
+    def __init__(self, path, strict=False):
+        self.strict = strict
         self.rules = {}
         self.cves = {}
         self.used = set()
@@ -184,8 +185,6 @@ class Expectations:
                 cve = fields[3].split(None, 2)
                 if len(cve) < 3 or not re.fullmatch(r'CVE-\d{4}-\d+', cve[0]):
                     sys.exit('%s:%d: want "... known-vulnerable <CVE> <fixed in> <reason>"' % (path, n))
-                if not known_vulnerable:
-                    continue
                 self.cves[(fields[0], fields[1])] = '%s (fixed in mbedTLS %s)' % (cve[0], cve[1])
             elif len(fields) < 4 or fields[2] not in ('accept', 'reject', 'skip') or '=' not in fields[1]:
                 sys.exit('%s:%d: want "<file> tc=N|flag=F accept|reject|skip <reason>"' % (path, n))
@@ -234,6 +233,8 @@ class Suite:
                 return self.fail('%s: %s no longer shows: remove its known-vulnerable line' % (label, cve))
             self.decided['known-vulnerable'] += 1
             self.known.append((cve, tc))
+            if self.expectations.strict:
+                return self.fail('%s: %s, known vulnerability %s (CRYPTO_STRICT)' % (label, observed, cve))
             self.passed += 1
             return
         if want is None:
@@ -625,8 +626,8 @@ def main():
     args.out = os.path.abspath(args.out)
 
     src = Sources(args.cache, read_pins(args.pins))
-    # CRYPTO_STRICT=1 ignores the known-vulnerable lines, so that they count as failures
-    exp = Expectations(args.expectations, os.environ.get('CRYPTO_STRICT', '0') != '1')
+    # CRYPTO_STRICT=1 counts the vectors that show a known vulnerability as failures
+    exp = Expectations(args.expectations, os.environ.get('CRYPTO_STRICT', '0') == '1')
     vectors = os.path.join(args.out, 'vectors')
     h = Harness(vectors)
     suites = [wycheproof(h, src, exp, name) for name in WYCHEPROOF]
