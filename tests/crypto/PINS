@@ -1,11 +1,14 @@
 # The one place the crypto conformance suite (tests/crypto/run.sh) and its build helper
 # (build_mbedtls.sh) take their sources from. Moving to a new ESP-IDF / mbedTLS release is a
-# change to this file (and the ESP-IDF image the firmware builds with), and nothing else.
+# change to this file (and the ESP-IDF image the firmware builds with, sdkconfig included), and
+# nothing else.
 # Fetched sources are pinned by full 40-character commit SHA, never by branch or tag.
 
-# ESP-IDF release the ESP32 image builds with; its components/mbedtls/port/include/mbedtls/esp_config.h
-# (at this tag) turns software/wifi/raw_u64/sdkconfig into the mbedTLS configuration.
+# ESP-IDF release the ESP32 image builds with, and the commit the tag must name; its
+# components/mbedtls/port/include/mbedtls/esp_config.h turns software/wifi/raw_u64/sdkconfig
+# into the mbedTLS configuration.
 ESP_IDF_TAG=v5.3.1
+ESP_IDF_COMMIT=c8fc5f643b7a7b0d3b182d3df610844e3dc9bd74
 # The mbedtls submodule of ESP-IDF at ESP_IDF_TAG (mbedTLS 3.6.0 with Espressif's changes).
 MBEDTLS_REPO=https://github.com/espressif/mbedtls
 MBEDTLS_COMMIT=72aa687352a469044cbb946f3fdb261430e41ce1
