@@ -463,13 +463,12 @@ def pem_to_hex(pem):
     return base64.b64decode(body).hex()
 
 
-def limbo(exe, src, exp):
-    """SERVER cases through limbo.c. Not applicable, and counted as such: CLIENT cases (the
-    engine only verifies servers), cases with CRLs (it configures none: tls_engine.c passes no
-    CRL to mbedtls_ssl_conf_ca_chain()), and cases without a peer name (it refuses to verify
-    without one)."""
-    suite = Suite('x509-limbo', exp)
-    cases = json.loads(src.git('X509_LIMBO', 'limbo.json'))['testcases']
+def limbo(exe, name, source, cases, exp):
+    """SERVER cases in x509-limbo's format through limbo.c. Not applicable, and counted as such:
+    CLIENT cases (the engine only verifies servers), cases with CRLs (it configures none:
+    tls_engine.c passes no CRL to mbedtls_ssl_conf_ca_chain()), and cases without a peer name
+    (it refuses to verify without one)."""
+    suite = Suite(name, exp)
     skipped = {'CLIENT': 0, 'has-crl': 0, 'no peer name': 0}
     run = []
     for t in cases:
@@ -500,7 +499,7 @@ def limbo(exe, src, exp):
         flags = ['::'.join(parts[:n]) for n in range(1, len(parts))]
         if any('0603551d1e0101ff' in c for c in [leaf] + chain + trusted):
             flags.append('critical-nameConstraints')
-        suite.judge('limbo.json', t['id'], result, flags, seen)
+        suite.judge(source, t['id'], result, flags, seen)
     proc.stdin.close()
     proc.wait()
     return suite, 'not applicable: %s' % ', '.join('%d %s' % (n, k) for k, n in skipped.items())
@@ -565,8 +564,13 @@ def main():
     h = Harness(vectors)
     suites = [wycheproof(h, src, exp, name) for name in WYCHEPROOF]
     suites += [rfc_vectors(h, src, exp), cavp_sha(h, src, exp)]
-    lim, lim_note = limbo(os.path.join(args.out, 'limbo'), src, exp)
-    suites += [lim, mbedtls_tls13(args.out, exp)]
+    lim, lim_note = limbo(os.path.join(args.out, 'limbo'), 'x509-limbo', 'limbo.json',
+                          json.loads(src.git('X509_LIMBO', 'limbo.json'))['testcases'], exp)
+    # Chains made here for what limbo has no case for (x509/, each with the script that made it)
+    local = [(f, json.load(open(os.path.join(HERE, 'x509', f)))['testcases'])
+             for f in sorted(os.listdir(os.path.join(HERE, 'x509'))) if f.endswith('.json')]
+    cve, _ = limbo(os.path.join(args.out, 'limbo'), 'x509-local', 'x509', [t for _, ts in local for t in ts], exp)
+    suites += [lim, cve, mbedtls_tls13(args.out, exp)]
     cov, offer = coverage(vectors, suites, exp)
     suites.append(cov)
 
