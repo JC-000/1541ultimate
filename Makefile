@@ -1,5 +1,6 @@
 
 APP_SPACE = python3 tools/app_space.py
+CA_STORE = python3 tools/ca_store/ca_store.py
 OPENAPI = python3 tools/openapi/generate.py
 
 # Host Python for `openapi_validate` only. It needs the validator in
@@ -9,7 +10,7 @@ OPENAPI = python3 tools/openapi/generate.py
 #   make openapi_validate PYTHON=/path/to/venv/bin/python
 PYTHON ?= python3
 
-.PHONY: all app_space app_space_test d81_tracks_test observability_test lint_test host_tests openapi openapi_check openapi_test openapi_validate
+.PHONY: all app_space app_space_test d81_tracks_test observability_test lint_test host_tests openapi openapi_check openapi_test openapi_validate ca_store_check ca_store_test
 
 all: esp32 u2_rv u2plus u2pl u64 u64ii
 	@$(APP_SPACE) report
@@ -75,23 +76,33 @@ host_tests:
 	@$(MAKE) -C target/pc/linux/powerstate test
 	@$(MAKE) -C target/pc/linux/wolmagic test
 
+# The Mozilla root store the ESP32 modules trust (software/wifi/ca_store). Every ESP32
+# build checks that each sdkconfig builds its bundle from it, and warns when it is older
+# than CA_MAX_AGE_DAYS; a release build (`make RELEASE=1 ...`) fails instead.
+# `python3 tools/ca_store/ca_store.py refresh` brings it up to date.
+ca_store_check:
+	@$(CA_STORE) check $(if $(filter-out 0,$(RELEASE)),--release)
+
+ca_store_test:
+	@python3 -m unittest discover -s tools/ca_store -p "test_*.py"
+
 esp32: esp32_raw_u64 esp32_raw_c3 esp32_u64ctrl
 
 esp32_clean: esp32_raw_u64_clean esp32_raw_c3_clean esp32_u64ctrl_clean
 
-esp32_raw_u64:
+esp32_raw_u64: ca_store_check
 	@cd software/wifi/raw_u64 && idf.py build
 
 esp32_raw_u64_clean:
 	@cd software/wifi/raw_u64 && idf.py clean
 
-esp32_raw_c3:
+esp32_raw_c3: ca_store_check
 	@cd software/wifi/raw_c3 && idf.py build
 
 esp32_raw_c3_clean:
 	@cd software/wifi/raw_c3 && idf.py clean
 
-esp32_u64ctrl:
+esp32_u64ctrl: ca_store_check
 	@cd software/u64ctrl && idf.py build
 
 esp32_u64ctrl_clean:
