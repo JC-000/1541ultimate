@@ -1,0 +1,176 @@
+# Keeps the Mozilla root store the ESP32 modules trust (software/wifi/ca_store) current.
+#
+# Once a week it fetches curl's extract of Mozilla's certdata.txt and checks it against a copy
+# regenerated from certdata.txt on GitHub (tools/ca_store/refresh.py). When Mozilla's data has
+# changed it opens a pull request with the new cacert.pem, CA_PINS and, when the bundle's
+# certificates changed, the version bump of every module that attaches the bundle. The
+# description lists the roots added and removed by SHA-256 fingerprint. It builds no firmware.
+#
+# Two jobs: `refresh` does all the fetching and checking with a read-only token and hands a
+# patch on; `pull-request` only applies it and runs git and gh. It never force-pushes. Each
+# Mozilla date gets its own branch, ca-store/refresh-<date>, and one pull request. A branch
+# that has had a pull request is left alone, so a maintainer's commits on it are never
+# overwritten; a branch the bot pushed but could not open a pull request for (the setting
+# below was off, or GitHub failed) gets its pull request on the next run. A newer pull request
+# closes the older ones with a comment and leaves their branches in place.
+#
+# A pull request opened with GITHUB_TOKEN does not start the Build workflow, so the firmware
+# is built when a maintainer pushes to the branch or merges it.
+#
+# Needs "Allow GitHub Actions to create and approve pull requests" under Settings, Actions,
+# General. A failed run opens (or comments on) an issue titled "CA store refresh failed",
+# because GitHub mails a scheduled run's failure only to whoever last edited its schedule.
+name: CA store refresh
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ca-store-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    # Forks do not open weekly pull requests against themselves unless asked to, and a manual
+    # run from another branch would carry that branch's commits into the pull request.
+    if: >-
+      (github.repository == 'GideonZ/1541ultimate' && github.event_name == 'schedule') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.refresh.outputs.changed }}
+      date: ${{ steps.refresh.outputs.date }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test the refresh
+        run: python3 -m unittest discover -s tools/ca_store -p "test_*.py"
+
+      # The token only raises the GitHub API's rate limit for the certdata.txt lookup.
+      - name: Refresh the store
+        id: refresh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/ca_store/refresh.py --summary "$RUNNER_TEMP/summary.md"
+          if [ -n "$(git status --porcelain)" ]; then
+            python3 tools/ca_store/ca_store.py check --release
+            git diff --binary >"$RUNNER_TEMP/ca-store.patch"
+            cat "$RUNNER_TEMP/summary.md" >>"$GITHUB_STEP_SUMMARY"
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+            echo "date=$(sed -n 's/^CA_MOZILLA_DATE=//p' software/wifi/ca_store/CA_PINS)" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Hand the change on
+        if: steps.refresh.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ca-store
+          path: |
+            ${{ runner.temp }}/ca-store.patch
+            ${{ runner.temp }}/summary.md
+          if-no-files-found: error
+          retention-days: 7
+
+  pull-request:
+    needs: refresh
+    if: needs.refresh.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the change
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ca-store
+          path: ${{ runner.temp }}/ca-store
+
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DATE: ${{ needs.refresh.outputs.date }}
+        run: |
+          branch="ca-store/refresh-${DATE//:/}"
+          bot="41898282+github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
+          if [ -n "$(gh pr list --head "$branch" --state all --json number --jq '.[]')" ]; then
+            echo "$branch has had a pull request already; leaving it alone"
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            # Pushed by an earlier run that could not open the pull request.
+            git fetch -q origin "$branch"
+            authors=$(git log --format=%ae HEAD..FETCH_HEAD | sort -u)
+            if [ "$authors" != "$bot" ]; then
+              echo "::error::$branch exists with commits not made by this workflow and no pull request"
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "$bot"
+            git switch -c "$branch"
+            git apply --index "$RUNNER_TEMP/ca-store/ca-store.patch"
+            # Only what refresh.py writes; anything else in the patch is refused.
+            unexpected=$(git diff --cached --name-only | grep -vxE \
+              'software/wifi/ca_store/(cacert\.pem|CA_PINS)|software/[a-z0-9_/]+/main/rpc_dispatch\.h' || true)
+            if [ -n "$unexpected" ]; then
+              echo "::error::the patch touches files refresh.py never writes: $unexpected"
+              exit 1
+            fi
+            { echo "Update the Mozilla root store to $DATE"; echo; cat "$RUNNER_TEMP/ca-store/summary.md"; } \
+              >"$RUNNER_TEMP/message"
+            git commit -q -F "$RUNNER_TEMP/message"
+            git push origin "$branch"
+          fi
+          # On a schedule the event carries no repository, so ask for the default branch. This
+          # fails, and so does the run, while "Allow GitHub Actions to create and approve pull
+          # requests" is off; the next run tries again.
+          base=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+          url=$(gh pr create --base "$base" --head "$branch" \
+            --title "Update the Mozilla root store to $DATE" \
+            --body-file "$RUNNER_TEMP/ca-store/summary.md")
+          gh pr list --state open --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"ca-store/refresh-\")) | select(.headRefName != \"$branch\") | .number" |
+            while read -r stale; do
+              gh pr close "$stale" --comment "Superseded by $url."
+            done
+
+  report-failure:
+    needs: [refresh, pull-request]
+    if: failure()
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="CA store refresh failed"
+          open=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "Failed again: $RUN"
+          else
+            gh issue create --title "$title" --body "The weekly refresh of software/wifi/ca_store failed: $RUN
+
+          The job log says which step failed. For \`Test the refresh\`, run \`make ca_store_test\` locally: an anchor in software/wifi/ca_store/anchors.pem that has expired, or that no recorded chain needs any more, fails it until the anchor is removed. For \`Refresh the store\`, run \`python3 tools/ca_store/refresh.py\`. For \`Open the pull request\`, check that \"Allow GitHub Actions to create and approve pull requests\" is on. Until it passes, the store ages, and a release build (\`make RELEASE=1\`) fails once it is older than CA_MAX_AGE_DAYS."
+          fi
