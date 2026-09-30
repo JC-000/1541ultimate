@@ -1887,6 +1887,12 @@ void NetworkTarget :: tls_end(TlsSocket *e, Message **reply, Message **status)
     read_header(&data_message, 0);
     *reply = &data_message;
     char text[NET_TLS_STICKY_MAX];
+    // A WRITE that reported the latched 12 fixes the end to that 12, also
+    // when the drain had found close_notify before it (4.3, r7.5 L-2): the
+    // client was told to CLOSE, so the handle must still be its own (M10).
+    if (e->write_saw_rx_err && (e->end != TLS_END_NONE)) {
+        e->end = TLS_END_RX_ERR;
+    }
     if (e->end == TLS_END_RX_ERR) {
         put_dec(put_text(text, "12,RECEIVE ERROR: "), e->rx_err);
         tls_fail(e, text);
