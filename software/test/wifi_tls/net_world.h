@@ -191,6 +191,8 @@ struct FakeModule {
     FakeSession sess[2];
     std::vector<RpcCall> calls;
     int unsent_next;     // answer UNSENT this many times first (any call)
+    int quiet_next;      // input-less steps that hand out nothing although plaintext is held, first
+                         // (the engine's skipped-warning WANT_READ case, tls_engine.c:503-505)
 };
 extern FakeModule world_module;
 

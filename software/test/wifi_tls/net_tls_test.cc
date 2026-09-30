@@ -1105,6 +1105,13 @@ static void test_latch(void)
     check(got == expected(21, 2500) && last == "14,TLS ALERT RECEIVED: 80",
           "latch: a fatal alert held behind the data wins -> all bytes, then 14 (%s)", last.c_str());
 
+    // One quiet input-less step does not end the drain (4.3, r7.3 L-4).
+    h = latch_setup(1500, 0);
+    world_module.quiet_next = 1;
+    got = read_all(h, 1472, &last, NULL, 50);
+    check(got == expected(21, 1500) && last == rst,
+          "latch: a quiet step while the module still holds plaintext does not end the drain (%d)", (int)got.size());
+
     h = latch_setup(0, 0);
     r = read_cmd(h, 10);
     check(header(r) == 0 && r.status == rst, "latch: nothing held -> 12 at once");

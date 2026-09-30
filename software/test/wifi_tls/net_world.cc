@@ -776,6 +776,11 @@ int wifi_tls_step(uint8_t slot, uint16_t tag, wifi_tls_step_t *st, uint32_t time
         st->esp_err = WIFI_TLS_ESP_NOT_FOUND;
         return WIFI_TLS_REFUSED; // touches nothing (the tag rule)
     }
+    if ((m.quiet_next > 0) && (st->ct_in_len == 0) && (s.state == WIFI_TLS_ESTABLISHED)) {
+        m.quiet_next--;
+        st->state = s.state;
+        return 0;
+    }
     bool again = false;
     if (m.again_next > 0) {
         m.again_next--;
