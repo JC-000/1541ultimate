@@ -28,6 +28,10 @@
  *   sh12s      the same with the RFC 8446 4.1.3 downgrade sentinel in its random
  *   sh11       a ServerHello for TLS 1.1 (0x0302)
  *   sh12suite  a TLS 1.2 ServerHello choosing a suite the client never offered (a CBC one mbedTLS still has)
+ *   sh13comp   a TLS 1.3 ServerHello (supported_versions 0x0304, key_share x25519, the session id echoed, no sentinel)
+ *              with legacy_compression_method 1
+ *   sh13suite  the same with compression 0 and a suite the client never offered (TLS_AES_128_CCM_8_SHA256)
+ *   sh13s      the same with an offered suite and the downgrade sentinel in its random (a 1.3 ServerHello: no downgrade)
  *   alert70    a plaintext fatal protocol_version alert
  *   cn         a plaintext close_notify warning alert
  *   hrrcookie  a TLS 1.3 HelloRetryRequest for secp256r1 carrying a cookie, then the second ClientHello logged as CH2
@@ -271,6 +275,42 @@ static void send_hello_retry_request(int fd)
     printf("\n");
 }
 
+// A TLS 1.3 ServerHello: every field right except what the mode breaks
+static void send_server_hello13(int fd, uint16_t suite, uint8_t comp, int sentinel)
+{
+    uint8_t m[256], *p = m + 9;
+    *p++ = 3; *p++ = 3;                              // legacy_version
+    for (int i = 0; i < 32; i++) {
+        *p++ = (uint8_t)(0xB0 + i);
+    }
+    if (sentinel) {
+        memcpy(p - 8, "\x44\x4F\x57\x4E\x47\x52\x44\x01", 8);
+    }
+    *p++ = (uint8_t)ch_session_id_len;
+    memcpy(p, ch_session_id, ch_session_id_len);
+    p += ch_session_id_len;
+    *p++ = suite >> 8;
+    *p++ = suite & 0xFF;
+    *p++ = comp;
+    uint8_t *ext = p;
+    p += 2;
+    static const uint8_t sv[] = { 0x00, 0x2b, 0x00, 0x02, 0x03, 0x04 };
+    memcpy(p, sv, sizeof(sv));
+    p += sizeof(sv);
+    static const uint8_t ks[] = { 0x00, 0x33, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20 };
+    memcpy(p, ks, sizeof(ks));
+    p += sizeof(ks);
+    for (int i = 0; i < 32; i++) {
+        *p++ = (uint8_t)(0x09 + i);                  // an x25519 public value
+    }
+    int elen = (int)(p - ext) - 2;
+    ext[0] = elen >> 8; ext[1] = elen & 0xFF;
+    int body = (int)(p - m) - 9;
+    m[0] = 22; m[1] = 3; m[2] = 3; m[3] = (body + 4) >> 8; m[4] = (body + 4) & 0xFF;
+    m[5] = 2; m[6] = 0; m[7] = body >> 8; m[8] = body & 0xFF;
+    send(fd, m, p - m, 0);
+}
+
 static int raw_mode(int fd, const char *what)
 {
     if (audit_client_hello(fd) < 0) {
@@ -294,6 +334,12 @@ static int raw_mode(int fd, const char *what)
         send_server_hello(fd, 0x0302, 0, 0xC02B);
     } else if (!strcmp(what, "sh12suite")) {
         send_server_hello(fd, 0x0303, 0, 0xC023);
+    } else if (!strcmp(what, "sh13comp")) {
+        send_server_hello13(fd, 0x1301, 1, 0);
+    } else if (!strcmp(what, "sh13suite")) {
+        send_server_hello13(fd, 0x1305, 0, 0);
+    } else if (!strcmp(what, "sh13s")) {
+        send_server_hello13(fd, 0x1301, 1, 1);
     } else if (!strcmp(what, "alert70")) {
         send(fd, "\x15\x03\x03\x00\x02\x02\x46", 7, 0);
     } else if (!strcmp(what, "cn")) {

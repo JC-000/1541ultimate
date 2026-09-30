@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 12:47:30
-+++ b/main/tls_engine.c	2026-09-30 12:48:30
-@@ -490,7 +490,7 @@
+--- a/main/tls_engine.c	2026-09-30 15:10:19
++++ b/main/tls_engine.c	2026-09-30 15:10:41
+@@ -497,7 +497,7 @@
              // (ssl_tls12_client.c:742-759), so the engine refuses it here, before any key is derived. A ServerHello
              // it cannot find counts as one without EMS: fail closed.
              s->ems_checked = 1;

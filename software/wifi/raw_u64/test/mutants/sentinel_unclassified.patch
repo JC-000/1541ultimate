@@ -1,12 +1,12 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 12:47:30
-+++ b/main/tls_engine.c	2026-09-30 12:48:30
-@@ -526,7 +526,7 @@
-             const uint8_t *m = s->ssl.in_msg; // the ServerHello: handshake header, then legacy_version
-             r->verify_flags = (m && (s->ssl.in_msgtype == MBEDTLS_SSL_MSG_HANDSHAKE)) ? ((m[4] << 8) | m[5]) : 0;
-         } else {
--            r->fail_reason = TLS_FAIL_DOWNGRADE;
-+            r->fail_reason = TLS_FAIL_NONE;
+--- a/main/tls_engine.c	2026-09-30 15:10:19
++++ b/main/tls_engine.c	2026-09-30 15:10:41
+@@ -539,7 +539,7 @@
+                 r->fail_reason = TLS_FAIL_VERSION_REFUSED;
+                 r->verify_flags = (m[4] << 8) | m[5]; // legacy_version: the version it chose
+             } else if (!memcmp(tail, "\x44\x4F\x57\x4E\x47\x52\x44", 7) && (tail[7] <= 1)) {
+-                r->fail_reason = TLS_FAIL_DOWNGRADE;
++                r->fail_reason = TLS_FAIL_NONE;
+             }
          }
      } else if (ret == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
-         r->fail_reason = ((s->trust == TLS_TRUST_PIN) && s->pin_mismatch) ? TLS_FAIL_PIN_MISMATCH : TLS_FAIL_CERT_VERIFY;

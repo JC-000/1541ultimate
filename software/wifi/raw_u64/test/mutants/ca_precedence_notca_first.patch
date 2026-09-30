@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 12:47:30
-+++ b/main/tls_engine.c	2026-09-30 12:48:30
-@@ -768,6 +768,9 @@
+--- a/main/tls_engine.c	2026-09-30 15:10:19
++++ b/main/tls_engine.c	2026-09-30 15:10:41
+@@ -782,6 +782,9 @@
  // 3.3: the upload-time refusals, in their order of precedence
  static uint8_t tls_ca_reject(const mbedtls_x509_crt *crt)
  {

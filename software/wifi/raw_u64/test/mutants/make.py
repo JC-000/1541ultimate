@@ -117,6 +117,9 @@ static tls_session_t *tls_find_close(uint8_t slot, uint16_t tag)
  'adv_alert_out_encrypted': [(E, '(s->ssl.out_msgtype == MBEDTLS_SSL_MSG_ALERT) && (s->ssl.transform_out == NULL) &&', '(s->ssl.out_msgtype == MBEDTLS_SSL_MSG_ALERT) &&')],
  'adv_heap_min_not_reset': [(E, '        heap_caps_monitor_local_minimum_free_size_stop();\n        heap_caps_monitor_local_minimum_free_size_start();\n', '')],
  'adv_sh_not_found': [(E, '    const uint8_t *m = s->ssl.in_msg;\n    size_t n = s->ssl.in_hslen;\n', '    const uint8_t *m = s->ssl.in_msg;\n    size_t n = s->ssl.in_hslen;\n    if (type == MBEDTLS_SSL_HS_SERVER_HELLO) {\n        return NULL; // models an mbedTLS change: the ServerHello is no longer in in_msg after its step\n    }\n')],
+ # errata12adv H-1 (ER-23)
+ 'er23_sentinel_ignored': [(E, '        size_t len;\n        const uint8_t *d, *m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len);\n', '        if (!(s->opts & TLS_OPT_REQUIRE_TLS13)) {\n            r->fail_reason = TLS_FAIL_DOWNGRADE;\n            return;\n        }\n        size_t len;\n        const uint8_t *d, *m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len);\n')],
+ 'er23_supported_versions_ignored': [(E, '(tls_sh_ext(m, len, 43, &d) == -1)', '1')],
 }
 os.makedirs(RAW + '/test/mutants', exist_ok=True)
 for name, edits in M.items():

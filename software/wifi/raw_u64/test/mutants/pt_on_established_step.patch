@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 12:47:30
-+++ b/main/tls_engine.c	2026-09-30 12:48:30
-@@ -639,7 +639,7 @@
+--- a/main/tls_engine.c	2026-09-30 15:10:19
++++ b/main/tls_engine.c	2026-09-30 15:10:41
+@@ -653,7 +653,7 @@
      if (ret == 0) {
          if (s->stats.state == TLS_STATE_HANDSHAKING) {
              ret = tls_handshake(s, r);
