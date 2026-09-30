@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+#include "ndebug_guard.h" // first: refuses NDEBUG builds
 #include <string.h>
 #include "esp_types.h"
 #include "esp_attr.h"

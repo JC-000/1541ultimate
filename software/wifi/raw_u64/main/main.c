@@ -21,6 +21,7 @@
     can be sorted based on Authentication Mode or Signal Strength. The priority
     for the Authentication mode is:  WPA2 > WPA > WEP > Open
 */
+#include "ndebug_guard.h" // first: refuses NDEBUG builds
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"

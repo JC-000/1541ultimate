@@ -1,0 +1,5 @@
+## Measurement only (pqc lane): the bridge with esp-pqc, hybrid KEM (X25519MLKEM768), pinned by path to
+## a clone of espressif/esp-pqc 95db07d1. A real M4 change would pin the git source by commit.
+dependencies:
+  esp-pqc:
+    path: /Users/someone/Documents/1541u-esp-tls-archive/session-0929/pqc-work/esp-pqc

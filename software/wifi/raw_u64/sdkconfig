@@ -2588,6 +2588,102 @@ CONFIG_WL_SECTOR_SIZE_4096=y
 # default:
 CONFIG_WL_SECTOR_SIZE=4096
 # end of Wear Levelling
+
+#
+# Post-Quantum Cryptography (esp-pqc)
+#
+
+#
+# liboqs
+#
+CONFIG_LIBOQS_ENABLED=y
+
+#
+# Algorithm Selection
+#
+
+#
+# Key Encapsulation Mechanisms (KEMs)
+#
+CONFIG_LIBOQS_ENABLE_KEM_ML_KEM=y
+# default:
+# CONFIG_LIBOQS_ENABLE_KEM_BIKE is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_KEM_FRODOKEM is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_KEM_NTRUPRIME is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_KEM_CLASSIC_MCELIECE is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_KEM_HQC is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_KEM_KYBER is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_KEM_NTRU is not set
+
+#
+# Digital Signature Schemes
+#
+# CONFIG_LIBOQS_ENABLE_SIG_ML_DSA is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_SIG_FALCON is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_SIG_MAYO is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_SIG_CROSS is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_SIG_UOV is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_SIG_SNOVA is not set
+# default:
+# CONFIG_LIBOQS_ENABLE_SIG_SLH_DSA is not set
+# end of Algorithm Selection
+
+#
+# Memory Configuration
+#
+# default:
+CONFIG_LIBOQS_TASK_STACK_SIZE=16384
+# default:
+CONFIG_LIBOQS_HEAP_SIZE_WARNING_KB=50
+# default:
+# CONFIG_LIBOQS_MEMORY_MINIMAL is not set
+# default:
+CONFIG_LIBOQS_MEMORY_BALANCED=y
+# default:
+# CONFIG_LIBOQS_MEMORY_FULL is not set
+# end of Memory Configuration
+
+#
+# Advanced Options
+#
+# default:
+CONFIG_LIBOQS_AUTO_INIT_RNG=y
+# default:
+CONFIG_LIBOQS_USE_ESP_RANDOM=y
+# default:
+CONFIG_LIBOQS_MLK_HEAP_TEMPORARIES=y
+# default:
+# CONFIG_LIBOQS_DEBUG_INSTRUMENTATION is not set
+# default:
+# CONFIG_LIBOQS_MINIMAL_COMMON is not set
+# default:
+# CONFIG_LIBOQS_VERBOSE_LOGGING is not set
+# end of Advanced Options
+# end of liboqs
+
+#
+# mbedTLS
+#
+CONFIG_MBEDTLS_USE_BUNDLED_PQC=y
+
+#
+# Hybrid PQC TLS
+#
+CONFIG_MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768=y
+# end of Hybrid PQC TLS
+# end of mbedTLS
+# end of Post-Quantum Cryptography (esp-pqc)
 # end of Component config
 
 # CONFIG_IDF_EXPERIMENTAL_FEATURES is not set
@@ -2801,8 +2897,6 @@ CONFIG_TCPIP_TASK_AFFINITY_NO_AFFINITY=y
 # CONFIG_TCPIP_TASK_AFFINITY_CPU1 is not set
 CONFIG_TCPIP_TASK_AFFINITY=0x7FFFFFFF
 # CONFIG_PPP_SUPPORT is not set
-# CONFIG_MBEDTLS_ATCA_HW_ECDSA_SIGN is not set
-# CONFIG_MBEDTLS_ATCA_HW_ECDSA_VERIFY is not set
 CONFIG_ESP32_PTHREAD_TASK_PRIO_DEFAULT=5
 CONFIG_ESP32_PTHREAD_TASK_STACK_SIZE_DEFAULT=3072
 CONFIG_ESP32_PTHREAD_STACK_MIN=768

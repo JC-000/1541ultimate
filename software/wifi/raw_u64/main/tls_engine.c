@@ -7,6 +7,7 @@
  * and send appends to a per-session output buffer.
  */
 
+#include "ndebug_guard.h" // first: refuses NDEBUG builds
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>

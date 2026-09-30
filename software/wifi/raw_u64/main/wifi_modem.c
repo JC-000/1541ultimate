@@ -5,6 +5,7 @@
    the networks on the screen. All network traffic is forwarded to the Ultimate 64-II.
 */
 
+#include "ndebug_guard.h" // first: refuses NDEBUG builds
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
