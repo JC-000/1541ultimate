@@ -39,6 +39,13 @@
 #include "wifi_modem.h"
 #include "pinout.h"
 
+// esp-pqc's liboqs can leave CMAKE_BUILD_TYPE=Release in a build directory, which defines NDEBUG for every
+// file (see CMakeLists.txt). The configure-time check there does not run when ninja rebuilds without
+// re-running CMake, so refuse the build here as well.
+#ifdef NDEBUG
+#error "NDEBUG is defined: assert() and ESP_ERROR_CHECK() would be compiled out. Run: idf.py -DCMAKE_BUILD_TYPE=None reconfigure"
+#endif
+
 static const char *TAG = "main";
 
 void app_main()

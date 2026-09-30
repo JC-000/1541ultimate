@@ -1,0 +1,11 @@
+# Used only when sdkconfig is regenerated (idf.py set-target, or a deleted sdkconfig); the committed
+# sdkconfig is the configuration. These keep such a regeneration inside what the esp-pqc build allows:
+# IDF's default ESP_WIFI_MBEDTLS_TLS_CLIENT=y (with Wi-Fi Enterprise) compiles wpa_supplicant against the
+# stock ssl_misc.h, which main/CMakeLists.txt refuses together with X25519MLKEM768.
+CONFIG_ESP_WIFI_MBEDTLS_TLS_CLIENT=n
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=n
+CONFIG_MBEDTLS_USE_BUNDLED_PQC=y
+CONFIG_LIBOQS_ENABLED=y
+CONFIG_LIBOQS_ENABLE_KEM_ML_KEM=y
+CONFIG_LIBOQS_ENABLE_SIG_ML_DSA=n
+CONFIG_MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768=y

@@ -1,6 +1,6 @@
 # The following lines of boilerplate have to be in your project's CMakeLists
 # in this exact order for cmake to work correctly
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.16)
 
 # ESP-IDF sets no CMAKE_BUILD_TYPE. esp-pqc builds liboqs with add_subdirectory(), and liboqs then forces
 # CMAKE_BUILD_TYPE=Release into the cache, which puts -O3 -DNDEBUG on every file of the firmware and
@@ -13,8 +13,12 @@ endif()
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(bridge)
 
-# A build directory that liboqs already set to Release keeps it: refuse it rather than build without asserts
-if(NOT CMAKE_BUILD_TYPE STREQUAL "None")
-    message(FATAL_ERROR "CMAKE_BUILD_TYPE is '${CMAKE_BUILD_TYPE}', which adds -O3 -DNDEBUG to every file. "
-                        "Run 'idf.py fullclean' (or configure with -DCMAKE_BUILD_TYPE=None).")
+# A build directory that liboqs already set to Release keeps it: refuse any build type whose flags define
+# NDEBUG (Release, RelWithDebInfo, MinSizeRel) rather than build without asserts. main.c also refuses NDEBUG
+# at compile time, for a build that ninja runs without re-running this configure.
+string(TOUPPER "${CMAKE_BUILD_TYPE}" BUILD_TYPE_UPPER)
+if(CMAKE_C_FLAGS_${BUILD_TYPE_UPPER} MATCHES "NDEBUG")
+    message(FATAL_ERROR "CMAKE_BUILD_TYPE is '${CMAKE_BUILD_TYPE}', which adds '${CMAKE_C_FLAGS_${BUILD_TYPE_UPPER}}' "
+                        "to every file and compiles out assert() and ESP_ERROR_CHECK(). "
+                        "Run: idf.py -DCMAKE_BUILD_TYPE=None reconfigure")
 endif()
