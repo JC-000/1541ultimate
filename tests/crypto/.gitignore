@@ -1,2 +1,3 @@
-# run_idf6.sh's default build directory (output/ is ignored by the top-level .gitignore)
-/output-idf6/
+output/
+output-idf6/
+__pycache__/
