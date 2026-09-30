@@ -724,6 +724,10 @@ static void test_start_tls(void)
     check(r.status == "81,INVALID PARAMS" && sock(udp).open, "start: on a UDP handle -> 81, UDP untouched");
     r = run(start_cmd(12, 2, 0, "", PIN()));
     check(r.status == "81,INVALID PARAMS", "start: on an unowned number -> 81");
+    r = run(start_cmd(udp, 3, 0x80, ""));
+    check(r.status == "81,INVALID PARAMS", "start: UDP handle AND trust 3: the handle check comes first -> 81 (r5 C-2)");
+    r = run(start_cmd(12, 3, 0, "x"));
+    check(r.status == "81,INVALID PARAMS", "start: unowned number AND trust 3 -> 81, not 82");
     r = run(B({ 0x03, 0x24 }));
     check(r.status == "81,INVALID PARAMS", "start: no handle byte -> 81");
     expect_kept(t, start_cmd(t, 3, 0, "mail.example"), "82,PARAMETER(S) OUT OF RANGE", "trust 3");
@@ -1280,6 +1284,15 @@ static void test_ca(void)
     check(r.status == "81,INVALID PARAMS" && loaded(), "ca: a duplicate final chunk -> 81, still LOADED");
     r = chunk(700, 1473, bytes(10, 1));
     check(r.status == "81,INVALID PARAMS" && loaded(), "ca: total > 1472 at a non-zero offset -> 81, CA untouched");
+    r = chunk(0, 1473, bytes());
+    check(r.status == "82,PARAMETER(S) OUT OF RANGE" && !loaded(), "ca: offset 0, total 1473 over a LOADED CA -> 82, EMPTY");
+    chunk(0, 10, bytes(10, 1));
+    uint16_t old_tag = world_module.ca_tag;
+    check(loaded(), "ca: loaded again");
+    world_module.calls.clear();
+    chunk(0, 10, bytes(10, 2));
+    check(last_call().cmd == 0x35 && last_call().tag != old_tag, "ca: a new upload is sent under a new ca_tag (%u, was %u)",
+          last_call().tag, old_tag);
     r = chunk(0, 1400, bytes(10, 1));
     check(!loaded(), "ca: offset 0 of a new upload drops the CA at once");
     r = run(cat(B({ 0x03, 0x22, 10, 0, 0x78, 0x05 }), bytes(10, 2)));

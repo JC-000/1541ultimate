@@ -29,5 +29,7 @@ extern int world_suspended;       // vTaskSuspendAll minus xTaskResumeAll
 extern int world_transmits;       // requests that went out
 extern int world_isr_calls;       // replies the interrupt handled
 size_t world_queued(void);        // replies still in dedicated_replies
+void world_deliver_now(void);     // the receive interrupt hands over an answer now
+void world_reset_maker(world_maker_t maker); // answers from now on come from maker
 
 #endif /* WORLD_H_ */

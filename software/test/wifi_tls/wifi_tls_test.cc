@@ -649,6 +649,28 @@ static void test_calls(void)
           (world_queued() == 0) && (st.ct_out_len == 0) && (st.pt_out_len == 0) && untouched(ct_out) &&
           untouched(pt_out),
           "a cancel after 3 slices ends the call with BUSY at once, frees the channel, takes nothing");
+    // The answer arrives just as the cancel fires: the call has given up, so
+    // it is dropped, not taken.
+    world_reset(20, late_maker, true);
+    fresh_step(&st, 1024);
+    struct arriving_right {
+        static void maker(command_buf_t *rx, const uint8_t *req, int req_size, int kind)
+        {
+            tls_maker(rx, req, req_size, kind);
+        }
+        static bool now(void *context)
+        {
+            world_reset_maker(maker);
+            world_deliver_now();
+            return true;
+        }
+    };
+    wifi_tls_cancel_t race = { arriving_right::now, NULL };
+    r = wifi_tls_step(0, 1, &st, 5000, &race);
+    check((r == WIFI_TLS_BUSY) && (st.ct_out_len == 0) && untouched(ct_out) && (world_queued() == 0) &&
+              !dedicated_waiting,
+          "an answer that arrives as the cancel fires is dropped: BUSY, nothing taken, the queue emptied (%d)", r);
+
     world_reset(16, tls_maker, true);
     cancel_calls = 0;
     cancel_after = 1;
