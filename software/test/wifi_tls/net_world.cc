@@ -426,6 +426,13 @@ ssize_t lwip_send(int s, const void *dataptr, size_t size, int flags)
     }
     FakeSock &k = world_socks[s];
     k.send_calls++;
+    if (k.srv.send_err_from && (k.send_calls >= k.srv.send_err_from)) {
+        if (k.srv.send_err_late == EWOULDBLOCK) {
+            k.send_blocked = true; // from here on, a stall (select advances the clock)
+        }
+        errno = k.srv.send_err_late;
+        return -1;
+    }
     if (k.send_err || k.srv.send_err) {
         errno = k.send_err ? k.send_err : k.srv.send_err;
         return -1;

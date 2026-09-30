@@ -1632,6 +1632,83 @@ static void test_adversarial(void)
           r.status.c_str(), sock(t).open ? "open" : "closed");
 }
 
+// Adopted from m3niosadv2 (evidence/m3niosadv2/adv2-tests.patch): B11, B12 and B14, which kill
+// the surviving mutants ML, MM and MI, and a pin of G3.
+static void test_adv2(void)
+{
+    printf("ADV2: adopted m3niosadv2 cases\n");
+    Res r;
+
+    // B14 (F3): a STATS call that finds the module application gone (NO_MODULE, the race with
+    // wifi_tls_module_available()) clears the cache.
+    fresh();
+    info(0xFF);
+    world_module.stats_result = WIFI_TLS_NO_MODULE;
+    r = info(0xFF);
+    world_module.stats_result = WIFI_TLS_BUSY;
+    Res r2 = info(0xFF);
+    world_module.stats_result = -1;
+    check(!(at(r, 4) & 1) && !(at(r2, 4) & 1), "B14: NO_MODULE from STATS clears b0, and it stays 0 (b4=0x%02X, 0x%02X)",
+          at(r, 4), at(r2, 4));
+
+    // B11 (D3): the Finished's send fails (the 2nd send of the handshake) -> 13 SEND ERROR, never 12,
+    // never 00,OK.
+    fresh();
+    world_socks[0].srv.send_err_from = 2;
+    world_socks[0].srv.send_err_late = ECONNRESET;
+    r = run(open_cmd(0, 0, "example.com"));
+    check(r.status == "13,TLS HANDSHAKE FAILED: SEND ERROR: " + num(ECONNRESET) && world_open_sockets() == 0,
+          "B11: OPEN whose Finished send meets an RST -> 13 SEND ERROR (got '%s')", r.status.c_str());
+    fresh();
+    int t = open_tcp();
+    sock(t).srv.send_err_from = sock(t).send_calls + 2;
+    sock(t).srv.send_err_late = EPIPE;
+    r = run(start_cmd(t, 2, 0, "", PIN()));
+    check(r.status == "13,TLS HANDSHAKE FAILED: SEND ERROR: " + num(EPIPE) && !sock(t).open,
+          "B11: START whose Finished send fails -> 13 SEND ERROR, handle closed (got '%s')", r.status.c_str());
+
+    // B12 (D3): a ClientHello send stalled for SEND_MS, well before the handshake deadline ->
+    // 13 SEND ERROR: ETIMEDOUT (116 on the Nios); a Finished send stalled into the deadline -> 15.
+    fresh();
+    world_socks[0].srv.send_err_from = 1;
+    world_socks[0].srv.send_err_late = EWOULDBLOCK;
+    uint32_t t0 = world_ms();
+    r = run(open_cmd(0, 0, "example.com"));
+    uint32_t spent = world_ms() - t0;
+    check(r.status == "13,TLS HANDSHAKE FAILED: SEND ERROR: " + num(ETIMEDOUT) && spent >= 5000 && spent < 6000,
+          "B12: a stalled ClientHello send -> 13 SEND ERROR: ETIMEDOUT after SEND_MS (got '%s', %u ms)",
+          r.status.c_str(), spent);
+    fresh();
+    world_socks[0].srv.delay_ms = 12000;
+    world_socks[0].srv.send_err_from = 2;
+    world_socks[0].srv.send_err_late = EWOULDBLOCK;
+    r = run(open_cmd(0, 0, "example.com"));
+    check(r.status == "15,TLS HANDSHAKE TIMEOUT", "B12: a Finished send stalled into the handshake deadline -> 15 (got '%s')",
+          r.status.c_str());
+
+    // G3 (pinned as the current behaviour): after a WRITE has reported the latched 12, a module
+    // failure in the drain (here a malformed step) ends in a sticky 17, not 12; the handle stays owned.
+    fresh();
+    int h = open_ok();
+    for (size_t i = 0; i < 1200; i++) {
+        world_module.sess[0].pt.push_back(payload_byte(21, i));
+    }
+    server_push(h, EV_ERR, bytes(), ECONNRESET);
+    read_cmd(h, 1);
+    r = write_cmd(h, S("ping"));
+    check(r.status == "12,RECEIVE ERROR: " + num(ECONNRESET), "G3: setup: the WRITE reports the latched 12");
+    Forced f = Forced();
+    f.result = WIFI_TLS_INVALID;
+    world_module.forced.push_back(f);
+    std::string last;
+    read_all(h, 1472, &last, NULL, 50);
+    r = read_cmd(h, 10);
+    check(last == "17,TLS MODULE NOT RESPONDING" && header(r) == 0 && r.status == last && sock(h).open,
+          "G3: a module failure in the drain after the WRITE's 12 -> sticky 17, handle still owned (got '%s')",
+          last.c_str());
+    check(close_cmd(h).status == "00,OK" && !sock(h).open, "G3: CLOSE -> 00,OK");
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -1653,6 +1730,7 @@ int main(int argc, char **argv)
     test_status_lengths();
     test_empty_read_reply();
     test_adversarial();
+    test_adv2();
     check(longest_status.size() <= 40, "ER-8: the longest status of the whole run is %d bytes: '%s'",
           (int)longest_status.size(), longest_status.c_str());
     printf("\n%d checks, %d failures\n", checks, failures);

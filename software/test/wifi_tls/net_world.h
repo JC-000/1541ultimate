@@ -65,6 +65,8 @@ struct FakeServer {
     bool connect_never;
     int rst_err;           // the errno of SRV_RST; 0 for ECONNRESET
     int send_err;          // every send on this socket fails with it (set before the socket exists)
+    int send_err_from;     // sends from this call number on (1-based) fail with send_err_late
+    int send_err_late;     // EWOULDBLOCK makes it a stall
 };
 
 struct FakeSock {
