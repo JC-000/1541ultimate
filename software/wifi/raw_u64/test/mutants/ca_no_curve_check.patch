@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 12:47:30
-+++ b/main/tls_engine.c	2026-09-30 12:48:30
-@@ -780,7 +780,7 @@
+--- a/main/tls_engine.c	2026-09-30 15:10:19
++++ b/main/tls_engine.c	2026-09-30 15:10:41
+@@ -794,7 +794,7 @@
          int ok = ((family == PSA_ECC_FAMILY_SECP_R1) && ((bits == 256) || (bits == 384) || (bits == 521))) ||
                   ((family == PSA_ECC_FAMILY_BRAINPOOL_P_R1) && ((bits == 256) || (bits == 384) || (bits == 512)));
          if (!ok) {
