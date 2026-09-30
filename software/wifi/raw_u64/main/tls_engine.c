@@ -434,28 +434,35 @@ static const uint8_t *tls_hs_msg(tls_session_t *s, uint8_t type, size_t *len)
     return m;
 }
 
-// Finds an extension of a ServerHello (or HelloRetryRequest); returns its data length, or -1 when absent
+// Finds an extension of a ServerHello (or HelloRetryRequest); returns its data length, -1 when absent (also when
+// a TLS 1.2 ServerHello has no extensions block at all), or -2 when the message is malformed
 static int tls_sh_ext(const uint8_t *m, size_t len, uint16_t type, const uint8_t **data)
 {
     const uint8_t *p = m + 4, *end = m + len;
     if (end - p < 2 + 32 + 1) {
-        return -1;
+        return -2;
     }
     p += 2 + 32;                        // legacy_version, random
-    if (end - p < 1 + p[0] + 2 + 1 + 2) {
-        return -1;
+    if (end - p < 1 + p[0] + 2 + 1) {
+        return -2;
     }
     p += 1 + p[0];                      // session id
     p += 2 + 1;                         // cipher suite, compression
+    if (p == end) {
+        return -1;
+    }
+    if (end - p < 2) {
+        return -2;
+    }
     const uint8_t *eend = p + 2 + ((p[0] << 8) | p[1]);
     p += 2;
     if (eend > end) {
-        return -1;
+        return -2;
     }
     while (eend - p >= 4) {
         int t = (p[0] << 8) | p[1], n = (p[2] << 8) | p[3];
         if (eend - p - 4 < n) {
-            return -1;
+            return -2;
         }
         if (t == type) {
             *data = p + 4;
@@ -517,16 +524,23 @@ static void tls_classify(tls_session_t *s, int ret, int state_before, int versio
         r->verify_flags = (uint16_t)s->ssl.tls_version;
     } else if ((state_before == MBEDTLS_SSL_SERVER_HELLO) && (version_before == MBEDTLS_SSL_VERSION_TLS1_3) &&
                (ret == MBEDTLS_ERR_SSL_ILLEGAL_PARAMETER)) {
-        // The TLS 1.3 client's ServerHello pre-processing refuses a ServerHello without supported_versions when
-        // 1.2 was not offered, or when its random carries the downgrade sentinel (ssl_tls13_client.c:1458).
-        // With 1.2 offered only the sentinel can raise it there; the 1.2 re-parse runs as a later step, with
-        // tls_version already 1.2, so its own ILLEGAL_PARAMETERs are not counted here.
-        if (s->opts & TLS_OPT_REQUIRE_TLS13) {
-            r->fail_reason = TLS_FAIL_VERSION_REFUSED;
-            const uint8_t *m = s->ssl.in_msg; // the ServerHello: handshake header, then legacy_version
-            r->verify_flags = (m && (s->ssl.in_msgtype == MBEDTLS_SSL_MSG_HANDSHAKE)) ? ((m[4] << 8) | m[5]) : 0;
-        } else {
-            r->fail_reason = TLS_FAIL_DOWNGRADE;
+        // This one step is the whole TLS 1.3 ServerHello processing (ssl_tls13_client.c:1995-2060): pre-processing,
+        // which refuses a ServerHello without supported_versions when 1.2 was not offered or when its random carries
+        // the downgrade sentinel (:1458), and the parse, which raises ILLEGAL_PARAMETER for a suite not offered,
+        // compression != 0, a session-id echo mismatch, a bad HRR key_share and more (errata12adv H-1). So the
+        // ServerHello mbedTLS reassembled is looked at: only one without supported_versions chose TLS 1.2 or lower
+        // (the version refused under REQUIRE_TLS13), and of those only one whose random ends in the RFC 8446 4.1.3
+        // sentinel is a downgrade. Everything else, a ServerHello not found included, is fail_reason 0.
+        size_t len;
+        const uint8_t *d, *m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len);
+        if (m && (len >= 4 + 2 + 32) && (tls_sh_ext(m, len, 43, &d) == -1)) {
+            const uint8_t *tail = m + 4 + 2 + 32 - 8; // the last 8 bytes of the random
+            if (s->opts & TLS_OPT_REQUIRE_TLS13) {
+                r->fail_reason = TLS_FAIL_VERSION_REFUSED;
+                r->verify_flags = (m[4] << 8) | m[5]; // legacy_version: the version it chose
+            } else if (!memcmp(tail, "\x44\x4F\x57\x4E\x47\x52\x44", 7) && (tail[7] <= 1)) {
+                r->fail_reason = TLS_FAIL_DOWNGRADE;
+            }
         }
     } else if (ret == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
         r->fail_reason = ((s->trust == TLS_TRUST_PIN) && s->pin_mismatch) ? TLS_FAIL_PIN_MISMATCH : TLS_FAIL_CERT_VERIFY;
