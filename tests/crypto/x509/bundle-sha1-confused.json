@@ -1,0 +1,43 @@
+{
+ "version": 1,
+ "testcases": [
+  {
+   "id": "bundle-sha1-confused::U4-confused-sha1::ca",
+   "description": "leaf naming ecdsa-with-SHA1, signed PKCS#1 v1.5 SHA-1 by the RSA root",
+   "validation_kind": "SERVER",
+   "trusted_certs": [
+    "-----BEGIN CERTIFICATE-----\nMIIC0zCCAbugAwIBAgIUHZNpp8lGcKLSPsx6psx40NiF+3gwDQYJKoZIhvcNAQEL\nBQAwETEPMA0GA1UEAwwGUm9vdCBTMB4XDTI2MDEwMTAwMDAwMFoXDTM2MDEwMTAw\nMDAwMFowETEPMA0GA1UEAwwGUm9vdCBTMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\nMIIBCgKCAQEAplxtc0Xggap46yXPsPpR0Yo3n2GBWkVcst63bJUnOLHpCJlyjyC1\n0TwLEWvlVjj5MbMqMfe5In7ez4yhljZg5TA7JQqgZ8thAOFjU8QaaK9drWDZdBQP\n2JOk99MFVRJNWFzRiuaHIlf3+ubFGXYHVFGEMWh+D6Z0XiwLjkuQjY95J8ixxHOI\nAbDLKRe+mblctigKqCsSmavYYVFAJRpqQASw5D1FIJYMRnPrR6ox4oLclZ5VzJ4m\nZ+qvURkSQoORSdwtPqGCra2lrfF6HMXV8qqMxWR2qxhTpU31tiWIyBXI32YoAAH7\nwosepIN/H74qNnDsnSnhjOciNrospLr+xQIDAQABoyMwITAPBgNVHRMBAf8EBTAD\nAQH/MA4GA1UdDwEB/wQEAwIBBjANBgkqhkiG9w0BAQsFAAOCAQEAaS72zUopDBIP\nUAl3UdmGbAMkkwCVw64nWh1MN096P5KolJtWI98tNgKQTjK3tZBsOtRo+ws6AiTO\nbjx/e5zVYFby7NwMQOKRdpjcs8UTdFw4jnq8fvc+5L4CjJBABfSobL++z74qA1Sv\nav8N0ZYWxJK/cPX0s9v7xrVTCzWg0aPc08etW2hUo4Y++oOP2rKpCmQTxxR/ZkNv\nRNhtgFyg4LfXorh+gxgyFDjvM3TwC61w0N3cuuP3yROh08ZkyjzXeyyqZHJUESXm\ngpRd/alfUXmdFxW/jXQVAwWJXRTCTHgd+cv11mcRj4WOEs8crOMOQ/l/Ao83Owbo\nqG4r4/uz5w==\n-----END CERTIFICATE-----\n"
+   ],
+   "untrusted_intermediates": [],
+   "peer_certificate": "-----BEGIN CERTIFICATE-----\nMIICNTCCASGgAwIBAgIUFkE9uNVR/eJmu/X9vxuwXXYkFzIwCQYHKoZIzj0EATAR\nMQ8wDQYDVQQDDAZSb290IFMwHhcNMjYwMTAxMDAwMDAwWhcNMzYwMTAxMDAwMDAw\nWjAZMRcwFQYDVQQDDA52aWN0aW0uZXhhbXBsZTBZMBMGByqGSM49AgEGCCqGSM49\nAwEHA0IABIWY+tVKlPoLijG2cWIOJsOpd++Es1NbsKyKrDwnOCqLAjQnpJHRjWEc\ne75Tfr64VdNzJJVNvu33qttWjEQANw2jUDBOMAwGA1UdEwEB/wQCMAAwDgYDVR0P\nAQH/BAQDAgeAMBkGA1UdEQQSMBCCDnZpY3RpbS5leGFtcGxlMBMGA1UdJQQMMAoG\nCCsGAQUFBwMBMAkGByqGSM49BAEDggEBACq21ZtpOsdV6tvn20CWnpf/eC/LjTFS\nMDccUhztFZgyI75M0Da5JTjS6QfnQ+VquDdpCwUc09AVV1TRDs8c8GxZ3Ds5Ckkw\nSxh6yFawH3PIJRa7CXf6GwfV9pxewhqRpw6tO7J4EMWvdB3Br5zyMgNFrEGN3Rr4\ntyucv8xZQPSuJ5B1dEKtj13mQAZDMb1Gbxl7DeOzu9zDG3s4iFzHT21Xhh4L5Fe/\nyZ+VLMJvskvKg89cJu7wutcAcC4MhSgMchf+gkML4XGAXZDgHhpZCOfzyg33aN6I\nPiD1nzjS/wU8quYBXkTwEwgdSJqhPqejv0VoLD0Z5W7zetEK9VkxvkU=\n-----END CERTIFICATE-----\n",
+   "validation_time": "2027-01-01T00:00:00+00:00",
+   "expected_peer_name": {
+    "kind": "DNS",
+    "value": "victim.example"
+   },
+   "expected_result": "FAILURE",
+   "features": [],
+   "crls": [],
+   "mode": "ca"
+  },
+  {
+   "id": "bundle-sha1-confused::U4-confused-sha1::bundle",
+   "description": "leaf naming ecdsa-with-SHA1, signed PKCS#1 v1.5 SHA-1 by the RSA root",
+   "validation_kind": "SERVER",
+   "trusted_certs": [
+    "-----BEGIN CERTIFICATE-----\nMIIC0zCCAbugAwIBAgIUHZNpp8lGcKLSPsx6psx40NiF+3gwDQYJKoZIhvcNAQEL\nBQAwETEPMA0GA1UEAwwGUm9vdCBTMB4XDTI2MDEwMTAwMDAwMFoXDTM2MDEwMTAw\nMDAwMFowETEPMA0GA1UEAwwGUm9vdCBTMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\nMIIBCgKCAQEAplxtc0Xggap46yXPsPpR0Yo3n2GBWkVcst63bJUnOLHpCJlyjyC1\n0TwLEWvlVjj5MbMqMfe5In7ez4yhljZg5TA7JQqgZ8thAOFjU8QaaK9drWDZdBQP\n2JOk99MFVRJNWFzRiuaHIlf3+ubFGXYHVFGEMWh+D6Z0XiwLjkuQjY95J8ixxHOI\nAbDLKRe+mblctigKqCsSmavYYVFAJRpqQASw5D1FIJYMRnPrR6ox4oLclZ5VzJ4m\nZ+qvURkSQoORSdwtPqGCra2lrfF6HMXV8qqMxWR2qxhTpU31tiWIyBXI32YoAAH7\nwosepIN/H74qNnDsnSnhjOciNrospLr+xQIDAQABoyMwITAPBgNVHRMBAf8EBTAD\nAQH/MA4GA1UdDwEB/wQEAwIBBjANBgkqhkiG9w0BAQsFAAOCAQEAaS72zUopDBIP\nUAl3UdmGbAMkkwCVw64nWh1MN096P5KolJtWI98tNgKQTjK3tZBsOtRo+ws6AiTO\nbjx/e5zVYFby7NwMQOKRdpjcs8UTdFw4jnq8fvc+5L4CjJBABfSobL++z74qA1Sv\nav8N0ZYWxJK/cPX0s9v7xrVTCzWg0aPc08etW2hUo4Y++oOP2rKpCmQTxxR/ZkNv\nRNhtgFyg4LfXorh+gxgyFDjvM3TwC61w0N3cuuP3yROh08ZkyjzXeyyqZHJUESXm\ngpRd/alfUXmdFxW/jXQVAwWJXRTCTHgd+cv11mcRj4WOEs8crOMOQ/l/Ao83Owbo\nqG4r4/uz5w==\n-----END CERTIFICATE-----\n"
+   ],
+   "untrusted_intermediates": [],
+   "peer_certificate": "-----BEGIN CERTIFICATE-----\nMIICNTCCASGgAwIBAgIUFkE9uNVR/eJmu/X9vxuwXXYkFzIwCQYHKoZIzj0EATAR\nMQ8wDQYDVQQDDAZSb290IFMwHhcNMjYwMTAxMDAwMDAwWhcNMzYwMTAxMDAwMDAw\nWjAZMRcwFQYDVQQDDA52aWN0aW0uZXhhbXBsZTBZMBMGByqGSM49AgEGCCqGSM49\nAwEHA0IABIWY+tVKlPoLijG2cWIOJsOpd++Es1NbsKyKrDwnOCqLAjQnpJHRjWEc\ne75Tfr64VdNzJJVNvu33qttWjEQANw2jUDBOMAwGA1UdEwEB/wQCMAAwDgYDVR0P\nAQH/BAQDAgeAMBkGA1UdEQQSMBCCDnZpY3RpbS5leGFtcGxlMBMGA1UdJQQMMAoG\nCCsGAQUFBwMBMAkGByqGSM49BAEDggEBACq21ZtpOsdV6tvn20CWnpf/eC/LjTFS\nMDccUhztFZgyI75M0Da5JTjS6QfnQ+VquDdpCwUc09AVV1TRDs8c8GxZ3Ds5Ckkw\nSxh6yFawH3PIJRa7CXf6GwfV9pxewhqRpw6tO7J4EMWvdB3Br5zyMgNFrEGN3Rr4\ntyucv8xZQPSuJ5B1dEKtj13mQAZDMb1Gbxl7DeOzu9zDG3s4iFzHT21Xhh4L5Fe/\nyZ+VLMJvskvKg89cJu7wutcAcC4MhSgMchf+gkML4XGAXZDgHhpZCOfzyg33aN6I\nPiD1nzjS/wU8quYBXkTwEwgdSJqhPqejv0VoLD0Z5W7zetEK9VkxvkU=\n-----END CERTIFICATE-----\n",
+   "validation_time": "2027-01-01T00:00:00+00:00",
+   "expected_peer_name": {
+    "kind": "DNS",
+    "value": "victim.example"
+   },
+   "expected_result": "FAILURE",
+   "features": [],
+   "crls": [],
+   "mode": "bundle"
+  }
+ ]
+}

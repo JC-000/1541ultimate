@@ -309,6 +309,7 @@ x509 tc=pss-salt::salt-not-as-declared::bundle security-deviation rsa-pss-any-sa
 # in CA mode: a valid chain naming its root in another case or string type is refused.
 x509 tc=bundle-idf6::T2-issuer-case-differs::bundle reject fail-closed: the issuer is looked up by its raw bytes (esp_crt_bundle.c:295), so ROOT A does not find Root A
 x509 tc=bundle-idf6::T2b-issuer-printable::bundle reject fail-closed: the issuer is looked up by its raw bytes (esp_crt_bundle.c:295), so a PrintableString Root A does not find the UTF8String one
+x509 tc=bundle-sha1-confused::U4-confused-sha1::bundle security-deviation bundle-sig-alg-unchecked the same with SHA-1: BAD_MD is masked off (esp_crt_bundle.c:348) and the callback verifies the PKCS#1 v1.5 SHA-1 signature (esp_crt_bundle.c:172, :196-199)
 x509 tc=bundle::expired-root::bundle security-deviation bundle-root-validity-unchecked the bundle keeps no validity, and the verify callback clears EXPIRED on the CA it makes from a bundle entry (esp_crt_bundle.c:331-340): an expired root still verifies what it signed
 # ---- Known vulnerabilities of the pinned mbedTLS -------------------------------------------
 # known-vulnerable <CVE> <first fixed version>: the vector must still show the vulnerable outcome.

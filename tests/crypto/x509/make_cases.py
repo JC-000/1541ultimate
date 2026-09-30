@@ -42,6 +42,10 @@ byte comparison refuses), an expired leaf whose subject is a bundled root's name
 signatures under a bundle root, forged and honest (T4), and algorithm-confused leaves (see
 bundle-rsa.json) that are also expired, not yet valid or for another host (U1-U3).
 
+bundle-sha1-confused.json: the algorithm-confused leaf of bundle-rsa.json with SHA-1: it names
+ecdsa-with-SHA1 over a PKCS#1 v1.5 SHA-1 signature by the RSA bundle root, so on ESP-IDF 6 it
+reaches the verify callback with BAD_MD set as well as NOT_TRUSTED (must fail).
+
 pss-salt.json: an X.509 certificate signed with RSASSA-PSS whose parameters say one salt length
 and whose signature uses another (RFC 4055 3.1).
 
@@ -979,6 +983,32 @@ def main():
                 )
             )
     write("bundle-idf6.json", cases)
+
+    # The algorithm-confused leaf with SHA-1 (conf4-adversarial1 H2: md-unmasked)
+    s_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    s_root = cert("Root S", s_key, "Root S", s_key, CA)
+    s_leaf = cert("victim.example", p256(), "Root S", p256(), server("victim.example"))
+    tbs = children(s_leaf.public_bytes(serialization.Encoding.DER))[0]
+    fields = children(tbs)
+    ecdsa_sha1 = der(0x30, der(0x06, bytes.fromhex("2a8648ce3d0401")))  # 1.2.840.10045.4.1
+    fields[2] = ecdsa_sha1
+    tbs = der(0x30, b"".join(fields))
+    sig = s_key.sign(tbs, padding.PKCS1v15(), hashes.SHA1())
+    s_leaf = x509.load_der_x509_certificate(der(0x30, tbs + ecdsa_sha1 + der(0x03, b"\0" + sig)))
+    cases = [
+        case(
+            "bundle-sha1-confused::U4-confused-sha1::%s" % mode,
+            "leaf naming ecdsa-with-SHA1, signed PKCS#1 v1.5 SHA-1 by the RSA root",
+            s_root,
+            [],
+            s_leaf,
+            "victim.example",
+            "FAILURE",
+            mode=mode,
+        )
+        for mode in ("ca", "bundle")
+    ]
+    write("bundle-sha1-confused.json", cases)
 
     # RSASSA-PSS parameters that say salt 32 over a signature with salt 20 (conf4-adversarial1 M3)
     p_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
