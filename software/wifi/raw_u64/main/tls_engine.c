@@ -20,13 +20,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "mbedtls/ssl.h"
-#include "mbedtls/ctr_drbg.h"
-#include "mbedtls/entropy.h"
 #include "mbedtls/x509_crt.h"
-#include "mbedtls/bignum.h"
-#include "mbedtls/asn1.h"
-#include "mbedtls/pem.h"
-#include "mbedtls/pk.h"
 #include "psa/crypto.h"
 #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
 #include "esp_crt_bundle.h"
@@ -38,6 +32,9 @@
 
 #if !CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
 #error "The TLS spike is a TLS 1.3 client: enable CONFIG_MBEDTLS_SSL_PROTO_TLS1_3"
+#endif
+#if MBEDTLS_VERSION_MAJOR < 4
+#error "This engine is written for mbedTLS 4 (ESP-IDF 6): randomness and allocation failures come from PSA"
 #endif
 #if !CONFIG_MBEDTLS_HAVE_TIME_DATE
 #error "Without CONFIG_MBEDTLS_HAVE_TIME_DATE certificate dates are ignored: an expired certificate would verify"
@@ -67,8 +64,6 @@ _Static_assert(TLS_OUT_BUF_SIZE > TLS_STEP_IN_MAX, "one step of plaintext must f
 typedef struct {
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
-    mbedtls_ctr_drbg_context drbg;
-    mbedtls_entropy_context entropy;
     mbedtls_x509_crt ca;
     uint8_t id;
     uint32_t last_used;
@@ -186,8 +181,6 @@ static void tls_free(tls_session_t *s)
     mbedtls_ssl_free(&s->ssl);
     mbedtls_ssl_config_free(&s->conf);
     mbedtls_x509_crt_free(&s->ca);
-    mbedtls_ctr_drbg_free(&s->drbg);
-    mbedtls_entropy_free(&s->entropy);
     // The certificate bundle is shared: esp_crt_bundle_detach() would free it under the other session
     free(s);
 }
@@ -212,12 +205,9 @@ static int tls_out_of_memory(int ret)
     if (ret >= 0) {
         return 0;
     }
-    // mbedTLS may add a low-level code (ASN.1, bignum) to a high-level one (X.509, PK, SSL)
-    int high = -ret & 0xFF80;
-    int low = -ret & 0x007F;
-    return (high == -MBEDTLS_ERR_SSL_ALLOC_FAILED) || (high == -MBEDTLS_ERR_X509_ALLOC_FAILED) ||
-           (high == -MBEDTLS_ERR_PK_ALLOC_FAILED) || (high == -MBEDTLS_ERR_PEM_ALLOC_FAILED) ||
-           (low == -MBEDTLS_ERR_MPI_ALLOC_FAILED) || (low == -MBEDTLS_ERR_ASN1_ALLOC_FAILED);
+    // mbedTLS 4 reports every allocation failure (SSL, X.509, PK, PEM, ASN.1, bignum) as this one
+    // PSA code, and no longer adds a low-level code to a high-level one (private/error_common.h)
+    return ret == PSA_ERROR_INSUFFICIENT_MEMORY;
 }
 
 // Builds a complete session for slot without putting it in the table; frees it on failure
@@ -239,26 +229,20 @@ static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const c
     mbedtls_ssl_init(&s->ssl);
     mbedtls_ssl_config_init(&s->conf);
     mbedtls_x509_crt_init(&s->ca);
-    mbedtls_ctr_drbg_init(&s->drbg);
-    mbedtls_entropy_init(&s->entropy);
 
-    static const char pers[] = "u64 tls spike";
-    int ret = mbedtls_ctr_drbg_seed(&s->drbg, mbedtls_entropy_func, &s->entropy,
-                                    (const unsigned char *)pers, sizeof(pers) - 1);
-    if (ret == 0) {
-        ret = mbedtls_ssl_config_defaults(&s->conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
+    // Every random byte (client random, key shares) comes from PSA: see tls_open()
+    int ret = mbedtls_ssl_config_defaults(&s->conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
                                           MBEDTLS_SSL_PRESET_DEFAULT);
-    }
     if (ret == 0) {
+        // ESP-IDF 6 always builds TLS 1.2 in (MBEDTLS_TLS_ENABLED selects it): only these two keep it out
         mbedtls_ssl_conf_min_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
         mbedtls_ssl_conf_max_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
-        mbedtls_ssl_conf_rng(&s->conf, mbedtls_ctr_drbg_random, &s->drbg);
-#if defined(MBEDTLS_SSL_TLS1_3_SIGNAL_NEW_SESSION_TICKETS_ENABLED) && defined(MBEDTLS_SSL_SESSION_TICKETS)
-        // mbedTLS 3.6.0 and 4.x always hand a TLS 1.3 ticket to the caller; 3.6.1 to 3.6.x only
-        // when asked. Ask, so every version takes the one ticket path tls_step() has.
-        mbedtls_ssl_conf_tls13_enable_signal_new_session_tickets(&s->conf,
-                                                                 MBEDTLS_SSL_TLS1_3_SIGNAL_NEW_SESSION_TICKETS_ENABLED);
-#endif
+        // mbedTLS 4's default list adds x448 and FFDHE 2048-8192 (an 8192-bit modexp on the ESP32):
+        // offer what mbedTLS 3.6.0 offered here, in its order. mbedTLS keeps the pointer, so static.
+        static const uint16_t groups[] = { MBEDTLS_SSL_IANA_TLS_GROUP_X25519, MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
+                                           MBEDTLS_SSL_IANA_TLS_GROUP_SECP384R1, MBEDTLS_SSL_IANA_TLS_GROUP_SECP521R1,
+                                           MBEDTLS_SSL_IANA_TLS_GROUP_NONE };
+        mbedtls_ssl_conf_groups(&s->conf, groups);
         mbedtls_ssl_conf_authmode(&s->conf, verify ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
 #if CONFIG_TLS_SPIKE
         if (!verify) {
@@ -333,9 +317,11 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
         return ESP_ERR_NOT_SUPPORTED;
     }
 #endif
-    // TLS 1.3 key shares come from PSA's global RNG, not from the session DRBG, and PSA seeds it
-    // from the hardware RNG inside psa_crypto_init(). So the first init happens here, behind the
-    // entropy gate, and nowhere else (M2-SPEC section 8). mbedTLS needs it before any TLS 1.3 handshake.
+    // All randomness comes from PSA. ESP-IDF 6 has already run psa_crypto_init() at startup, before
+    // the radio, but with MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG: PSA keeps no seeded state and draws every
+    // byte from esp_fill_random() when it is needed. A session draws only after this entropy gate,
+    // and the radio then stays on, so the gate still decides (M2-SPEC section 8). This init is then
+    // a no-op; it stays for builds that do not initialise PSA at startup.
     if (!psa_ready) {
         psa_status_t status = psa_crypto_init();
         if (status != PSA_SUCCESS) {
@@ -483,7 +469,7 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
                     done += n;
                 } else if ((n == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) && (++tickets <= TLS_TICKET_RETRIES)) {
                     // A ticket an earlier read left pending: mbedtls_ssl_write() took it first and wrote
-                    // nothing, so write again (ssl_msg.c:6057-6062 in mbedTLS 3.6.0). Not a failure.
+                    // nothing, so write again (ssl_msg.c:5938-5942 in mbedTLS 4.1.1). Not a failure.
                     continue;
                 } else {
                     ret = n ? n : MBEDTLS_ERR_SSL_INTERNAL_ERROR;
@@ -505,7 +491,7 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
             pt_len += n;
         } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) && mbedtls_ssl_check_pending(&s->ssl)) {
             // A complete ticket makes mbedtls_ssl_read() return WANT_READ with the ticket kept for the
-            // next call (ssl_msg.c:5583-5589 in mbedTLS 3.6.0), which takes it without new input.
+            // next call (ssl_msg.c:5466-5473 in mbedTLS 4.1.1), which takes it without new input.
             // Take every one now, or the reply behind them waits for a step the Ultimate never sends.
             continue;
         } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) || (n == MBEDTLS_ERR_SSL_WANT_WRITE)) {
