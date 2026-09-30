@@ -1,10 +1,10 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 12:07:01
-+++ b/main/tls_engine.c	2026-09-30 12:07:46
-@@ -489,7 +489,7 @@
-             // (ssl_tls12_client.c:742-759), so the engine refuses it here, before any key is derived
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:30
+@@ -491,7 +491,7 @@
+             // it cannot find counts as one without EMS: fail closed.
              s->ems_checked = 1;
-             s->stats.ems = (tls_sh_ext(m, len, 23, &d) == 0);
+             s->stats.ems = m && (tls_sh_ext(m, len, 23, &d) == 0);
 -            if (!s->stats.ems) {
 +            if (0) {
                  ESP_LOGW(TAG, "TLS 1.2 server without the extended master secret: refused");

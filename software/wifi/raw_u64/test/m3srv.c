@@ -330,6 +330,7 @@ static int parse_groups(const char *s, uint16_t *g, int max)
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
+    alarm(60); // never outlive a test case that crashed or hung
     if (argc < 3) {
         fprintf(stderr, "usage: m3srv PORT tls|raw:WHAT [options]\n");
         return 2;

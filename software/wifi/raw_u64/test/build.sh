@@ -2,6 +2,7 @@
 # Builds the engine host test (engine_test.c) and its server (m3srv.c).
 #   build.sh [VARIANT...]     VARIANT = head (this tree, the default) | base (the M2 engine at a846369f, for RED runs)
 #                             | mut-NAME (this tree with mutants/NAME.patch applied)
+#                             | at-SHA[+NAME] (the engine at commit SHA, optionally with mutant NAME applied)
 # Inputs, all read-only (override with the environment):
 #   MB4   mbedTLS 4.1.1 (espressif ce3f3485) built by build_mb4.sh with this bridge's sdkconfig, ASan+UBSan
 #   S4    its source tree; IDF: ESP-IDF v6.0.3 (76f5dedd), for esp_crt_bundle.c and gen_crt_bundle.py
@@ -15,7 +16,7 @@ S4=${S4:-$AR/session-0929/engine4-work/mbedtls-4.1.1}
 IDF=${IDF:-$AR/session-0929/engine4-work/idf-v6.0.3}
 SRV=${SRV:-$AR/session-0930/m3esp-work/srv36}
 S36=${S36:-$AR/session-0928/fixreview-work/mbedtls-3.6.0}
-BD=$T/build; mkdir -p $BD
+BD=$T/build; mkdir -p $BD $T/stub/x # stub/x: "../lwip/..." includes resolve from it (an empty dir git does not keep)
 $T/mkpki.sh $BD/pki
 
 # The certificate bundle the BUNDLE cases verify against: the test root only, in ESP-IDF 6's own format
@@ -48,6 +49,9 @@ for v in ${@:-head}; do
     base) git -C $REPO archive a846369f software/wifi/raw_u64/main software/wifi/raw_u64/sdkconfig | tar -x -C $O/src
           M=$O/src/software/wifi/raw_u64/main; SDK=$O/src/software/wifi/raw_u64/sdkconfig; EXTRA=(-DBASE_ENGINE); CA=($BD/testca.s);;
     head) M=$RAW/main; SDK=$RAW/sdkconfig; EXTRA=(); CA=();;
+    at-*) sha=${${v#at-}%%+*}; git -C $REPO archive $sha software/wifi/raw_u64/main | tar -x -C $O/src   # at-SHA[+MUTANT]
+          [[ $v == *+* ]] && patch -s -d $O/src/software/wifi/raw_u64 -p1 < $T/mutants/${v#*+}.patch
+          M=$O/src/software/wifi/raw_u64/main; SDK=$RAW/sdkconfig; EXTRA=(); CA=();;
     mut-*) mkdir -p $O/src/main; cp -R $RAW/main/. $O/src/main/; patch -s -d $O/src -p1 < $T/mutants/${v#mut-}.patch
           M=$O/src/main; SDK=$RAW/sdkconfig; EXTRA=(); CA=();;
   esac

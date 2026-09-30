@@ -60,7 +60,7 @@ static tls_session_t *tls_find_close(uint8_t slot, uint16_t tag)
  'no_group_list': [(E, '        mbedtls_ssl_conf_groups(&s->conf, tls_groups);\n', '')],
  'tickets_12_on': [(E, '        mbedtls_ssl_conf_session_tickets(&s->conf, MBEDTLS_SSL_SESSION_TICKETS_DISABLED);\n', '')],
  'ems_not_required': [(E, '            if (!s->stats.ems) {\n                ESP_LOGW', '            if (0) {\n                ESP_LOGW')],
- 'ems_any_extension': [(E, 's->stats.ems = (tls_sh_ext(m, len, 23, &d) == 0);', 's->stats.ems = 1;')],
+ 'ems_any_extension': [(E, 's->stats.ems = m && (tls_sh_ext(m, len, 23, &d) == 0);', 's->stats.ems = 1;')],
  'require13_ignored': [(E, '(p->opts & TLS_OPT_REQUIRE_TLS13) ? MBEDTLS_SSL_VERSION_TLS1_3', '0 ? MBEDTLS_SSL_VERSION_TLS1_3')],
  'group_left_0': [(E, '                s->stats.group = (d[0] << 8) | d[1];', '                (void)d;'), (E, '        s->stats.group = (m[5] << 8) | m[6];', '        (void)m;')],
  'sentinel_unclassified': [(E, '            r->fail_reason = TLS_FAIL_DOWNGRADE;', '            r->fail_reason = TLS_FAIL_NONE;')],
@@ -111,6 +111,12 @@ static tls_session_t *tls_find_close(uint8_t slot, uint16_t tag)
         }''', '''        tls_serve(pbuffer);''')],
  'flags_unchecked': [(E, '    if ((flags & ~TLS_STEP_NO_READ) || (ct_in_len < 0)', '    if ((ct_in_len < 0)')],
  'no_block_timing': [(D, '''    if (ms > block_max_ms) {''', '''    if (0) {''')],
+ # m3espadv (reports/m3-esp-adversarial1.md), carried over
+ 'adv_sntp_ignored': [(E, '    if (sntp_has_time() && (time(NULL) > floor)) {\n        return TLS_TIME_SNTP;\n    }\n', '')],
+ 'adv_orphan_freed_on_bad_args': [(E, '    *reason = TLS_OPEN_REASON_NONE;\n    // Verifying', '    *reason = TLS_OPEN_REASON_NONE;\n    if ((slot < TLS_MAX_SESSIONS) && sessions[slot]) {\n        tls_free(sessions[slot]);\n    }\n    // Verifying')],
+ 'adv_alert_out_encrypted': [(E, '(s->ssl.out_msgtype == MBEDTLS_SSL_MSG_ALERT) && (s->ssl.transform_out == NULL) &&', '(s->ssl.out_msgtype == MBEDTLS_SSL_MSG_ALERT) &&')],
+ 'adv_heap_min_not_reset': [(E, '        heap_caps_monitor_local_minimum_free_size_stop();\n        heap_caps_monitor_local_minimum_free_size_start();\n', '')],
+ 'adv_sh_not_found': [(E, '    const uint8_t *m = s->ssl.in_msg;\n    size_t n = s->ssl.in_hslen;\n', '    const uint8_t *m = s->ssl.in_msg;\n    size_t n = s->ssl.in_hslen;\n    if (type == MBEDTLS_SSL_HS_SERVER_HELLO) {\n        return NULL; // models an mbedTLS change: the ServerHello is no longer in in_msg after its step\n    }\n')],
 }
 os.makedirs(RAW + '/test/mutants', exist_ok=True)
 for name, edits in M.items():

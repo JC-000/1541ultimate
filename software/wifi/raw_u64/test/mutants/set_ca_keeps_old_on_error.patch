@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 12:07:01
-+++ b/main/tls_engine.c	2026-09-30 12:07:46
-@@ -786,9 +786,6 @@
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:30
+@@ -795,9 +795,6 @@
  int tls_set_ca(const uint8_t *der, int der_len, uint16_t ca_tag, uint8_t *reject)
  {
      *reject = TLS_CA_REJECT_NONE;
@@ -11,7 +11,7 @@ diff -ru a/main/tls_engine.c b/main/tls_engine.c
      if ((der_len <= 0) || (der_len > TLS_CA_MAX_LEN) || (ca_tag == 0)) {
          return ESP_ERR_INVALID_ARG;
      }
-@@ -816,6 +813,7 @@
+@@ -825,6 +822,7 @@
          tls_ca_release(ca);
          return ret;
      }

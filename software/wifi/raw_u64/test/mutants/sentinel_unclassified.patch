@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 12:07:01
-+++ b/main/tls_engine.c	2026-09-30 12:07:46
-@@ -524,7 +524,7 @@
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:30
+@@ -526,7 +526,7 @@
              const uint8_t *m = s->ssl.in_msg; // the ServerHello: handshake header, then legacy_version
              r->verify_flags = (m && (s->ssl.in_msgtype == MBEDTLS_SSL_MSG_HANDSHAKE)) ? ((m[4] << 8) | m[5]) : 0;
          } else {

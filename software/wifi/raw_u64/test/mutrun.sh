@@ -6,7 +6,7 @@ names=(${@:-$(ls mutants/*.patch | xargs -n1 basename | sed 's/\.patch$//')})
 one() {
   n=$1; k=$2
   ./build.sh mut-$n > build/mut-$n.build.txt 2>&1 || { echo "MUTANT $n BUILD-FAILED"; return; }
-  PORTBASE=$((24000 + k * 1000)) ./run.sh mut-$n > build/mut-$n/run.txt 2>&1
+  PORTBASE=$((${MUTBASE:-24000} + k * 1000)) ./run.sh mut-$n > build/mut-$n/run.txt 2>&1
   killed=$(grep -E "^FAIL " build/mut-$n/run.txt | awk '{print $2}' | sort -u | tr '\n' ' ')
   if [ -n "$killed" ]; then echo "MUTANT $n KILLED by: $killed"; else echo "MUTANT $n SURVIVED"; fi
 }

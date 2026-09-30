@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 12:07:01
-+++ b/main/tls_engine.c	2026-09-30 12:07:45
-@@ -658,7 +658,7 @@
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:29
+@@ -667,7 +667,7 @@
      // a NO_READ step (a WRITE's): what is pending stays in the engine for the next plain step
      int ct_len = (s->out_len < TLS_STEP_OUT_MAX) ? s->out_len : TLS_STEP_OUT_MAX;
      int pt_len = 0;

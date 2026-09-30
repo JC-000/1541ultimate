@@ -84,7 +84,8 @@ void vTaskDelay(TickType_t t) { timer_offset_us += (int64_t)t * 1000; } /* a blo
 size_t heap_caps_get_free_size(uint32_t c) { (void)c; return 111111; }
 size_t heap_caps_get_minimum_free_size(uint32_t c) { (void)c; return 99999; }
 size_t heap_caps_get_largest_free_block(uint32_t c) { (void)c; return 55555; }
-esp_err_t heap_caps_monitor_local_minimum_free_size_start(void) { return ESP_OK; }
+static int monitor_starts; // heap_min's low-water mark restarts at the OPEN that finds no session open
+esp_err_t heap_caps_monitor_local_minimum_free_size_start(void) { monitor_starts++; return ESP_OK; }
 esp_err_t heap_caps_monitor_local_minimum_free_size_stop(void) { return ESP_OK; }
 UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t t) { (void)t; return 4321; }
 void esp_fill_random(void *buf, size_t len) { arc4random_buf(buf, len); }
@@ -627,6 +628,23 @@ static void c_open_args(void)
     g_time_source = 1;
     stats_r s = tls_stats(0xFF, 0);
     CHECK(s.sessions == 0, "no session opened by a refused OPEN");
+    // A refused OPEN touches nothing, not even an orphan in the slot it names (Q3)
+    CHECK(tls_open(0, 7, PIN, 0, 0, pin, "m3.test").err == 0, "a session in slot 0");
+    CHECK(tls_open(0, 8, 3, 0, 0, pin, "m3.test").err == E_INVALID_ARG, "trust 3 into slot 0 refused");
+    CHECK(tls_open(0, 0, PIN, 0, 0, pin, "m3.test").err == E_INVALID_ARG, "tag 0 into slot 0 refused");
+    CHECK(tls_open(0, 8, BUNDLE, 0x02, 0, NULL, "m3.test").err == E_INVALID_ARG, "opts bit1 into slot 0 refused");
+    CHECK(tls_stats(0, 7).err == 0, "the session in slot 0 survives refused OPENs");
+}
+
+/* heap_min restarts its low-water mark at the OPEN that finds no session open, and only then */
+static void c_heap_min(void)
+{
+    uint8_t pin[32] = { 1 };
+    int before = monitor_starts;
+    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "m3.test").err == 0, "first OPEN");
+    CHECK(monitor_starts == before + 1, "restarted by the OPEN into an empty table (%d)", monitor_starts - before);
+    CHECK(tls_open(1, 2, PIN, 0, 0, pin, "m3.test").err == 0, "second OPEN");
+    CHECK(monitor_starts == before + 1, "not restarted with a session open (%d)", monitor_starts - before);
 }
 
 /* 5.1 the entropy gate: reason 1 and no random byte drawn */
@@ -1218,6 +1236,44 @@ static void c_fatal_alert(void)
     srv_end(2000);
 }
 
+/* 5.2 alert_out is only an alert sent before any keys: a record that fails its MAC after the handshake makes the
+   engine send an encrypted bad_record_mac, and alert_out stays none */
+static void alert_out_case(const char *ver)
+{
+    uint8_t spki[32];
+    load("leaf.spki", spki, 32);
+    int fd = srv_start("tls", ver, pki("leaf.chain.pem"), pki("leaf.key"), "run=sleep:200,app:100,drain", NULL);
+    conn_t c;
+    CHECK(connect_open(&c, fd, PIN, 0, 0, spki, "m3.test") == ESTABLISHED, "established");
+    for (int i = 0; i < 40 && c.state == ESTABLISHED; i++) {
+        if (c.socklen == 0 && gather(&c, 50, 50, sizeof(c.sock)) > 0) c.sock[c.socklen - 1] ^= 0x55; // a man in the middle
+        pump_step(&c, 0, NULL, 0);
+    }
+    CHECK(c.state == FAILED && c.r.err == -0x7180, "%s: a bad MAC fails the session (state %d, -0x%x)", ver, c.state, -c.r.err);
+    CHECK(c.r.ct_len > 7, "%s: the engine sent its (encrypted) alert (%d B)", ver, c.r.ct_len);
+    CHECK(c.r.alert_out == 0xFF, "%s: alert_out none for an encrypted alert (%d)", ver, c.r.alert_out);
+    close(fd);
+    srv_end(2000);
+}
+static void c_alert_out_12(void) { alert_out_case("ver=12"); }
+static void c_alert_out_13(void) { alert_out_case("ver=13"); }
+
+/* 3.5 SNTP wins over the Nios's time, and SNTP alone is a clock (m3espadv, MEDIUM-1) */
+static void c_sntp_wins(void)
+{
+    time_t sntp_now = real_now();
+    fake_now = sntp_now; sntp_flag = 1;
+    g_time_source = 0; g_unix_time = 0;
+    open_r o = tls_open(0, 1, BUNDLE, 0, 0, NULL, "m3.test");
+    CHECK(o.err == 0, "BUNDLE with SNTP time and no Nios time opens (0x%x, %d)", o.err, o.reason);
+    CHECK(tls_stats(0, 1).time_source == 2, "session time_source SNTP (%u)", tls_stats(0, 1).time_source);
+    g_time_source = 1; g_unix_time = (uint32_t)sntp_now + 86400 * 400;   // a later, different Nios time
+    o = tls_open(1, 2, BUNDLE, 0, 0, NULL, "m3.test");
+    CHECK(o.err == 0 && fake_now == sntp_now, "the Nios's time does not replace SNTP (clock moved by %ld s)", (long)(fake_now - sntp_now));
+    CHECK(tls_stats(1, 2).time_source == 2, "session time_source SNTP, not NIOS (%u)", tls_stats(1, 2).time_source);
+    sntp_flag = 0;
+}
+
 typedef struct { const char *name; void (*fn)(void); int net; } tcase_t;
 static const tcase_t cases[] = {
     { "task", c_task, 0 }, { "queue_full", c_queue_full, 0 }, { "block_max", c_block_max, 0 }, { "sizes", c_sizes, 0 },
@@ -1238,6 +1294,8 @@ static const tcase_t cases[] = {
     { "e2_12", c_e2_12, 1 }, { "e2_12_queued", c_e2_12_queued, 1 }, { "e2_13", c_e2_13, 1 },
     { "tag_rule", c_tag_rule, 1 }, { "step_flags", c_step_flags, 0 }, { "close_notify", c_close_notify, 1 },
     { "close_all", c_close_all, 0 }, { "fatal_alert", c_fatal_alert, 1 },
+    { "heap_min", c_heap_min, 0 }, { "alert_out_12", c_alert_out_12, 1 }, { "alert_out_13", c_alert_out_13, 1 },
+    { "sntp_wins", c_sntp_wins, 0 },
 };
 
 int main(int argc, char **argv)
