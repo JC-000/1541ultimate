@@ -442,10 +442,10 @@ static int tls_sh_ext(const uint8_t *m, size_t len, uint16_t type, const uint8_t
         return -1;
     }
     p += 2 + 32;                        // legacy_version, random
-    p += 1 + p[0];                      // session id
-    if (end - p < 2 + 1 + 2) {
+    if (end - p < 1 + p[0] + 2 + 1 + 2) {
         return -1;
     }
+    p += 1 + p[0];                      // session id
     p += 2 + 1;                         // cipher suite, compression
     const uint8_t *eend = p + 2 + ((p[0] << 8) | p[1]);
     p += 2;
@@ -478,17 +478,19 @@ static int tls_note_handshake(tls_session_t *s, int state_before, int version_be
     int state = s->ssl.state;
     const uint8_t *m, *d;
     size_t len;
-    if ((state_before == MBEDTLS_SSL_SERVER_HELLO) && (state != MBEDTLS_SSL_SERVER_HELLO) &&
-        (m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len)) != NULL) {
+    if ((state_before == MBEDTLS_SSL_SERVER_HELLO) && (state != MBEDTLS_SSL_SERVER_HELLO)) {
+        m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len);
         if (version_before == MBEDTLS_SSL_VERSION_TLS1_3) {
-            if (tls_sh_ext(m, len, 51, &d) >= 2) { // key_share: the group comes first in both forms
+            if (m && (tls_sh_ext(m, len, 51, &d) >= 2)) { // key_share: the group comes first in both forms
                 s->stats.group = (d[0] << 8) | d[1];
             }
+            // Not found: the group stays 0, and tls_handshake() refuses the session
         } else if (!s->ems_checked) {
             // mbedtls_ssl_conf_extended_master_secret() only offers it: a server that does not echo it is accepted
-            // (ssl_tls12_client.c:742-759), so the engine refuses it here, before any key is derived
+            // (ssl_tls12_client.c:742-759), so the engine refuses it here, before any key is derived. A ServerHello
+            // it cannot find counts as one without EMS: fail closed.
             s->ems_checked = 1;
-            s->stats.ems = (tls_sh_ext(m, len, 23, &d) == 0);
+            s->stats.ems = m && (tls_sh_ext(m, len, 23, &d) == 0);
             if (!s->stats.ems) {
                 ESP_LOGW(TAG, "TLS 1.2 server without the extended master secret: refused");
                 mbedtls_ssl_send_alert_message(&s->ssl, MBEDTLS_SSL_ALERT_LEVEL_FATAL,
@@ -560,6 +562,13 @@ static int tls_handshake(tls_session_t *s, tls_step_result_t *r)
             tls_classify(s, ret, state_before, version_before, r);
             return ret;
         }
+    }
+    if (s->stats.group == 0) {
+        // The group is never 0 once ESTABLISHED (5.2): if it was not found, the reads above no longer match this
+        // mbedTLS, and nothing they check (EMS) can be trusted either. Fail closed.
+        ESP_LOGE(TAG, "Negotiated group not found in the server's messages: session refused");
+        mbedtls_ssl_send_alert_message(&s->ssl, MBEDTLS_SSL_ALERT_LEVEL_FATAL, MBEDTLS_SSL_ALERT_MSG_INTERNAL_ERROR);
+        return MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE;
     }
     s->stats.state = TLS_STATE_ESTABLISHED;
     s->stats.tls_version = (uint16_t)mbedtls_ssl_get_version_number(&s->ssl);
