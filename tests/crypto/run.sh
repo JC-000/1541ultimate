@@ -34,8 +34,11 @@ OUT=${1:-$HERE/output}
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 
+# The run reads this directory and software/wifi (the 3.6 engine and sdkconfig): a change to
+# either is named, so the tree line never stamps a modified run as the commit
 echo "tree $(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo unknown)$(
-    [ -z "$(git -C "$HERE" status --porcelain -- . 2>/dev/null)" ] || echo ' (tests/crypto modified)')"
+    [ -z "$(git -C "$HERE" status --porcelain -- . ../../software/wifi 2>/dev/null)" ] ||
+        echo ' (tests/crypto or software/wifi modified)')"
 # The build's own output (with every hardware option it replaced) goes to the log; the summary
 # keeps the pins, the sdkconfig and the configuration used
 "$HERE/build_mbedtls.sh" "$OUT" ${CRYPTO_CONFIG:+"$CRYPTO_CONFIG"} > "$OUT/build_mbedtls.txt" 2>&1 ||
