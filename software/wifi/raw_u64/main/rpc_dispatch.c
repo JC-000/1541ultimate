@@ -6,6 +6,7 @@
  */
 
 
+#include "ndebug_guard.h" // first: refuses NDEBUG builds
 #include <stddef.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"

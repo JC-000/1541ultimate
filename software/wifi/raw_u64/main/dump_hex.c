@@ -20,6 +20,7 @@
  *
  */
 
+#include "ndebug_guard.h" // first: refuses NDEBUG builds
 #include <stdint.h>
 #include <stdio.h>
 

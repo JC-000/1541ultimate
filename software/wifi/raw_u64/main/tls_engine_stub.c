@@ -6,6 +6,7 @@
  * is not linked. Never flashed to a rig.
  */
 
+#include "ndebug_guard.h" // first: refuses NDEBUG builds
 #include <string.h>
 #include "esp_err.h"
 #include "tls_engine.h"
