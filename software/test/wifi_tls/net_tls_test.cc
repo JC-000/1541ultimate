@@ -1449,6 +1449,11 @@ static void test_status_lengths(void)
     Res r = run(open_cmd(0, 0, "example.com"));
     check(r.status == "13,TLS HANDSHAKE FAILED: PEER RESET: 999" && r.status.size() == 40,
           "ER-8: '%s' is %d bytes", r.status.c_str(), (int)r.status.size());
+    fresh();
+    world_socks[0].srv.send_err = E;
+    r = run(open_cmd(0, 0, "example.com"));
+    check(r.status == "13,TLS HANDSHAKE FAILED: SEND ERROR: 999" && r.status.size() == 40,
+          "ER-8: '%s' is %d bytes (D3 wording, 3-digit errno)", r.status.c_str(), (int)r.status.size());
     expect_fail(0, 4, 0xFFFFFFFE, N, -0x2700, "94,CERTIFICATE NAME MISMATCH: 0xFFFFFFFE", "ER-8 worst 94");
     expect_fail(0, 4, 0xFFFFFFFF, N, -0x2700, "93,CERTIFICATE NOT TRUSTED: 0xFFFFFFFF", "ER-8 worst 93");
     expect_fail(0, 4, 0xFFFFFFFB, N, -0x2700, "95,CERTIFICATE EXPIRED: 0xFFFFFFFB", "ER-8 worst 95");
@@ -1603,14 +1608,14 @@ static void test_adversarial(void)
     int t = open_tcp();
     sock(t).send_err = ECONNRESET;
     r = run(start_cmd(t, 2, 0, "", PIN()));
-    check(r.status == "13,TLS HANDSHAKE FAILED: PEER RESET: " + num(ECONNRESET) && !sock(t).open,
-          "ADV-5/D3: START_TLS whose ClientHello send meets an RST -> 13 PEER RESET: errno, handle closed "
+    check(r.status == "13,TLS HANDSHAKE FAILED: SEND ERROR: " + num(ECONNRESET) && !sock(t).open,
+          "ADV-5/D3: START_TLS whose ClientHello send meets an RST -> 13 SEND ERROR: errno, handle closed "
           "(got '%s', handle %s)", r.status.c_str(), sock(t).open ? "open" : "closed");
     fresh();
     world_socks[0].srv.send_err = EPIPE; // OPEN_TLS: the new socket's first send fails
     r = run(open_cmd(0, 0, "example.com"));
-    check(r.status == "13,TLS HANDSHAKE FAILED: PEER RESET: " + num(EPIPE) && world_open_sockets() == 0 &&
-          world_count(0x32) == 1, "D3: OPEN_TLS whose ClientHello send fails -> 13 PEER RESET: errno, CLOSE RPC (got '%s')",
+    check(r.status == "13,TLS HANDSHAKE FAILED: SEND ERROR: " + num(EPIPE) && world_open_sockets() == 0 &&
+          world_count(0x32) == 1, "D3: OPEN_TLS whose ClientHello send fails -> 13 SEND ERROR: errno, CLOSE RPC (got '%s')",
           r.status.c_str());
 
     // ADV-6 (1.4): 17 is not a kept code. The module's queue-full answer to OPEN (esp_err
