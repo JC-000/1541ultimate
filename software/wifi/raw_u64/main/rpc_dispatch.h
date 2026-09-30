@@ -41,7 +41,8 @@ void send_keepalive();
 // 1.302 (dev): the mbedTLS 4 engine; PSA key store locked (MBEDTLS_THREADING_C); ESP-IDF 6 defaults taken.
 // 1.303 (dev): MBEDTLS_ECP_FIXED_POINT_OPTIM back on (the 5.3.1 value) until handshakes are timed on the rig.
 // 1.304 (dev): the certificate bundle logs at the default level again.
-#define IDENT_MINOR   304
+// 1.305 (dev): CROSS_SIGNED_VERIFY pinned (not default-tracked); the build refuses =n and anchors.
+#define IDENT_MINOR   305
 #define MULTITHREADED 0
 #define DISPATCHER_STACK 8192 // was 3072: the TLS handshake runs on this task
 
