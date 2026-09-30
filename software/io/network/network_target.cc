@@ -1801,8 +1801,12 @@ void NetworkTarget :: tls_info(Message *command, Message **reply, Message **stat
                 info_generation = generation;
                 info_ready = 0x01 | (stats.entropy_source ? 0x02 : 0) | (stats.time_source ? 0x04 : 0);
                 info_block_max_ms = stats.block_max_ms;
-            } else if ((result != WIFI_TLS_BUSY) && (result != WIFI_TLS_UNSENT)) {
-                info_valid = false; // no module application, no TLS in it, or a bad answer
+            } else if ((result == WIFI_TLS_NO_MODULE) ||
+                       ((result == WIFI_TLS_REFUSED) && (esp_err == WIFI_TLS_ESP_NOT_SUPPORTED))) {
+                // No module application, or no TLS in it. Anything else (no
+                // answer, a full TLS queue's ESP_ERR_TIMEOUT, a bad answer)
+                // says the module is busy, and the last good STATS stands.
+                info_valid = false;
             }
         } else {
             info_valid = false;

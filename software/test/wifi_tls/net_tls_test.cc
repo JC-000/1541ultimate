@@ -300,6 +300,9 @@ static void test_info(void)
           "info (OI-1): after a module restart a STATS timeout clears b0/b1, block_max and the CA date");
     world_module.stats_result = -1;
     check((info_byte(4) & 0x01) == 0x01 && info_byte(12) == 44, "info (OI-1): the next good STATS sets them again");
+    world_module.stats_result = WIFI_TLS_INVALID;
+    check((info_byte(4) & 0x01) == 0x01, "info (F3): a malformed STATS answer keeps b0 (only NO_MODULE, "
+          "NOT_SUPPORTED or a new generation clear it)");
     world_module.stats_result = WIFI_TLS_REFUSED; // a module without TLS
     world_module.stats_esp_err = WIFI_TLS_ESP_NOT_SUPPORTED;
     check(!(info_byte(4) & 0x01), "info (OI-1): a STATS refused with NOT_SUPPORTED clears b0");
