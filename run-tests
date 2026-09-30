@@ -573,15 +573,6 @@ SUITES: Sequence[Suite] = (
     # that button too (--power-button-cmd), not a scriptable socket alone.
     Suite("e2e", "power-cycle", "tests/e2e/u64ctrl/power_cycle_test.py",
           "-H @HOST@ -p @PASS@ -t @TIMEOUT@", manual=True),
-    # Manual, and spike-only (M2): needs firmware built with the TLS spike route
-    # and carrying this host's test root, and the device able to reach this
-    # host's echo server. Stock firmware answers 404 and the suite stops there.
-    # The rig's settings come from the environment, since this line passes only
-    # -H -p -t: TLS_SPIKE_PKI (the PKI holding the firmware's root),
-    # TLS_SPIKE_EXPECT_SPIKE=1 (GREEN runs), TLS_SPIKE_P1_SIZES,
-    # TLS_SPIKE_RESULTS_DIR and TLS_SPIKE_WITNESS.
-    Suite("e2e", "tls-spike", "tests/e2e/io/wifi/tls_spike_test.py",
-          "-H @HOST@ -p @PASS@ -t @TIMEOUT@", manual=True),
 
     # --------------------------------------------------------------- perf --
     Suite("perf", "temp-auto-cleanup-perf", "tests/perf/temp_auto_cleanup_perf_test.py",

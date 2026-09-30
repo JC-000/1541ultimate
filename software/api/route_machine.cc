@@ -12,9 +12,6 @@ extern "C" void route_input_note_menu_button(void);
 extern "C" void route_input_release_rest_mouse(void);
 extern "C" bool push_active_menu_button(void) __attribute__((weak));
 #endif
-#if defined(TLS_SPIKE) && (U64 == 1)
-#include "wifi_tls_json.h"
-#endif
 
 #define MENU_C64_PAUSE      0x640B
 #define MENU_C64_RESUME     0x640C
@@ -660,51 +657,3 @@ API_CALL(GET, machine, heap, NULL, ARRAY( {  }))
     resp->json->add("total", (int)configTOTAL_HEAP_SIZE);
     resp->json_response(HTTP_OK);
 }
-
-#if defined(TLS_SPIKE) && (U64 == 1)
-// SPIKE CODE, NOT FOR RELEASE (esp-tls M2). Built only with TLS_SPIKE; the flow
-// is in software/io/wifi/wifi_tls_spike.cc.
-
-API_DOC(PUT, machine, tlsspike,
-    TAG("Diagnostics")
-    SUMMARY("Run the TLS spike")
-    CAUTION("diagnostic", "Spike code for measuring TLS on the WiFi module; not in release builds.")
-    DESCRIPTION("Connects to `host`:`port`, runs a TLS handshake on the WiFi module with this side "
-                "carrying the ciphertext, sends `echo` bytes of a payload made from `seed`, expects "
-                "the same bytes back, and closes the session and the socket. Answers 200 with the "
-                "measurements whether or not the run succeeded; `ok`, `stage` and `error` say how "
-                "far it got.")
-    PATH("/v1/machine:tlsspike", "runTlsSpike", "")
-    PARAM("host", "string", "IPv4 address of the server.", "", "192.168.1.10")
-    PARAM("port", "integer(1..65535)", "TCP port of the server.", "", "4433")
-    PARAM("sni", "string", "Server name to send and to verify against.", "", "test.local")
-    PARAM("verify", "integer(0..1)", "Whether to verify the server's chain and name.", "1", "1")
-    PARAM("ca", "string", "Which trust anchors: test, bundle or none.", "test", "test")
-    PARAM("echo", "integer(0..4096)", "Payload bytes to send and expect back.", "0", "1024")
-    PARAM("seed", "integer(0..4294967295)", "Makes the payload: byte i is ((seed + i) * 2654435761) >> 24.", "0", "1")
-    RESPONSE("200", "application/json", "", "The measurements.", "")
-    RESPONSE_ERROR("400", "Invalid host, port, sni, verify, ca, echo or seed", "")
-)
-API_CALL(PUT, machine, tlsspike, NULL, ARRAY( { {"host", P_REQUIRED}, {"port", P_REQUIRED}, {"sni", P_OPTIONAL},
-                                                {"verify", P_OPTIONAL}, {"ca", P_OPTIONAL}, {"echo", P_OPTIONAL},
-                                                {"seed", P_OPTIONAL} }))
-{
-    // Every parameter is checked before anything happens, and any one that is
-    // out of range or not what its grammar says ends the call here.
-    wifi_tls_spike_args_t a;
-    const char *invalid = wifi_tls_spike_parse(args["host"], args["port"], args.get_or("sni", NULL),
-                                               args.get_or("verify", NULL), args.get_or("ca", NULL),
-                                               args.get_or("echo", NULL), args.get_or("seed", NULL), &a);
-    if (invalid) {
-        resp->error("Invalid %s", invalid);
-        resp->json_response(HTTP_BAD_REQUEST);
-        return;
-    }
-
-    wifi_tls_spike_result_t r;
-    wifi_tls_spike(a.host, a.port, a.sni, a.flags, a.echo, a.seed, &r);
-
-    wifi_tls_spike_json(&r, resp->json);
-    resp->json_response(HTTP_OK);
-}
-#endif

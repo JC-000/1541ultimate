@@ -114,6 +114,16 @@ static void isr_deliver(void)
     }
 }
 
+void world_reset_maker(world_maker_t maker)
+{
+    make_reply = maker;
+}
+
+void world_deliver_now(void)
+{
+    isr_deliver();
+}
+
 TickType_t xTaskGetTickCount(void)
 {
     if (!calm && (world_rand(5) == 0)) {
