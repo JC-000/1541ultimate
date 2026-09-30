@@ -54,6 +54,9 @@ if [ ! -f $MP/ssl_tls13_generic.o -o $RAW/patches/mbedtls-tls13-hrr-cookie.patch
      -c $MP/library/ssl_tls13_generic.c -o $MP/ssl_tls13_generic.o
 fi
 MPO=($MP/ssl_tls13_generic.o); [ -n "${NOCOOKIE:-}" ] && MPO=()
+# ../mbedtls_patches.cmake defines it for the device build; here the patched object above stands for it (NOCOOKIE
+# keeps the define, so that the RED run builds)
+grep -q '^include(${CMAKE_CURRENT_LIST_DIR}/mbedtls_patches.cmake)' $RAW/CMakeLists.txt || { echo "CMakeLists.txt does not include mbedtls_patches.cmake"; exit 1; }
 HOSTOFF="CONFIG_MBEDTLS_HARDWARE_AES CONFIG_MBEDTLS_HARDWARE_SHA CONFIG_MBEDTLS_HARDWARE_MPI CONFIG_MBEDTLS_HARDWARE_ECC CONFIG_MBEDTLS_HARDWARE_ECDSA_SIGN CONFIG_MBEDTLS_HARDWARE_ECDSA_VERIFY CONFIG_MBEDTLS_ROM_MD5 CONFIG_MBEDTLS_USE_CRYPTO_ROM_IMPL CONFIG_MBEDTLS_HARDWARE_RSA_DS_PERIPHERAL"
 
 for v in ${@:-head}; do
@@ -72,7 +75,7 @@ for v in ${@:-head}; do
        /^CONFIG_[A-Za-z0-9_]+=/ { if ($1 in skip) next; v = substr($0, length($1) + 2); if (v == "y") v = 1; print "#define " $1 " " v }' \
       $SDK > $O/sdkconfig.h
   CF=(-std=gnu17 -g -O1 -Wall -Wextra -Wno-unused-parameter -D_FORTIFY_SOURCE=0 -fsanitize=address,undefined -fno-omit-frame-pointer
-      -Wno-macro-redefined -I$O -I$T/stub -I$T/stub/x -I$M -I$SW/io/uart -I$IDF/components/mbedtls/esp_crt_bundle/include $MI $EXTRA)
+      -Wno-macro-redefined -DBRIDGE_MBEDTLS_HRR_COOKIE=1 -I$O -I$T/stub -I$T/stub/x -I$M -I$SW/io/uart -I$IDF/components/mbedtls/esp_crt_bundle/include $MI $EXTRA)
   cc $CF -c $M/tls_engine.c -o $O/tls_engine.o 2> $O/warnings.txt || { cat $O/warnings.txt; exit 1; }
   cc $CF -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare -Wno-missing-field-initializers -Wno-pointer-sign \
      -c $M/rpc_dispatch.c -o $O/rpc_dispatch.o 2>> $O/warnings.txt || { cat $O/warnings.txt; exit 1; }

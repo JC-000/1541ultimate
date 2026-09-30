@@ -28,6 +28,8 @@ if(NOT _orig)
     message(FATAL_ERROR "mbedtls_patches.cmake: ${_file} is not a source of the mbedtls target")
 endif()
 get_filename_component(_libdir "${_orig}" DIRECTORY)
+# A changed stock source (an ESP-IDF update in place) re-runs the configure step, so the copy is patched again
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_orig}")
 
 set(_work "${CMAKE_BINARY_DIR}/mbedtls_patched")
 file(REMOVE_RECURSE "${_work}")
@@ -45,4 +47,7 @@ set_property(TARGET mbedtls PROPERTY SOURCES ${_srcs})
 # The copy is outside library/, so its #include "..." must still find the library's private headers first
 set_source_files_properties("${_work}/library/${_file}" TARGET_DIRECTORY mbedtls
                             PROPERTIES COMPILE_OPTIONS "-iquote;${_libdir}")
+# tls_engine.c refuses to build without this, so an image cannot lose the patch by losing this file's include()
+idf_component_get_property(_main_lib main COMPONENT_LIB)
+target_compile_definitions(${_main_lib} PRIVATE BRIDGE_MBEDTLS_HRR_COOKIE=1)
 message(STATUS "mbedTLS: ${_file} from ${_libdir} built with patches/mbedtls-tls13-hrr-cookie.patch")
