@@ -275,18 +275,42 @@ class Expectations:
     The last two must show the opposite of the vector's verdict: when they no longer do, the run
     fails until the line is removed. A tc= line wins over flag= lines; among flag= lines the first
     in the file that names one of the vector's flags wins. With strict set, a vector under either
-    of the last two fails."""
+    of the last two fails.
+    An overlay file starts with "base <file>" (relative to the overlay) and then has lines that
+    replace the base's line for the same key, add one, or remove it ("remove <file> <key>"): the
+    same build under another setting (expectations.4-nocross)."""
 
     def __init__(self, path, strict=False):
         self.strict = strict
         self.rules = {}
         self.notes = {}
         self.used = set()
+        self.where = {}
+        self._load(path, 0)
+
+    def _load(self, path, offset):
+        overlay = False
         for n, line in enumerate(read(path).split("\n"), 1):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
+            if line.startswith("base ") and not overlay and not self.rules:
+                self._load(os.path.join(os.path.dirname(path), line.split(None, 1)[1]), 0)
+                overlay, offset = True, 1000000
+                continue
             fields = line.split(None, 3)
+            if overlay and fields[0] == "remove" and len(fields) == 3:
+                if (fields[1], fields[2]) not in self.rules:
+                    sys.exit(
+                        "%s:%d: remove %s %s: the base has no such line"
+                        % (path, n, fields[1], fields[2])
+                    )
+                for d in (self.rules, self.notes, self.where):
+                    d.pop((fields[1], fields[2]), None)
+                continue
+            if overlay:
+                for d in (self.rules, self.notes, self.where):
+                    d.pop((fields[0], fields[1]), None)
             if len(fields) == 4 and fields[2] == "known-vulnerable":
                 cve = fields[3].split(None, 2)
                 if len(cve) < 3 or not re.fullmatch(r"CVE-\d{4}-\d+", cve[0]):
@@ -307,7 +331,8 @@ class Expectations:
                 sys.exit('%s:%d: want "<file> tc=N|flag=F accept|reject|skip <reason>"' % (path, n))
             if (fields[0], fields[1]) in self.rules:
                 sys.exit("%s:%d: %s %s is there twice" % (path, n, fields[0], fields[1]))
-            self.rules[(fields[0], fields[1])] = (fields[2], n)
+            self.rules[(fields[0], fields[1])] = (fields[2], offset + n)
+            self.where[(fields[0], fields[1])] = "%s:%d" % (os.path.basename(path), n)
 
     def lookup(self, source, tc, flags):
         keys = [
@@ -979,9 +1004,18 @@ def bundle_mode(lim, out, cases, local, exp):
     made = lim.bundle([read(os.path.join(b, "baltimore.der"), "rb").hex()])
     fixture = read(os.path.join(b, "baltimore_crt_bundle"), "rb").hex()
     suite.judge("x509-bundle", "format", "valid", [], "accept" if made == fixture else "reject")
-    # The image's bundle (CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL) and real servers' chains
+    # The image's bundle (CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL) and real servers' chains.
+    # ESP-IDF 6 leaves cacrt_local.pem out with CROSS_SIGNED_VERIFY (components/mbedtls/
+    # CMakeLists.txt:94-99 at v6.0.3); the build's sdkconfig.h says which
+    sdkconfig_h = os.path.join(out, "config", "sdkconfig.h")
+    cross = os.path.exists(sdkconfig_h) and re.search(
+        r"^#define CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY 1$",
+        read(sdkconfig_h),
+        re.M,
+    )
     real = pems_to_hex(
-        read(os.path.join(b, "cacrt_all.pem")) + read(os.path.join(b, "cacrt_local.pem"))
+        read(os.path.join(b, "cacrt_all.pem"))
+        + ("" if cross else read(os.path.join(b, "cacrt_local.pem")))
     )
     for t in cases:
         if t["id"].startswith("online::") and not not_applicable(t):
@@ -1393,8 +1427,10 @@ def main():
     notes[cov] = "offer: " + " ".join(offer)
 
     stale = Suite("expectations", exp)
-    for n, key in exp.unused():
-        stale.fail("line %d (%s %s) matched no vector: remove it, or find out why" % (n, *key))
+    for _n, key in exp.unused():
+        stale.fail(
+            "%s (%s %s) matched no vector: remove it, or find out why" % (exp.where[key], *key)
+        )
     # The lines behind insecure outcomes are counted with them, not as passed
     insecure_lines = sum(1 for key in exp.used if key in exp.notes)
     stale.passed = len(exp.rules) - stale.failed - insecure_lines

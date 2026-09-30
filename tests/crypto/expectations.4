@@ -285,23 +285,31 @@ limbo.json/given tc=bettertls::pathbuilding::tc77 accept fail-open:intermediate-
 # ESP-IDF 6's esp_crt_bundle.c (at ESP_IDF_COMMIT) installs esp_crt_verify_callback() and, with
 # CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY (on by default in v6.0.3, and in
 # sdkconfig.v6.0.3), a CA callback (esp_crt_bundle.c:601): for each certificate, the bundle
-# entry named by its issuer comes back as a trusted CA made of that name and key alone
-# (esp_crt_bundle.c:498-577, ca_istrue at :522, no validity). mbedTLS then checks the chain
+# entry named by its issuer comes back as a trusted CA with that entry's key (esp_crt_bundle.c:
+# 498-577, ca_istrue at :522, no validity). Only its raw subject is the entry's name (:530); its
+# parsed subject, which mbedTLS matches parents by, is a copy of the certificate's own issuer
+# (:545-570), so the byte comparison of the lookup (:295) is all that ties a name to a key. mbedTLS then checks the chain
 # against it as against any trusted CA, the certificate profile included: a SHA-1 signature
 # below it (BAD_MD) and an RSA-1024 bundle key (BAD_KEY) are refused, which 3.6's callback let
-# through (bundle-sha1-below-root, bundle-root-key-size-unchecked: tests/crypto run with
-# sdkconfig.v6.0.3-nocross shows both again). The made-up CA has no validity, so mbedTLS marks
+# through (bundle-sha1-below-root, bundle-root-key-size-unchecked; expectations.4-nocross has
+# them again), as long as the certificate names the algorithm it is signed with (see
+# bundle-sig-alg-unchecked below). The made-up CA has no validity, so mbedTLS marks
 # it EXPIRED, and the verify callback clears that for it (esp_crt_bundle.c:331-340): an
 # expired root still verifies what it signed. Each chain is also run with the root as the CA
 # chain (tc=...::ca), where it is refused.
 # The verify callback's own signature check picks the algorithm from the bundle key's type
 # alone: RSA is always PKCS#1 v1.5 (esp_crt_bundle.c:196-199), and 3.6's check that the key can
 # do the certificate's signature algorithm (pk_can_do, esp_crt_bundle.c:52 at c8fc5f64) is gone.
-# So a certificate that names ECDSA or RSASSA-PSS but carries a PKCS#1 v1.5 signature by a
-# bundled RSA root is accepted (mbedTLS's own check refuses it; the callback then clears the
-# flags). Algorithm confusion, not a forgery: the root's key must have signed those bytes.
-x509 tc=bundle-rsa::alg-says-ecdsa::bundle security-deviation bundle-sig-alg-unchecked a leaf naming ecdsa-with-SHA256 with a PKCS#1 v1.5 signature by the RSA bundle root is accepted (esp_crt_bundle.c:196-199)
-x509 tc=bundle-rsa::alg-says-pss::bundle security-deviation bundle-sig-alg-unchecked a leaf naming RSASSA-PSS with a PKCS#1 v1.5 signature by the RSA bundle root is accepted (esp_crt_bundle.c:196-199)
+# A certificate that names ECDSA or RSASSA-PSS but carries a PKCS#1 v1.5 signature by a bundled
+# RSA root is refused by mbedTLS as a child of the bundle's CA (the key cannot do the algorithm,
+# x509_crt.c:2298), and then accepted by the callback, which clears every flag (:373). mbedTLS
+# never took the bundle's CA as the parent, so its certificate profile never applies at that
+# link: an RSA-1024 bundle root (BAD_KEY) and a SHA-1 signature (BAD_MD, which the callback
+# masks, :348) are accepted this way (V1, V2), in both modes. So =y refuses an RSA-1024 root and
+# SHA-1 below the root only for certificates that name the right algorithm. Anyone who can sign
+# with a bundled RSA key (a weak or leaked one) needs no CA's help to use this.
+x509 tc=bundle-rsa::alg-says-ecdsa::bundle security-deviation bundle-sig-alg-unchecked a leaf naming ecdsa-with-SHA256 with a PKCS#1 v1.5 signature by the RSA bundle root is accepted: the callback checks any bundled RSA key as PKCS#1 v1.5 (esp_crt_bundle.c:196-199), outside mbedTLS's profile
+x509 tc=bundle-rsa::alg-says-pss::bundle security-deviation bundle-sig-alg-unchecked a leaf naming RSASSA-PSS with a PKCS#1 v1.5 signature by the RSA bundle root is accepted: the callback checks any bundled RSA key as PKCS#1 v1.5 (esp_crt_bundle.c:196-199), outside mbedTLS's profile
 x509 tc=pss-salt::salt-not-as-declared::ca security-deviation rsa-pss-any-salt a certificate whose RSASSA-PSS salt differs from its declared saltLength is accepted (x509.c:748-753, x509_crt.c:2145)
 x509 tc=pss-salt::salt-not-as-declared::bundle security-deviation rsa-pss-any-salt the same under a bundle root: mbedTLS checks it against the CA made from the entry (x509_crt.c:2145)
 # The bundle is looked up by the raw bytes of a certificate's issuer name (esp_crt_bundle.c:295),
@@ -310,6 +318,8 @@ x509 tc=pss-salt::salt-not-as-declared::bundle security-deviation rsa-pss-any-sa
 x509 tc=bundle-idf6::T2-issuer-case-differs::bundle reject fail-closed: the issuer is looked up by its raw bytes (esp_crt_bundle.c:295), so ROOT A does not find Root A
 x509 tc=bundle-idf6::T2b-issuer-printable::bundle reject fail-closed: the issuer is looked up by its raw bytes (esp_crt_bundle.c:295), so a PrintableString Root A does not find the UTF8String one
 x509 tc=bundle-sha1-confused::U4-confused-sha1::bundle security-deviation bundle-sig-alg-unchecked the same with SHA-1: BAD_MD is masked off (esp_crt_bundle.c:348) and the callback verifies the PKCS#1 v1.5 SHA-1 signature (esp_crt_bundle.c:172, :196-199)
+x509 tc=bundle-confused-weak::V1-confused-rsa1024-root::bundle security-deviation bundle-sig-alg-unchecked the same under an RSA-1024 bundle root: accepted, the profile's key size never applied (esp_crt_bundle.c:196-199, :373)
+x509 tc=bundle-confused-weak::V2-confused-rsa1024-root-sha1::bundle security-deviation bundle-sig-alg-unchecked the same with SHA-1 as well: accepted, BAD_MD masked (esp_crt_bundle.c:348) and the key size never checked
 x509 tc=bundle::expired-root::bundle security-deviation bundle-root-validity-unchecked the bundle keeps no validity, and the verify callback clears EXPIRED on the CA it makes from a bundle entry (esp_crt_bundle.c:331-340): an expired root still verifies what it signed
 # ---- Known vulnerabilities of the pinned mbedTLS -------------------------------------------
 # known-vulnerable <CVE> <first fixed version>: the vector must still show the vulnerable outcome.

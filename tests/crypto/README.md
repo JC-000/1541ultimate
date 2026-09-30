@@ -38,7 +38,7 @@ behaviour in listed order) and the expectation lines behind them are counted apa
 | File | What |
 |---|---|
 | `PINS` | the one place the sources come from; a crypto bump is a change here |
-| `PINS.idf6`, `sdkconfig.v6.0.3`, `expectations.4`, `esp32_macros.4.txt`, `engine_config.4.txt` | the same for ESP-IDF 6 / mbedTLS 4 (`run_idf6.sh` sets them, and compares engine4's `tls_engine.c` at its `ENGINE4_COMMIT` until the branches meet); the `-nocross` sdkconfig and macro list are the certificate bundle without `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY` |
+| `PINS.idf6`, `sdkconfig.v6.0.3`, `expectations.4`, `esp32_macros.4.txt`, `engine_config.4.txt` | the same for ESP-IDF 6 / mbedTLS 4 (`run_idf6.sh` sets them, and compares engine4's `tls_engine.c` at its `ENGINE4_COMMIT` until the branches meet); the `-nocross` sdkconfig, macro list and expectations overlay are the certificate bundle without `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY` (`CRYPTO_SDKCONFIG=… CRYPTO_MACROS=… CRYPTO_EXPECTATIONS=expectations.4-nocross run_idf6.sh`) |
 | `regen_sdkconfig.sh` | regenerates the raw_u64 sdkconfig for another ESP-IDF release with that release's kconfgen, as idf.py does |
 | `build_mbedtls.sh` | fetches and builds mbedTLS with the configuration derived from `software/wifi/raw_u64/sdkconfig` and ESP-IDF's `esp_config.h` |
 | `esp32_macros.txt` | the derived macro list (one per mbedTLS major); a bump that changes it shows the diff and stops |

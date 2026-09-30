@@ -1,0 +1,19 @@
+# Overlay on expectations.4 for the ESP-IDF 6 build with
+# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY off (sdkconfig.v6.0.3-nocross,
+# esp32_macros.4-nocross.txt): what that build does differently, as checked at 4.1.1 / v6.0.3.
+# Without the CA callback, esp_crt_bundle_attach() installs the dummy CA chain (esp_crt_bundle.c:
+# 603), mbedTLS finds no trusted parent for the top certificate, and the verify callback decides
+# (esp_crt_bundle.c:317-393): it looks up the top certificate's issuer only (:361), masks BAD_MD
+# (:348), checks the signature with the bundle key as PKCS#1 v1.5 or ECDSA by key type alone
+# (:196-206, outside mbedTLS's profile) and clears every flag (:373).
+base expectations.4
+
+x509 tc=bundle::sha1-leaf::bundle security-deviation bundle-sha1-below-root BAD_MD is masked off (esp_crt_bundle.c:348): a SHA-1 signature by a bundled root is accepted
+x509 tc=bundle::sha1-intermediate::bundle security-deviation bundle-sha1-below-root BAD_MD is masked off (esp_crt_bundle.c:348): a SHA-1 intermediate under a bundled root is accepted
+x509 tc=bundle::rsa1024-root::bundle security-deviation bundle-root-key-size-unchecked the callback verifies with the bundle key outside the certificate profile (esp_crt_bundle.c:196-206): an RSA-1024 root is accepted
+x509 tc=cross::top-cross-signed::bundle reject fail-closed: only the top certificate's issuer is looked up in the bundle (esp_crt_bundle.c:361), here the old root, which it does not have
+x509 tc=bundle-rsa::pss-intermediate::bundle reject fail-closed: the callback checks an RSA key as PKCS#1 v1.5 only (esp_crt_bundle.c:196-199), so a PSS signature by the root fails
+x509 tc=bundle-rsa::pss-leaf::bundle reject fail-closed: the callback checks an RSA key as PKCS#1 v1.5 only (esp_crt_bundle.c:196-199), so a PSS signature by the root fails
+x509 tc=pss-salt::salt-as-declared::bundle reject fail-closed: the callback checks an RSA key as PKCS#1 v1.5 only (esp_crt_bundle.c:196-199), so a PSS signature by the root fails
+# refused here for the same reason, which is its own verdict: the any-salt line does not apply
+remove x509 tc=pss-salt::salt-not-as-declared::bundle

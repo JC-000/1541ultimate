@@ -46,6 +46,10 @@ bundle-sha1-confused.json: the algorithm-confused leaf of bundle-rsa.json with S
 ecdsa-with-SHA1 over a PKCS#1 v1.5 SHA-1 signature by the RSA bundle root, so on ESP-IDF 6 it
 reaches the verify callback with BAD_MD set as well as NOT_TRUSTED (must fail).
 
+bundle-confused-weak.json: the algorithm-confused leaf under an RSA-1024 bundle root, with SHA-256
+(V1) and SHA-1 (V2): mbedTLS never takes the bundle's CA as the parent, so its key-size and hash
+profile never applies, and ESP-IDF 6's callback accepts (must fail).
+
 pss-salt.json: an X.509 certificate signed with RSASSA-PSS whose parameters say one salt length
 and whose signature uses another (RFC 4055 3.1).
 
@@ -1009,6 +1013,47 @@ def main():
         for mode in ("ca", "bundle")
     ]
     write("bundle-sha1-confused.json", cases)
+
+    # The algorithm-confused leaf under an RSA-1024 bundle root (conf4-adversarial1 addendum A1)
+    w_key = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    w_root = cert("Root W", w_key, "Root W", w_key, CA)
+
+    def confused_by(key, alg, h):
+        c = cert("victim.example", p256(), "Root W", p256(), server("victim.example"))
+        tbs = children(c.public_bytes(serialization.Encoding.DER))[0]
+        fields = children(tbs)
+        fields[2] = alg
+        tbs = der(0x30, b"".join(fields))
+        sig = key.sign(tbs, padding.PKCS1v15(), h)
+        return x509.load_der_x509_certificate(der(0x30, tbs + alg + der(0x03, b"\0" + sig)))
+
+    chains = {
+        "V1-confused-rsa1024-root": (
+            "names ecdsa-with-SHA256, PKCS#1 v1.5 SHA-256 by an RSA-1024 root",
+            ECDSA_SHA256,
+            hashes.SHA256(),
+        ),
+        "V2-confused-rsa1024-root-sha1": (
+            "names ecdsa-with-SHA1, PKCS#1 v1.5 SHA-1 by an RSA-1024 root",
+            ecdsa_sha1,
+            hashes.SHA1(),
+        ),
+    }
+    cases = [
+        case(
+            "bundle-confused-weak::%s::%s" % (tag, mode),
+            description,
+            w_root,
+            [],
+            confused_by(w_key, alg, h),
+            "victim.example",
+            "FAILURE",
+            mode=mode,
+        )
+        for tag, (description, alg, h) in chains.items()
+        for mode in ("ca", "bundle")
+    ]
+    write("bundle-confused-weak.json", cases)
 
     # RSASSA-PSS parameters that say salt 32 over a signature with salt 20 (conf4-adversarial1 M3)
     p_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
