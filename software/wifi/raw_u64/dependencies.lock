@@ -1,0 +1,32 @@
+dependencies:
+  esp-pqc:
+    component_hash: 68f52a567e4fbf409d9709aece39c1356201560fead907aa3ab2608b9bb7007e
+    dependencies:
+    - name: idf
+      version: '>=6.0'
+    - git: https://github.com/espressif/esp-pqc.git
+      name: mbedtls
+      path: components/mbedtls
+      version: 95db07d1d72798cbcc1cb18d9bb5931d05dba665
+    source:
+      git: https://github.com/espressif/esp-pqc.git
+      path: .
+      type: git
+    version: 95db07d1d72798cbcc1cb18d9bb5931d05dba665
+  idf:
+    source:
+      type: idf
+    version: 6.0.3
+  mbedtls:
+    component_hash: a616a449017da47cf68783b31ed67a028fd0d0a3c98ad71bde1806464f224e8f
+    dependencies: []
+    source:
+      git: https://github.com/espressif/esp-pqc.git
+      path: components/mbedtls
+      type: git
+    version: 95db07d1d72798cbcc1cb18d9bb5931d05dba665
+direct_dependencies:
+- esp-pqc
+manifest_hash: 08b24a2211eae654b68f4e1c6c819e44e170b125b5bbaabd8f3618a2abbde848
+target: esp32
+version: 3.0.0

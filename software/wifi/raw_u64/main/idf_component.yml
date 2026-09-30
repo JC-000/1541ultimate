@@ -1,5 +1,7 @@
-## Measurement only (pqc lane): the bridge with esp-pqc, hybrid KEM (X25519MLKEM768), pinned by path to
-## a clone of espressif/esp-pqc 95db07d1. A real M4 change would pin the git source by commit.
+## M4 (policy (a)): esp-pqc for the hybrid key exchange X25519MLKEM768. esp-pqc has no release tags, so it is
+## pinned by full commit; its submodules pin espressif/mbedtls 3deef6a6 (feature/pqc_support) and espressif/liboqs
+## d9459ff2. dependencies.lock (next to the top-level CMakeLists.txt) records what the component manager resolved.
 dependencies:
   esp-pqc:
-    path: /Users/someone/Documents/1541u-esp-tls-archive/session-0929/pqc-work/esp-pqc
+    git: https://github.com/espressif/esp-pqc.git
+    version: 95db07d1d72798cbcc1cb18d9bb5931d05dba665
