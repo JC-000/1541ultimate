@@ -1040,7 +1040,7 @@ def bundle_mode(lim, out, cases, local, exp):
             seen, _ = lim(t, mode="bundle", trusted=real)
             suite.judge("x509-bundle", "control-root-not-in-image-bundle", "invalid", [], seen)
     # The roots in the image's bundle that have expired: the bundle keeps no validity, so the
-    # device still trusts what they sign (security deviation bundle-root-validity-unchecked)
+    # device still trusts what they sign (security deviation bundle-root-validity-by-design)
     expired = lim.expired(int(time.time()), real)
     note = "(image bundle: %d certificates, %d expired: %s)" % (
         len(real),

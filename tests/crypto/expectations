@@ -237,7 +237,7 @@ limbo.json/given tc=bettertls::pathbuilding::tc77 accept fail-open:intermediate-
 # also run with the root as the CA chain (tc=...::ca), where it is refused.
 x509 tc=bundle::sha1-leaf::bundle security-deviation bundle-sha1-below-root BAD_MD is masked off (esp_crt_bundle.c:90): a SHA-1 signature by a bundled root is accepted
 x509 tc=bundle::sha1-intermediate::bundle security-deviation bundle-sha1-below-root BAD_MD is masked off (esp_crt_bundle.c:90): a SHA-1 intermediate under a bundled root is accepted
-x509 tc=bundle::expired-root::bundle security-deviation bundle-root-validity-unchecked the bundle keeps no validity: an expired root still verifies what it signed
+x509 tc=bundle::expired-root::bundle security-deviation bundle-root-validity-by-design the bundle keeps no validity: an expired root still verifies what it signed. A documented property, not a bug: a bundle entry is a subject name and a public key (esp_crt_bundle.rst:15 at ESP_IDF_COMMIT), and an RFC 5280 6.1.1(d) trust anchor has no validity either; it shows because CA mode refuses the same chain
 x509 tc=bundle::rsa1024-root::bundle security-deviation bundle-root-key-size-unchecked the callback verifies with the bundle key outside the certificate profile: an RSA-1024 root is accepted
 x509 tc=bundle-confused-wide::K0-secp256k1-root::bundle security-deviation bundle-root-curve-unchecked the callback verifies with the bundle key outside the certificate profile: a secp256k1 root, a curve not in mbedTLS's default profile, is accepted
 # Not a deviation but its opposite: a server that sends a cross-signed root (the new root's name

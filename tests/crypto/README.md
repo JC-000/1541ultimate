@@ -10,7 +10,7 @@ default gate (`run-tests`): run it when mbedTLS, ESP-IDF or `tls_engine.c` chang
 The last lines say what matters:
 
     NOT COVERED: the device uses ESP-IDF hardware code for AES_ALT ... ; this host run tests mbedTLS software paths
-    SECURITY DEVIATIONS 3: ...            (accepted by design: ESP-IDF's certificate bundle)
+    SECURITY DEVIATIONS 3: ...            (accepted where the check it names would refuse; the tag says what kind: -by-design, -documented, -conformance, or a check ESP-IDF's bundle leaves out)
     FAIL-OPEN DEVIATIONS 5: ...           (accepted where x509-limbo refuses, security-relevant)
     KNOWN VULNERABILITIES 1: CVE-2026-49300 (fixed in mbedTLS 3.6.7)
     CRYPTO_CONFORMANCE PASS <n> passed 0 failed <m> suites; insecure outcomes 21 (...), not in passed
