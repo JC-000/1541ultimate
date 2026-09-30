@@ -8,7 +8,7 @@
  *
  * Kept apart from wifi_cmd.h, like wifi_random.h, so that its users do not see
  * the module's RPC definitions; wifi_tls.cc asserts that the values repeated
- * here match the wire layout in wifi_tls_rpc.h.
+ * here match the wire layout in rpc_calls.h.
  */
 
 #ifndef WIFI_TLS_H_

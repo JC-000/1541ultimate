@@ -225,6 +225,7 @@ typedef struct {
     int esp_err;     // ESP_OK, an esp_err_t, or a negative mbedTLS code
     uint8_t slot;    // TLS_SLOT_GLOBAL when esp_err != ESP_OK
     uint8_t reason;  // TLS_OPEN_REASON_*
+    uint16_t reserved; // 0
 } rpc_tls_open_resp;
 
 typedef struct {

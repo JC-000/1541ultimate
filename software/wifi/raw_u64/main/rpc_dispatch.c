@@ -288,6 +288,7 @@ _Static_assert(sizeof(rpc_tls_open_resp) == 12, "rpc_tls_open_resp size");
 _Static_assert(offsetof(rpc_tls_open_resp, esp_err) == 4, "rpc_tls_open_resp.esp_err");
 _Static_assert(offsetof(rpc_tls_open_resp, slot) == 8, "rpc_tls_open_resp.slot");
 _Static_assert(offsetof(rpc_tls_open_resp, reason) == 9, "rpc_tls_open_resp.reason");
+_Static_assert(offsetof(rpc_tls_open_resp, reserved) == 10, "rpc_tls_open_resp.reserved");
 _Static_assert(sizeof(rpc_tls_step_req) == 12, "rpc_tls_step_req size");
 _Static_assert(offsetof(rpc_tls_step_req, slot) == 4, "rpc_tls_step_req.slot");
 _Static_assert(offsetof(rpc_tls_step_req, flags) == 5, "rpc_tls_step_req.flags");

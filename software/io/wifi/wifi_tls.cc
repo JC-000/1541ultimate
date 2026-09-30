@@ -8,47 +8,119 @@
 
 #include <stddef.h>
 #include <string.h>
-#include "wifi_tls_rpc.h"
+#include "rpc_calls.h" // the module's own definitions of the TLS requests and answers
 extern "C" {
     #include "cmd_buffer.h"
 }
 #include "wifi_dedicated.h"
 #include "wifi_tls.h"
 
+// M3-SPEC v1 section 5.2, byte for byte.
+static_assert(sizeof(rpc_header_t) == 4, "rpc_header_t");
+static_assert(sizeof(rpc_espcmd_resp) == 8, "rpc_espcmd_resp");
+static_assert(offsetof(rpc_tls_open_req, trust) == 4, "open.trust");
+static_assert(offsetof(rpc_tls_open_req, sni_len) == 5, "open.sni_len");
+static_assert(offsetof(rpc_tls_open_req, slot) == 6, "open.slot");
+static_assert(offsetof(rpc_tls_open_req, time_source) == 7, "open.time_source");
+static_assert(offsetof(rpc_tls_open_req, unix_time) == 8, "open.unix_time");
+static_assert(offsetof(rpc_tls_open_req, tag) == 12, "open.tag");
+static_assert(offsetof(rpc_tls_open_req, opts) == 14, "open.opts");
+static_assert(offsetof(rpc_tls_open_req, reserved) == 15, "open.reserved");
+static_assert(offsetof(rpc_tls_open_req, ca_tag) == 16, "open.ca_tag");
+static_assert(offsetof(rpc_tls_open_req, reserved2) == 18, "open.reserved2");
+static_assert(offsetof(rpc_tls_open_req, pin) == 20, "open.pin");
+static_assert(offsetof(rpc_tls_open_req, sni) == 52, "open.sni");
+static_assert(sizeof(rpc_tls_open_req) == 52, "open size");
+static_assert(offsetof(rpc_tls_open_resp, esp_err) == 4, "open resp.esp_err");
+static_assert(offsetof(rpc_tls_open_resp, slot) == 8, "open resp.slot");
+static_assert(offsetof(rpc_tls_open_resp, reason) == 9, "open resp.reason");
+static_assert(offsetof(rpc_tls_open_resp, reserved) == 10, "open resp.reserved");
+static_assert(sizeof(rpc_tls_open_resp) == 12, "open resp size");
+static_assert(offsetof(rpc_tls_step_req, slot) == 4, "step.slot");
+static_assert(offsetof(rpc_tls_step_req, flags) == 5, "step.flags");
+static_assert(offsetof(rpc_tls_step_req, tag) == 6, "step.tag");
+static_assert(offsetof(rpc_tls_step_req, ct_in_len) == 8, "step.ct_in_len");
+static_assert(offsetof(rpc_tls_step_req, pt_in_len) == 10, "step.pt_in_len");
+static_assert(offsetof(rpc_tls_step_req, data) == 12, "step.data");
+static_assert(sizeof(rpc_tls_step_req) == 12, "step size");
+static_assert(offsetof(rpc_tls_step_resp, esp_err) == 4, "step resp.esp_err");
+static_assert(offsetof(rpc_tls_step_resp, state) == 8, "step resp.state");
+static_assert(offsetof(rpc_tls_step_resp, alert_in) == 9, "step resp.alert_in");
+static_assert(offsetof(rpc_tls_step_resp, ct_out_len) == 10, "step resp.ct_out_len");
+static_assert(offsetof(rpc_tls_step_resp, pt_out_len) == 12, "step resp.pt_out_len");
+static_assert(offsetof(rpc_tls_step_resp, alert_out) == 14, "step resp.alert_out");
+static_assert(offsetof(rpc_tls_step_resp, fail_reason) == 15, "step resp.fail_reason");
+static_assert(offsetof(rpc_tls_step_resp, verify_flags) == 16, "step resp.verify_flags");
+static_assert(offsetof(rpc_tls_step_resp, data) == 20, "step resp.data");
+static_assert(sizeof(rpc_tls_step_resp) == 20, "step resp size");
+static_assert(offsetof(rpc_tls_session_req, slot) == 4, "session.slot");
+static_assert(offsetof(rpc_tls_session_req, reserved) == 5, "session.reserved");
+static_assert(offsetof(rpc_tls_session_req, tag) == 6, "session.tag");
+static_assert(sizeof(rpc_tls_session_req) == 8, "session size");
+static_assert(offsetof(rpc_tls_close_resp, esp_err) == 4, "close resp.esp_err");
+static_assert(offsetof(rpc_tls_close_resp, ct_out_len) == 8, "close resp.ct_out_len");
+static_assert(offsetof(rpc_tls_close_resp, reserved) == 10, "close resp.reserved");
+static_assert(offsetof(rpc_tls_close_resp, data) == 12, "close resp.data");
+static_assert(sizeof(rpc_tls_close_resp) == 12, "close resp size");
+static_assert(offsetof(rpc_tls_stats_resp, esp_err) == 4, "stats.esp_err");
+static_assert(offsetof(rpc_tls_stats_resp, handshake_us) == 36, "stats.handshake_us");
+static_assert(offsetof(rpc_tls_stats_resp, tls_version) == 40, "stats.tls_version");
+static_assert(offsetof(rpc_tls_stats_resp, ciphersuite) == 42, "stats.ciphersuite");
+static_assert(offsetof(rpc_tls_stats_resp, group) == 44, "stats.group");
+static_assert(offsetof(rpc_tls_stats_resp, state) == 46, "stats.state");
+static_assert(offsetof(rpc_tls_stats_resp, sessions_open) == 47, "stats.sessions_open");
+static_assert(offsetof(rpc_tls_stats_resp, stack_free) == 48, "stats.stack_free");
+static_assert(offsetof(rpc_tls_stats_resp, esp_time) == 52, "stats.esp_time");
+static_assert(offsetof(rpc_tls_stats_resp, time_source) == 56, "stats.time_source");
+static_assert(offsetof(rpc_tls_stats_resp, entropy_source) == 57, "stats.entropy_source");
+static_assert(offsetof(rpc_tls_stats_resp, ems) == 58, "stats.ems");
+static_assert(offsetof(rpc_tls_stats_resp, reserved) == 59, "stats.reserved");
+static_assert(offsetof(rpc_tls_stats_resp, block_max_ms) == 60, "stats.block_max_ms");
+static_assert(offsetof(rpc_tls_stats_resp, reserved2) == 62, "stats.reserved2");
+static_assert(offsetof(rpc_tls_stats_resp, spki_sha256) == 64, "stats.spki_sha256");
+static_assert(sizeof(rpc_tls_stats_resp) == 96, "stats size");
+static_assert(offsetof(rpc_tls_set_ca_req, der_len) == 4, "set_ca.der_len");
+static_assert(offsetof(rpc_tls_set_ca_req, ca_tag) == 6, "set_ca.ca_tag");
+static_assert(offsetof(rpc_tls_set_ca_req, der) == 8, "set_ca.der");
+static_assert(sizeof(rpc_tls_set_ca_req) == 8, "set_ca size");
+static_assert(offsetof(rpc_tls_set_ca_resp, esp_err) == 4, "set_ca resp.esp_err");
+static_assert(offsetof(rpc_tls_set_ca_resp, reject) == 8, "set_ca resp.reject");
+static_assert(sizeof(rpc_tls_set_ca_resp) == 12, "set_ca resp size");
+
 // A full step, either way, fits one buffer, and so do the longest OPEN and SET_CA.
-static_assert(sizeof(nios_tls_open_req) + NIOS_TLS_SNI_MAX_LEN <= CMD_BUF_SIZE, "largest CMD_TLS_OPEN request");
-static_assert(sizeof(nios_tls_step_req) + NIOS_TLS_STEP_IN_MAX <= CMD_BUF_SIZE, "largest CMD_TLS_STEP request");
-static_assert(sizeof(nios_tls_step_resp) + NIOS_TLS_STEP_OUT_MAX <= CMD_BUF_SIZE, "largest CMD_TLS_STEP reply");
-static_assert(sizeof(nios_tls_set_ca_req) + NIOS_TLS_CA_MAX <= CMD_BUF_SIZE, "largest CMD_TLS_SET_CA request");
+static_assert(sizeof(rpc_tls_open_req) + TLS_SNI_MAX_LEN <= CMD_BUF_SIZE, "largest CMD_TLS_OPEN request");
+static_assert(sizeof(rpc_tls_step_req) + TLS_STEP_IN_MAX <= CMD_BUF_SIZE, "largest CMD_TLS_STEP request");
+static_assert(sizeof(rpc_tls_step_resp) + TLS_STEP_OUT_MAX <= CMD_BUF_SIZE, "largest CMD_TLS_STEP reply");
+static_assert(sizeof(rpc_tls_set_ca_req) + TLS_CA_MAX_LEN <= CMD_BUF_SIZE, "largest CMD_TLS_SET_CA request");
 
 // What wifi_tls.h repeats.
-static_assert(WIFI_TLS_MAX_SESSIONS == NIOS_TLS_MAX_SESSIONS, "session caps differ");
-static_assert(WIFI_TLS_MAX_SNI == NIOS_TLS_SNI_MAX_LEN, "name lengths differ");
-static_assert(WIFI_TLS_STEP_MAX_IN == NIOS_TLS_STEP_IN_MAX, "step sizes differ");
-static_assert(WIFI_TLS_STEP_MAX_OUT == NIOS_TLS_STEP_OUT_MAX, "step sizes differ");
-static_assert(WIFI_TLS_CA_MAX == NIOS_TLS_CA_MAX, "CA sizes differ");
-static_assert(WIFI_TLS_PIN_LEN == NIOS_TLS_PIN_LEN, "pin lengths differ");
-static_assert(WIFI_TLS_SLOT_GLOBAL == NIOS_TLS_SLOT_GLOBAL, "slots differ");
-static_assert(WIFI_TLS_TRUST_BUNDLE == NIOS_TLS_TRUST_BUNDLE, "trust modes differ");
-static_assert(WIFI_TLS_TRUST_CUSTOM == NIOS_TLS_TRUST_CUSTOM, "trust modes differ");
-static_assert(WIFI_TLS_TRUST_PIN == NIOS_TLS_TRUST_PIN, "trust modes differ");
-static_assert(WIFI_TLS_OPT_REQUIRE_TLS13 == NIOS_TLS_OPT_REQUIRE_TLS13, "options differ");
-static_assert(WIFI_TLS_STEP_NO_READ == NIOS_TLS_STEP_NO_READ, "step flags differ");
-static_assert(WIFI_TLS_REASON_NO_ENTROPY == NIOS_TLS_REASON_NO_ENTROPY, "reasons differ");
-static_assert(WIFI_TLS_REASON_NO_TIME == NIOS_TLS_REASON_NO_TIME, "reasons differ");
-static_assert(WIFI_TLS_REASON_NO_CUSTOM_CA == NIOS_TLS_REASON_NO_CUSTOM_CA, "reasons differ");
-static_assert(WIFI_TLS_TIME_NONE == NIOS_TLS_TIME_NONE, "time sources differ");
-static_assert(WIFI_TLS_TIME_NIOS == NIOS_TLS_TIME_NIOS, "time sources differ");
-static_assert(WIFI_TLS_FAIL_VERSION_REFUSED == NIOS_TLS_FAIL_VERSION_REFUSED, "fail reasons differ");
-static_assert(WIFI_TLS_FAIL_DOWNGRADE == NIOS_TLS_FAIL_DOWNGRADE, "fail reasons differ");
-static_assert(WIFI_TLS_FAIL_NO_EMS == NIOS_TLS_FAIL_NO_EMS, "fail reasons differ");
-static_assert(WIFI_TLS_FAIL_CERT_VERIFY == NIOS_TLS_FAIL_CERT_VERIFY, "fail reasons differ");
-static_assert(WIFI_TLS_FAIL_PIN_MISMATCH == NIOS_TLS_FAIL_PIN_MISMATCH, "fail reasons differ");
-static_assert(WIFI_TLS_FAIL_PEER_CLOSED == NIOS_TLS_FAIL_PEER_CLOSED, "fail reasons differ");
-static_assert(WIFI_TLS_ALERT_NONE == NIOS_TLS_ALERT_NONE, "alerts differ");
-static_assert(WIFI_TLS_REJECT_RSA_KEY_SHORT == NIOS_TLS_REJECT_RSA_KEY_SHORT, "rejects differ");
-static_assert(WIFI_TLS_REJECT_CURVE == NIOS_TLS_REJECT_CURVE, "rejects differ");
-static_assert(WIFI_TLS_REJECT_NOT_CA == NIOS_TLS_REJECT_NOT_CA, "rejects differ");
+static_assert(WIFI_TLS_MAX_SESSIONS == TLS_MAX_SESSIONS, "session caps differ");
+static_assert(WIFI_TLS_MAX_SNI == TLS_SNI_MAX_LEN, "name lengths differ");
+static_assert(WIFI_TLS_STEP_MAX_IN == TLS_STEP_IN_MAX, "step sizes differ");
+static_assert(WIFI_TLS_STEP_MAX_OUT == TLS_STEP_OUT_MAX, "step sizes differ");
+static_assert(WIFI_TLS_CA_MAX == TLS_CA_MAX_LEN, "CA sizes differ");
+static_assert(WIFI_TLS_PIN_LEN == TLS_PIN_LEN, "pin lengths differ");
+static_assert(WIFI_TLS_SLOT_GLOBAL == TLS_SLOT_GLOBAL, "slots differ");
+static_assert(WIFI_TLS_TRUST_BUNDLE == TLS_TRUST_BUNDLE, "trust modes differ");
+static_assert(WIFI_TLS_TRUST_CUSTOM == TLS_TRUST_CUSTOM, "trust modes differ");
+static_assert(WIFI_TLS_TRUST_PIN == TLS_TRUST_PIN, "trust modes differ");
+static_assert(WIFI_TLS_OPT_REQUIRE_TLS13 == TLS_OPT_REQUIRE_TLS13, "options differ");
+static_assert(WIFI_TLS_STEP_NO_READ == TLS_STEP_NO_READ, "step flags differ");
+static_assert(WIFI_TLS_REASON_NO_ENTROPY == TLS_OPEN_REASON_NO_ENTROPY, "reasons differ");
+static_assert(WIFI_TLS_REASON_NO_TIME == TLS_OPEN_REASON_NO_TIME, "reasons differ");
+static_assert(WIFI_TLS_REASON_NO_CUSTOM_CA == TLS_OPEN_REASON_NO_CUSTOM_CA, "reasons differ");
+static_assert(WIFI_TLS_TIME_NONE == TLS_TIME_NONE, "time sources differ");
+static_assert(WIFI_TLS_TIME_NIOS == TLS_TIME_NIOS, "time sources differ");
+static_assert(WIFI_TLS_FAIL_VERSION_REFUSED == TLS_FAIL_VERSION_REFUSED, "fail reasons differ");
+static_assert(WIFI_TLS_FAIL_DOWNGRADE == TLS_FAIL_DOWNGRADE, "fail reasons differ");
+static_assert(WIFI_TLS_FAIL_NO_EMS == TLS_FAIL_NO_EMS, "fail reasons differ");
+static_assert(WIFI_TLS_FAIL_CERT_VERIFY == TLS_FAIL_CERT_VERIFY, "fail reasons differ");
+static_assert(WIFI_TLS_FAIL_PIN_MISMATCH == TLS_FAIL_PIN_MISMATCH, "fail reasons differ");
+static_assert(WIFI_TLS_FAIL_PEER_CLOSED == TLS_FAIL_PEER_CLOSED, "fail reasons differ");
+static_assert(WIFI_TLS_ALERT_NONE == TLS_ALERT_NONE, "alerts differ");
+static_assert(WIFI_TLS_REJECT_RSA_KEY_SHORT == TLS_CA_REJECT_RSA_KEY_SHORT, "rejects differ");
+static_assert(WIFI_TLS_REJECT_CURVE == TLS_CA_REJECT_CURVE, "rejects differ");
+static_assert(WIFI_TLS_REJECT_NOT_CA == TLS_CA_REJECT_NOT_CA, "rejects differ");
 static_assert(WIFI_TLS_HANDSHAKING == TLS_STATE_HANDSHAKING, "states differ");
 static_assert(WIFI_TLS_ESTABLISHED == TLS_STATE_ESTABLISHED, "states differ");
 static_assert(WIFI_TLS_CLOSED == TLS_STATE_CLOSED, "states differ");
@@ -79,14 +151,14 @@ static bool bare_refusal(const uint8_t *reply, int size, int *esp_err)
 int wifi_tls_take_open(const uint8_t *reply, int size, uint16_t sequence, uint8_t slot, int *esp_err,
                        uint8_t *reason)
 {
-    const nios_tls_open_resp *result = (const nios_tls_open_resp *)reply;
-    if (!is_answer(reply, size, NIOS_CMD_TLS_OPEN, sequence)) {
+    const rpc_tls_open_resp *result = (const rpc_tls_open_resp *)reply;
+    if (!is_answer(reply, size, CMD_TLS_OPEN, sequence)) {
         return WIFI_TLS_FOREIGN;
     }
     if (bare_refusal(reply, size, esp_err)) {
         return WIFI_TLS_REFUSED;
     }
-    if (size != (int)sizeof(nios_tls_open_resp)) {
+    if (size != (int)sizeof(rpc_tls_open_resp)) {
         return WIFI_TLS_INVALID;
     }
     if (result->esp_err != 0) {
@@ -95,7 +167,7 @@ int wifi_tls_take_open(const uint8_t *reply, int size, uint16_t sequence, uint8_
         return WIFI_TLS_REFUSED;
     }
     // The module answers with the slot it opened (0xFF on a refusal).
-    if (result->session != slot) {
+    if (result->slot != slot) {
         return WIFI_TLS_INVALID;
     }
     return 0;
@@ -103,9 +175,9 @@ int wifi_tls_take_open(const uint8_t *reply, int size, uint16_t sequence, uint8_
 
 int wifi_tls_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_tls_step_t *step)
 {
-    const nios_tls_step_resp *result = (const nios_tls_step_resp *)reply;
-    const int header = offsetof(nios_tls_step_resp, data);
-    if (!is_answer(reply, size, NIOS_CMD_TLS_STEP, sequence)) {
+    const rpc_tls_step_resp *result = (const rpc_tls_step_resp *)reply;
+    const int header = offsetof(rpc_tls_step_resp, data);
+    if (!is_answer(reply, size, CMD_TLS_STEP, sequence)) {
         return WIFI_TLS_FOREIGN;
     }
     if (bare_refusal(reply, size, &step->esp_err)) {
@@ -135,7 +207,7 @@ int wifi_tls_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_t
         return WIFI_TLS_INVALID;
     }
     // The reasons come with FAILED only.
-    if (!failed && (result->fail_reason != NIOS_TLS_FAIL_NONE)) {
+    if (!failed && (result->fail_reason != TLS_FAIL_NONE)) {
         return WIFI_TLS_INVALID;
     }
     uint16_t ct = result->ct_out_len;
@@ -171,9 +243,9 @@ int wifi_tls_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_t
 int wifi_tls_take_close(const uint8_t *reply, int size, uint16_t sequence, uint8_t *ct_out, uint16_t room,
                         uint16_t *ct_out_len, int *esp_err)
 {
-    const nios_tls_close_resp *result = (const nios_tls_close_resp *)reply;
-    const int header = offsetof(nios_tls_close_resp, data);
-    if (!is_answer(reply, size, NIOS_CMD_TLS_CLOSE, sequence)) {
+    const rpc_tls_close_resp *result = (const rpc_tls_close_resp *)reply;
+    const int header = offsetof(rpc_tls_close_resp, data);
+    if (!is_answer(reply, size, CMD_TLS_CLOSE, sequence)) {
         return WIFI_TLS_FOREIGN;
     }
     if (bare_refusal(reply, size, esp_err)) {
@@ -196,14 +268,14 @@ int wifi_tls_take_close(const uint8_t *reply, int size, uint16_t sequence, uint8
 
 int wifi_tls_take_stats(const uint8_t *reply, int size, uint16_t sequence, wifi_tls_stats_t *stats, int *esp_err)
 {
-    const nios_tls_stats_resp *result = (const nios_tls_stats_resp *)reply;
-    if (!is_answer(reply, size, NIOS_CMD_TLS_STATS, sequence)) {
+    const rpc_tls_stats_resp *result = (const rpc_tls_stats_resp *)reply;
+    if (!is_answer(reply, size, CMD_TLS_STATS, sequence)) {
         return WIFI_TLS_FOREIGN;
     }
     if (bare_refusal(reply, size, esp_err)) {
         return WIFI_TLS_REFUSED;
     }
-    if (size != (int)sizeof(nios_tls_stats_resp)) {
+    if (size != (int)sizeof(rpc_tls_stats_resp)) {
         return WIFI_TLS_INVALID;
     }
     if (result->esp_err != 0) {
@@ -236,7 +308,7 @@ int wifi_tls_take_stats(const uint8_t *reply, int size, uint16_t sequence, wifi_
 int wifi_tls_take_close_all(const uint8_t *reply, int size, uint16_t sequence, int *esp_err)
 {
     const rpc_espcmd_resp *result = (const rpc_espcmd_resp *)reply;
-    if (!is_answer(reply, size, NIOS_CMD_TLS_CLOSE_ALL, sequence)) {
+    if (!is_answer(reply, size, CMD_TLS_CLOSE_ALL, sequence)) {
         return WIFI_TLS_FOREIGN;
     }
     if (size != (int)sizeof(rpc_espcmd_resp)) {
@@ -255,25 +327,25 @@ int wifi_tls_take_close_all(const uint8_t *reply, int size, uint16_t sequence, i
 // Anything else is not.
 int wifi_tls_take_set_ca(const uint8_t *reply, int size, uint16_t sequence, int *esp_err, uint8_t *reject)
 {
-    const nios_tls_set_ca_resp *result = (const nios_tls_set_ca_resp *)reply;
-    if (!is_answer(reply, size, NIOS_CMD_TLS_SET_CA, sequence)) {
+    const rpc_tls_set_ca_resp *result = (const rpc_tls_set_ca_resp *)reply;
+    if (!is_answer(reply, size, CMD_TLS_SET_CA, sequence)) {
         return WIFI_TLS_FOREIGN;
     }
     if (bare_refusal(reply, size, esp_err)) {
         return WIFI_TLS_REFUSED;
     }
-    if (size != (int)sizeof(nios_tls_set_ca_resp)) {
+    if (size != (int)sizeof(rpc_tls_set_ca_resp)) {
         return WIFI_TLS_INVALID;
     }
     int err = result->esp_err;
     uint8_t why = result->reject;
-    if ((err == 0) && (why == NIOS_TLS_REJECT_NONE)) {
+    if ((err == 0) && (why == TLS_CA_REJECT_NONE)) {
         return 0;
     }
-    bool parse_error = (err <= -2) && (why == NIOS_TLS_REJECT_NONE);
+    bool parse_error = (err <= -2) && (why == TLS_CA_REJECT_NONE);
     bool refused = (err == WIFI_TLS_ESP_INVALID_ARG) &&
-                   ((why == NIOS_TLS_REJECT_RSA_KEY_SHORT) || (why == NIOS_TLS_REJECT_CURVE) ||
-                    (why == NIOS_TLS_REJECT_NOT_CA));
+                   ((why == TLS_CA_REJECT_RSA_KEY_SHORT) || (why == TLS_CA_REJECT_CURVE) ||
+                    (why == TLS_CA_REJECT_NOT_CA));
     if (!parse_error && !refused) {
         return WIFI_TLS_INVALID;
     }
@@ -291,7 +363,7 @@ typedef struct {
 static int fill_open(uint8_t *request, void *context)
 {
     const wifi_tls_open_t *o = ((open_call_t *)context)->open;
-    nios_tls_open_req *args = (nios_tls_open_req *)request;
+    rpc_tls_open_req *args = (rpc_tls_open_req *)request;
     args->trust = o->trust;
     args->sni_len = o->sni_len;
     args->slot = o->slot;
@@ -303,14 +375,14 @@ static int fill_open(uint8_t *request, void *context)
     args->ca_tag = o->ca_tag;
     args->reserved2 = 0;
     if (o->pin) {
-        memcpy(args->pin, o->pin, NIOS_TLS_PIN_LEN);
+        memcpy(args->pin, o->pin, TLS_PIN_LEN);
     } else {
-        memset(args->pin, 0, NIOS_TLS_PIN_LEN);
+        memset(args->pin, 0, TLS_PIN_LEN);
     }
     if (o->sni_len) {
         memcpy(args->sni, o->sni, o->sni_len);
     }
-    return offsetof(nios_tls_open_req, sni) + o->sni_len;
+    return offsetof(rpc_tls_open_req, sni) + o->sni_len;
 }
 
 static int take_open(const uint8_t *reply, int size, uint16_t sequence, void *context)
@@ -334,7 +406,7 @@ int wifi_tls_open(const wifi_tls_open_t *open, uint32_t timeout_ms, const wifi_t
         return WIFI_TLS_TOO_LONG;
     }
     open_call_t args = { open, esp_err, reason };
-    dedicated_call_t call = { "TLS Open", NIOS_CMD_TLS_OPEN, timeout_ms, fill_open, take_open, &args };
+    dedicated_call_t call = { "TLS Open", CMD_TLS_OPEN, timeout_ms, fill_open, take_open, &args };
     set_cancel(&call, cancel);
     return wifi_dedicated_call(&call);
 }
@@ -349,7 +421,7 @@ static int fill_step(uint8_t *request, void *context)
 {
     step_call_t *c = (step_call_t *)context;
     wifi_tls_step_t *step = c->step;
-    nios_tls_step_req *args = (nios_tls_step_req *)request;
+    rpc_tls_step_req *args = (rpc_tls_step_req *)request;
     args->slot = c->slot;
     args->flags = step->flags;
     args->tag = c->tag;
@@ -357,7 +429,7 @@ static int fill_step(uint8_t *request, void *context)
     args->pt_in_len = step->pt_in_len;
     memcpy(args->data, step->ct_in, step->ct_in_len);
     memcpy(args->data + step->ct_in_len, step->pt_in, step->pt_in_len);
-    return offsetof(nios_tls_step_req, data) + step->ct_in_len + step->pt_in_len;
+    return offsetof(rpc_tls_step_req, data) + step->ct_in_len + step->pt_in_len;
 }
 
 static int take_step(const uint8_t *reply, int size, uint16_t sequence, void *context)
@@ -380,7 +452,7 @@ int wifi_tls_step(uint8_t slot, uint16_t tag, wifi_tls_step_t *step, uint32_t ti
         return WIFI_TLS_TOO_LONG;
     }
     step_call_t args = { slot, tag, step };
-    dedicated_call_t call = { "TLS Step", NIOS_CMD_TLS_STEP, timeout_ms, fill_step, take_step, &args };
+    dedicated_call_t call = { "TLS Step", CMD_TLS_STEP, timeout_ms, fill_step, take_step, &args };
     set_cancel(&call, cancel);
     return wifi_dedicated_call(&call);
 }
@@ -399,11 +471,11 @@ typedef struct {
 static int fill_session(uint8_t *request, void *context)
 {
     session_call_t *c = (session_call_t *)context;
-    nios_tls_session_req *args = (nios_tls_session_req *)request;
+    rpc_tls_session_req *args = (rpc_tls_session_req *)request;
     args->slot = c->slot;
     args->reserved = 0;
     args->tag = c->tag;
-    return sizeof(nios_tls_session_req);
+    return sizeof(rpc_tls_session_req);
 }
 
 static int take_close(const uint8_t *reply, int size, uint16_t sequence, void *context)
@@ -418,7 +490,7 @@ int wifi_tls_close(uint8_t slot, uint16_t tag, uint8_t *ct_out, uint16_t room, u
     *esp_err = 0;
     *ct_out_len = 0;
     session_call_t args = { slot, tag, NULL, ct_out, room, ct_out_len, esp_err };
-    dedicated_call_t call = { "TLS Close", NIOS_CMD_TLS_CLOSE, timeout_ms, fill_session, take_close, &args };
+    dedicated_call_t call = { "TLS Close", CMD_TLS_CLOSE, timeout_ms, fill_session, take_close, &args };
     set_cancel(&call, cancel);
     return wifi_dedicated_call(&call);
 }
@@ -434,14 +506,14 @@ int wifi_tls_stats(uint8_t slot, uint16_t tag, wifi_tls_stats_t *stats, int *esp
 {
     *esp_err = 0;
     session_call_t args = { slot, tag, stats, NULL, 0, NULL, esp_err };
-    dedicated_call_t call = { "TLS Stats", NIOS_CMD_TLS_STATS, timeout_ms, fill_session, take_stats, &args };
+    dedicated_call_t call = { "TLS Stats", CMD_TLS_STATS, timeout_ms, fill_session, take_stats, &args };
     set_cancel(&call, cancel);
     return wifi_dedicated_call(&call);
 }
 
 static int fill_close_all(uint8_t *request, void *context)
 {
-    return sizeof(nios_tls_close_all_req);
+    return sizeof(rpc_header_t);
 }
 
 static int take_close_all(const uint8_t *reply, int size, uint16_t sequence, void *context)
@@ -452,7 +524,7 @@ static int take_close_all(const uint8_t *reply, int size, uint16_t sequence, voi
 int wifi_tls_close_all(int *esp_err, uint32_t timeout_ms)
 {
     *esp_err = 0;
-    const dedicated_call_t call = { "TLS Close All", NIOS_CMD_TLS_CLOSE_ALL, timeout_ms, fill_close_all,
+    const dedicated_call_t call = { "TLS Close All", CMD_TLS_CLOSE_ALL, timeout_ms, fill_close_all,
                                     take_close_all, esp_err };
     return wifi_dedicated_call(&call);
 }
@@ -468,11 +540,11 @@ typedef struct {
 static int fill_set_ca(uint8_t *request, void *context)
 {
     set_ca_call_t *c = (set_ca_call_t *)context;
-    nios_tls_set_ca_req *args = (nios_tls_set_ca_req *)request;
+    rpc_tls_set_ca_req *args = (rpc_tls_set_ca_req *)request;
     args->der_len = c->der_len;
     args->ca_tag = c->ca_tag;
     memcpy(args->der, c->der, c->der_len);
-    return offsetof(nios_tls_set_ca_req, der) + c->der_len;
+    return offsetof(rpc_tls_set_ca_req, der) + c->der_len;
 }
 
 static int take_set_ca(const uint8_t *reply, int size, uint16_t sequence, void *context)
@@ -490,7 +562,7 @@ int wifi_tls_set_ca(const uint8_t *der, uint16_t der_len, uint16_t ca_tag, int *
         return WIFI_TLS_TOO_LONG;
     }
     set_ca_call_t args = { der, der_len, ca_tag, esp_err, reject };
-    dedicated_call_t call = { "TLS Set CA", NIOS_CMD_TLS_SET_CA, timeout_ms, fill_set_ca, take_set_ca, &args };
+    dedicated_call_t call = { "TLS Set CA", CMD_TLS_SET_CA, timeout_ms, fill_set_ca, take_set_ca, &args };
     set_cancel(&call, cancel);
     return wifi_dedicated_call(&call);
 }

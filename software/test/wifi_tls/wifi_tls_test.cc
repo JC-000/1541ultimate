@@ -14,7 +14,7 @@
 #include "world.h"
 #include "wifi_dedicated.h"
 #include "wifi_tls.h"
-#include "wifi_tls_rpc.h"
+#include "rpc_calls.h"
 #include "check.h"
 #undef printf
 
@@ -59,12 +59,12 @@ static void header(uint8_t command)
 // A step answer: state, esp_err, ct bytes of 0xC0+i and pt bytes of 0x50+i.
 static int step_reply(uint8_t state, int esp_err, uint16_t ct, uint16_t pt)
 {
-    header(NIOS_CMD_TLS_STEP);
-    nios_tls_step_resp *r = (nios_tls_step_resp *)reply.bytes;
+    header(CMD_TLS_STEP);
+    rpc_tls_step_resp *r = (rpc_tls_step_resp *)reply.bytes;
     r->esp_err = esp_err;
     r->state = state;
-    r->alert_in = NIOS_TLS_ALERT_NONE;
-    r->alert_out = NIOS_TLS_ALERT_NONE;
+    r->alert_in = TLS_ALERT_NONE;
+    r->alert_out = TLS_ALERT_NONE;
     r->ct_out_len = ct;
     r->pt_out_len = pt;
     for (int i = 0; i < ct; i++) {
@@ -73,7 +73,7 @@ static int step_reply(uint8_t state, int esp_err, uint16_t ct, uint16_t pt)
     for (int i = 0; i < pt; i++) {
         r->data[ct + i] = (uint8_t)(0x50 + i);
     }
-    return offsetof(nios_tls_step_resp, data) + ct + pt;
+    return offsetof(rpc_tls_step_resp, data) + ct + pt;
 }
 
 static uint8_t ct_out[CMD_BUF_SIZE];
@@ -121,8 +121,8 @@ static void test_take_step(void)
         fresh_step(&st, 1024);
         int r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
         bool ok = (r == 0) && (st.ct_out_len == ct) && (st.pt_out_len == pt) && (st.state == WIFI_TLS_ESTABLISHED) &&
-                  (memcmp(ct_out, ((nios_tls_step_resp *)reply.bytes)->data, ct) == 0) &&
-                  (memcmp(pt_out, ((nios_tls_step_resp *)reply.bytes)->data + ct, pt) == 0) &&
+                  (memcmp(ct_out, ((rpc_tls_step_resp *)reply.bytes)->data, ct) == 0) &&
+                  (memcmp(pt_out, ((rpc_tls_step_resp *)reply.bytes)->data + ct, pt) == 0) &&
                   (ct_out[ct] == 0xEE) && (pt_out[pt] == 0xEE);
         all = all && ok;
     }
@@ -131,7 +131,7 @@ static void test_take_step(void)
     int size = step_reply(TLS_STATE_ESTABLISHED, 0, 10, 10);
     int foreign = 0;
     for (int command = 0; command < 256; command++) {
-        if (command == NIOS_CMD_TLS_STEP) {
+        if (command == CMD_TLS_STEP) {
             continue;
         }
         ((rpc_header_t *)reply.bytes)->command = command;
@@ -163,8 +163,8 @@ static void test_take_step(void)
 
     // FAILED carries the reasons (5.2), and only FAILED does.
     size = step_reply(TLS_STATE_FAILED, -0x2700, 7, 3);
-    nios_tls_step_resp *res = (nios_tls_step_resp *)reply.bytes;
-    res->fail_reason = NIOS_TLS_FAIL_CERT_VERIFY;
+    rpc_tls_step_resp *res = (rpc_tls_step_resp *)reply.bytes;
+    res->fail_reason = TLS_FAIL_CERT_VERIFY;
     res->verify_flags = 0x0C;
     res->alert_in = 70;
     res->alert_out = 42;
@@ -177,14 +177,14 @@ static void test_take_step(void)
     int reasons = 0;
     for (int state = 0; state < 3; state++) {
         size = step_reply((uint8_t)state, 0, 5, 0);
-        ((nios_tls_step_resp *)reply.bytes)->fail_reason = 4;
+        ((rpc_tls_step_resp *)reply.bytes)->fail_reason = 4;
         fresh_step(&st, 1024);
         reasons += (wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st) == WIFI_TLS_INVALID) && nothing_out(&st);
     }
     check(reasons == 3, "a fail_reason without FAILED is invalid (%d of 3)", reasons);
     size = step_reply(TLS_STATE_ESTABLISHED, 0, 5, 0);
-    ((nios_tls_step_resp *)reply.bytes)->alert_in = 0xFF;
-    ((nios_tls_step_resp *)reply.bytes)->verify_flags = 0;
+    ((rpc_tls_step_resp *)reply.bytes)->alert_in = 0xFF;
+    ((rpc_tls_step_resp *)reply.bytes)->verify_flags = 0;
     fresh_step(&st, 1024);
     r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
     check((r == 0) && (st.alert_in == WIFI_TLS_ALERT_NONE) && (st.fail_reason == 0), "no alert is 0xFF");
@@ -220,7 +220,7 @@ static void test_take_step(void)
     r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
     check((r == WIFI_TLS_REFUSED) && (st.esp_err == 0x105) && nothing_out(&st),
           "ESP_ERR_NOT_FOUND (a stale tag) is refused, nothing taken");
-    header(NIOS_CMD_TLS_STEP);
+    header(CMD_TLS_STEP);
     ((rpc_espcmd_resp *)reply.bytes)->esp_err = 0x105;
     fresh_step(&st, 1024);
     r = wifi_tls_take_step(reply.bytes, 8, SEQUENCE, &st);
@@ -246,9 +246,9 @@ static void test_take_step(void)
         for (int i = 0; i < 64; i++) {
             reply.bytes[i] = (uint8_t)world_rand(256);
         }
-        res = (nios_tls_step_resp *)reply.bytes;
+        res = (rpc_tls_step_resp *)reply.bytes;
         if (world_rand(2)) {
-            res->hdr.command = NIOS_CMD_TLS_STEP;
+            res->hdr.command = CMD_TLS_STEP;
             res->hdr.sequence = SEQUENCE;
         }
         if (world_rand(2)) {
@@ -265,7 +265,7 @@ static void test_take_step(void)
             res->pt_out_len = world_rand(4) ? world_rand(1100) : 0;
         }
         size = world_rand(2) ? (int)world_rand(CMD_BUF_SIZE + 1)
-                             : (int)(offsetof(nios_tls_step_resp, data) + res->ct_out_len + res->pt_out_len);
+                             : (int)(offsetof(rpc_tls_step_resp, data) + res->ct_out_len + res->pt_out_len);
         if (size > CMD_BUF_SIZE) {
             size = CMD_BUF_SIZE;
         }
@@ -276,7 +276,7 @@ static void test_take_step(void)
         if ((r == 0) || (r == WIFI_TLS_AGAIN)) {
             uint16_t ct = res->ct_out_len, pt = res->pt_out_len;
             bool failed = (res->state == TLS_STATE_FAILED);
-            bool good = (ct <= room) && (pt <= room) && (size == (int)offsetof(nios_tls_step_resp, data) + ct + pt) &&
+            bool good = (ct <= room) && (pt <= room) && (size == (int)offsetof(rpc_tls_step_resp, data) + ct + pt) &&
                         (st.ct_out_len == ct) && (res->state <= TLS_STATE_FAILED) &&
                         (failed || (res->fail_reason == 0)) &&
                         !((st.flags & WIFI_TLS_STEP_NO_READ) && pt) &&
@@ -298,17 +298,17 @@ static void test_take_others(void)
     int esp_err = 0;
     uint8_t reason = 0x77;
 
-    header(NIOS_CMD_TLS_OPEN);
-    ((nios_tls_open_resp *)reply.bytes)->session = 1;
-    int r = wifi_tls_take_open(reply.bytes, sizeof(nios_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
+    header(CMD_TLS_OPEN);
+    ((rpc_tls_open_resp *)reply.bytes)->slot = 1;
+    int r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
     check(r == 0, "OPEN: 12 bytes, no error, slot 1 as asked: the session is open");
     int other = 0;
     const uint8_t slots[] = { 0, 2, 0xFF };
     for (unsigned k = 0; k < sizeof(slots); k++) {
-        ((nios_tls_open_resp *)reply.bytes)->session = slots[k];
+        ((rpc_tls_open_resp *)reply.bytes)->slot = slots[k];
         other += (wifi_tls_take_open(reply.bytes, 12, SEQUENCE, 1, &esp_err, &reason) == WIFI_TLS_INVALID);
     }
-    ((nios_tls_open_resp *)reply.bytes)->session = 1;
+    ((rpc_tls_open_resp *)reply.bytes)->slot = 1;
     check(other == 3, "OPEN: success naming another slot (0, 2, 0xFF) is malformed (%d of 3)", other);
     int wrong = 0;
     const int open_sizes[] = { 4, 9, 10, 11, 13, 16 };
@@ -318,31 +318,31 @@ static void test_take_others(void)
     check(wrong == 6, "OPEN: any size but 12 without an error is invalid (%d of 6)", wrong);
     check(wifi_tls_take_open(reply.bytes, 8, SEQUENCE, 1, &esp_err, &reason) == WIFI_TLS_INVALID,
           "OPEN: 8 bytes and no error is invalid");
-    ((nios_tls_open_resp *)reply.bytes)->esp_err = 0x103;
-    ((nios_tls_open_resp *)reply.bytes)->reason = NIOS_TLS_REASON_NO_CUSTOM_CA;
-    r = wifi_tls_take_open(reply.bytes, sizeof(nios_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
+    ((rpc_tls_open_resp *)reply.bytes)->esp_err = 0x103;
+    ((rpc_tls_open_resp *)reply.bytes)->reason = TLS_OPEN_REASON_NO_CUSTOM_CA;
+    r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
     check((r == WIFI_TLS_REFUSED) && (esp_err == 0x103) && (reason == WIFI_TLS_REASON_NO_CUSTOM_CA),
           "OPEN: refused, with reason 3 NO_CUSTOM_CA");
     // m3niosadv: the refusal as m3-esp sends it, slot 0xFF (rpc_dispatch.c cmd_tls_open).
-    ((nios_tls_open_resp *)reply.bytes)->session = 0xFF;
-    ((nios_tls_open_resp *)reply.bytes)->reason = NIOS_TLS_REASON_NO_TIME;
-    r = wifi_tls_take_open(reply.bytes, sizeof(nios_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
+    ((rpc_tls_open_resp *)reply.bytes)->slot = 0xFF;
+    ((rpc_tls_open_resp *)reply.bytes)->reason = TLS_OPEN_REASON_NO_TIME;
+    r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
     check((r == WIFI_TLS_REFUSED) && (reason == WIFI_TLS_REASON_NO_TIME),
           "ADV-7: OPEN refused as m3-esp sends it (slot byte 0xFF) -> REFUSED with its reason, not malformed");
-    ((nios_tls_open_resp *)reply.bytes)->session = 1;
-    header(NIOS_CMD_TLS_OPEN);
+    ((rpc_tls_open_resp *)reply.bytes)->slot = 1;
+    header(CMD_TLS_OPEN);
     ((rpc_espcmd_resp *)reply.bytes)->esp_err = 0x106;
     reason = 0;
     r = wifi_tls_take_open(reply.bytes, 8, SEQUENCE, 1, &esp_err, &reason);
     check((r == WIFI_TLS_REFUSED) && (esp_err == 0x106) && (reason == 0),
           "OPEN: a module without TLS answers a bare NOT_SUPPORTED: refused (-> 90)");
-    ((rpc_header_t *)reply.bytes)->command = NIOS_CMD_TLS_STEP;
+    ((rpc_header_t *)reply.bytes)->command = CMD_TLS_STEP;
     check(wifi_tls_take_open(reply.bytes, 12, SEQUENCE, 1, &esp_err, &reason) == WIFI_TLS_FOREIGN, "OPEN: a STEP answer is foreign");
 
     uint8_t notify[64];
     uint16_t notify_len = 0x7777;
-    header(NIOS_CMD_TLS_CLOSE);
-    nios_tls_close_resp *c = (nios_tls_close_resp *)reply.bytes;
+    header(CMD_TLS_CLOSE);
+    rpc_tls_close_resp *c = (rpc_tls_close_resp *)reply.bytes;
     c->ct_out_len = 24;
     for (int i = 0; i < 24; i++) {
         c->data[i] = (uint8_t)(0x90 + i);
@@ -363,8 +363,8 @@ static void test_take_others(void)
     r = wifi_tls_take_close(reply.bytes, 8, SEQUENCE, notify, sizeof(notify), &notify_len, &esp_err);
     check((r == WIFI_TLS_REFUSED) && (esp_err == 0x105), "CLOSE: ... and as a bare 8-byte answer");
 
-    header(NIOS_CMD_TLS_STATS);
-    nios_tls_stats_resp *s = (nios_tls_stats_resp *)reply.bytes;
+    header(CMD_TLS_STATS);
+    rpc_tls_stats_resp *s = (rpc_tls_stats_resp *)reply.bytes;
     s->heap_free = 100001;
     s->tls_version = 0x0303;
     s->ciphersuite = 0xC02F;
@@ -379,7 +379,7 @@ static void test_take_others(void)
     }
     wifi_tls_stats_t stats;
     memset(&stats, 0, sizeof(stats));
-    r = wifi_tls_take_stats(reply.bytes, sizeof(nios_tls_stats_resp), SEQUENCE, &stats, &esp_err);
+    r = wifi_tls_take_stats(reply.bytes, sizeof(rpc_tls_stats_resp), SEQUENCE, &stats, &esp_err);
     check((r == 0) && (stats.heap_free == 100001) && (stats.tls_version == 0x0303) && (stats.ciphersuite == 0xC02F) &&
           (stats.group == 0x0017) && (stats.time_source == 2) && (stats.entropy_source == 1) && (stats.ems == 1) &&
           (stats.block_max_ms == 0x1234) && (stats.spki_sha256[0] == 0) && (stats.spki_sha256[31] == 217),
@@ -393,7 +393,7 @@ static void test_take_others(void)
     }
     check(wrong == 5, "STATS: any size but 96, M2's 60 included, is invalid (%d of 5)", wrong);
 
-    header(NIOS_CMD_TLS_CLOSE_ALL);
+    header(CMD_TLS_CLOSE_ALL);
     check(wifi_tls_take_close_all(reply.bytes, 8, SEQUENCE, &esp_err) == 0, "CLOSE_ALL: 8 bytes, no error");
     check(wifi_tls_take_close_all(reply.bytes, 12, SEQUENCE, &esp_err) == WIFI_TLS_INVALID, "CLOSE_ALL: 12 is invalid");
     ((rpc_espcmd_resp *)reply.bytes)->esp_err = 0x106;
@@ -416,9 +416,9 @@ static void test_take_others(void)
     };
     int good = 0;
     for (unsigned k = 0; k < sizeof(ca) / sizeof(ca[0]); k++) {
-        header(NIOS_CMD_TLS_SET_CA);
-        ((nios_tls_set_ca_resp *)reply.bytes)->esp_err = ca[k].err;
-        ((nios_tls_set_ca_resp *)reply.bytes)->reject = ca[k].reject;
+        header(CMD_TLS_SET_CA);
+        ((rpc_tls_set_ca_resp *)reply.bytes)->esp_err = ca[k].err;
+        ((rpc_tls_set_ca_resp *)reply.bytes)->reject = ca[k].reject;
         int e = 0x77;
         uint8_t j = 0x77;
         r = wifi_tls_take_set_ca(reply.bytes, 12, SEQUENCE, &e, &j);
@@ -429,7 +429,7 @@ static void test_take_others(void)
         good += ok;
     }
     check(good == (int)(sizeof(ca) / sizeof(ca[0])), "SET_CA: only the three well formed answers pass (r7 L-3)");
-    header(NIOS_CMD_TLS_SET_CA);
+    header(CMD_TLS_SET_CA);
     check(wifi_tls_take_set_ca(reply.bytes, 11, SEQUENCE, &esp_err, &reason) == WIFI_TLS_INVALID, "SET_CA: 11 bytes");
     ((rpc_espcmd_resp *)reply.bytes)->esp_err = 0x106;
     check(wifi_tls_take_set_ca(reply.bytes, 8, SEQUENCE, &esp_err, &reason) == WIFI_TLS_REFUSED && esp_err == 0x106,
@@ -444,12 +444,12 @@ static void tls_maker(command_buf_t *rx, const uint8_t *req, int req_size, int k
     rpc_header_t *hdr = (rpc_header_t *)rx->data;
     *hdr = *request;
     switch (request->command) {
-        case NIOS_CMD_TLS_OPEN:
-            ((nios_tls_open_resp *)rx->data)->session = ((const nios_tls_open_req *)req)->slot;
-            rx->size = sizeof(nios_tls_open_resp);
+        case CMD_TLS_OPEN:
+            ((rpc_tls_open_resp *)rx->data)->slot = ((const rpc_tls_open_req *)req)->slot;
+            rx->size = sizeof(rpc_tls_open_resp);
             break;
-        case NIOS_CMD_TLS_STEP: {
-            nios_tls_step_resp *r = (nios_tls_step_resp *)rx->data;
+        case CMD_TLS_STEP: {
+            rpc_tls_step_resp *r = (rpc_tls_step_resp *)rx->data;
             r->state = TLS_STATE_ESTABLISHED;
             r->alert_in = 0xFF;
             r->alert_out = 0xFF;
@@ -458,18 +458,18 @@ static void tls_maker(command_buf_t *rx, const uint8_t *req, int req_size, int k
             for (int i = 0; i < 9; i++) {
                 r->data[i] = (uint8_t)(i + 1);
             }
-            rx->size = offsetof(nios_tls_step_resp, data) + 9;
+            rx->size = offsetof(rpc_tls_step_resp, data) + 9;
             break;
         }
-        case NIOS_CMD_TLS_CLOSE:
-            rx->size = sizeof(nios_tls_close_resp);
+        case CMD_TLS_CLOSE:
+            rx->size = sizeof(rpc_tls_close_resp);
             break;
-        case NIOS_CMD_TLS_STATS:
-            ((nios_tls_stats_resp *)rx->data)->heap_free = 123456;
-            rx->size = sizeof(nios_tls_stats_resp);
+        case CMD_TLS_STATS:
+            ((rpc_tls_stats_resp *)rx->data)->heap_free = 123456;
+            rx->size = sizeof(rpc_tls_stats_resp);
             break;
-        case NIOS_CMD_TLS_SET_CA:
-            rx->size = sizeof(nios_tls_set_ca_resp);
+        case CMD_TLS_SET_CA:
+            rx->size = sizeof(rpc_tls_set_ca_resp);
             break;
         default:
             rx->size = sizeof(rpc_espcmd_resp);
@@ -546,7 +546,7 @@ static void test_calls(void)
     world_reset(1, tls_maker, true);
     uint16_t seq = sequence_nr;
     int r = wifi_tls_open(&o, 5000, NULL, &esp_err, &reason);
-    const uint8_t fixed[] = { NIOS_CMD_TLS_OPEN, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 2, 3, 1, 1,
+    const uint8_t fixed[] = { CMD_TLS_OPEN, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 2, 3, 1, 1,
                               0xCD, 0xAB, 0x89, 0x67, 0x03, 0x02, 0x01, 0, 0x05, 0x04, 0, 0 };
     std::string want = "transmit 55:" + hex(fixed, 20) + hex(pin, 32) + hex((const uint8_t *)"a.b", 3);
     check((r == 0) && (esp_err == 0) && (sent() == want),
@@ -577,7 +577,7 @@ static void test_calls(void)
     world_reset(6, tls_maker, true);
     seq = sequence_nr;
     r = wifi_tls_step(1, 0x0A0B, &st, 5000, NULL);
-    uint8_t expect_step[] = { NIOS_CMD_TLS_STEP, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 1, 1, 0x0B,
+    uint8_t expect_step[] = { CMD_TLS_STEP, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 1, 1, 0x0B,
                               0x0A, 3, 0, 2, 0, 0xA1, 0xA2, 0xA3, 0xB1, 0xB2 };
     check((r == WIFI_TLS_INVALID) && (sent() == "transmit 17:" + hex(expect_step, sizeof(expect_step))),
           "STEP: slot, flags, tag, ct_in_len, pt_in_len, ciphertext, plaintext (and the maker's plaintext on NO_READ is refused)");
@@ -605,7 +605,7 @@ static void test_calls(void)
     world_reset(9, tls_maker, true);
     seq = sequence_nr;
     r = wifi_tls_close(1, 0xBEEF, notify, sizeof(notify), &notify_len, &esp_err, 1000, NULL);
-    uint8_t expect_close[] = { NIOS_CMD_TLS_CLOSE, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 1, 0,
+    uint8_t expect_close[] = { CMD_TLS_CLOSE, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 1, 0,
                                0xEF, 0xBE };
     check((r == 0) && (notify_len == 0) && (sent() == "transmit 8:" + hex(expect_close, sizeof(expect_close))),
           "CLOSE: slot, 0, tag (8 bytes)");
@@ -613,21 +613,21 @@ static void test_calls(void)
     world_reset(10, tls_maker, true);
     seq = sequence_nr;
     r = wifi_tls_stats(WIFI_TLS_SLOT_GLOBAL, 0, &stats, &esp_err, 1000, NULL);
-    uint8_t expect_stats[] = { NIOS_CMD_TLS_STATS, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 0xFF, 0,
+    uint8_t expect_stats[] = { CMD_TLS_STATS, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 0xFF, 0,
                                0, 0 };
     check((r == 0) && (stats.heap_free == 123456) && (sent() == "transmit 8:" + hex(expect_stats, 8)),
           "STATS: the module as a whole is slot $FF, tag 0");
     world_reset(11, tls_maker, true);
     seq = sequence_nr;
     r = wifi_tls_close_all(&esp_err, 500);
-    uint8_t expect_all[] = { NIOS_CMD_TLS_CLOSE_ALL, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8) };
+    uint8_t expect_all[] = { CMD_TLS_CLOSE_ALL, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8) };
     check((r == 0) && (sent() == "transmit 4:" + hex(expect_all, 4)), "CLOSE_ALL: the header only");
     uint8_t der[5] = { 0x30, 0x82, 0x01, 0x02, 0x03 };
     uint8_t reject;
     world_reset(12, tls_maker, true);
     seq = sequence_nr;
     r = wifi_tls_set_ca(der, 5, 0x1122, &esp_err, &reject, 5000, NULL);
-    uint8_t expect_ca[] = { NIOS_CMD_TLS_SET_CA, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 5, 0,
+    uint8_t expect_ca[] = { CMD_TLS_SET_CA, WIFI_DEDICATED_THREAD, (uint8_t)seq, (uint8_t)(seq >> 8), 5, 0,
                             0x22, 0x11, 0x30, 0x82, 0x01, 0x02, 0x03 };
     check((r == 0) && (sent() == "transmit 13:" + hex(expect_ca, sizeof(expect_ca))), "SET_CA: der_len, ca_tag, der");
     static uint8_t big_ca[WIFI_TLS_CA_MAX + 1];
