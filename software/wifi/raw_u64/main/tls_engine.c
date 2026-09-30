@@ -114,9 +114,10 @@ static int tls_bio_recv(void *ctx, unsigned char *buf, size_t len)
 }
 
 #if CONFIG_TLS_SPIKE
-// mbedTLS 3.6.0's TLS 1.3 client verifies whatever authmode says (ssl_tls13_validate_certificate()
-// starts from VERIFY_REQUIRED and only a server reads conf->authmode), and it wants a CA chain.
-// So "verify off" is an empty CA chain plus a callback that clears every verification flag.
+// "Verify off" is VERIFY_NONE, an empty CA chain and a callback that clears every verification flag.
+// mbedTLS 3.6.0's TLS 1.3 client ignored VERIFY_NONE and needed the chain and the callback, which
+// still left its key-usage checks failing a session; mbedTLS 4 returns before any check
+// (ssl_tls.c:8741-8744 in 4.1.1), so these two are unused there and nothing is checked at all.
 // Spike builds only (CONFIG_TLS_SPIKE): anything else refuses to open without verification.
 static int tls_accept_any(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags)
 {
@@ -252,8 +253,12 @@ static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const c
 #endif
         if (verify && (cas == TLS_OPEN_CA_TEST)) {
             ret = mbedtls_x509_crt_parse(&s->ca, tls_test_ca_pem_start, tls_test_ca_pem_end - tls_test_ca_pem_start);
-            if (ret > 0) {
-                ret = MBEDTLS_ERR_X509_INVALID_FORMAT; // some certificates did not parse
+            if (ret != 0) {
+                // The embedded CA always parses, so failing to is short memory whatever the code says:
+                // mbedTLS 4 reports a failed allocation in its key import as an invalid key
+                // (pk_ecc.c:156-159, pk_rsa.c:75-77 in TF-PSA-Crypto), which would stop the eviction
+                ESP_LOGW(TAG, "Test CA did not parse: -0x%04x", (unsigned)-ret);
+                ret = PSA_ERROR_INSUFFICIENT_MEMORY;
             }
             if (ret == 0) {
                 mbedtls_ssl_conf_ca_chain(&s->conf, &s->ca, NULL);
@@ -320,7 +325,8 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
     // All randomness comes from PSA. ESP-IDF 6 has already run psa_crypto_init() at startup, before
     // the radio, but with MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG: PSA keeps no seeded state and draws every
     // byte from esp_fill_random() when it is needed. A session draws only after this entropy gate,
-    // and the radio then stays on, so the gate still decides (M2-SPEC section 8). This init is then
+    // but the gate is checked here at OPEN only, and the handshake steps draw later: this relies on
+    // the bridge never stopping the radio once started (M2-SPEC section 8). This init is then
     // a no-op; it stays for builds that do not initialise PSA at startup.
     if (!psa_ready) {
         psa_status_t status = psa_crypto_init();
