@@ -76,7 +76,8 @@ static bool bare_refusal(const uint8_t *reply, int size, int *esp_err)
     return false;
 }
 
-int wifi_tls_take_open(const uint8_t *reply, int size, uint16_t sequence, int *esp_err, uint8_t *reason)
+int wifi_tls_take_open(const uint8_t *reply, int size, uint16_t sequence, uint8_t slot, int *esp_err,
+                       uint8_t *reason)
 {
     const nios_tls_open_resp *result = (const nios_tls_open_resp *)reply;
     if (!is_answer(reply, size, NIOS_CMD_TLS_OPEN, sequence)) {
@@ -92,6 +93,10 @@ int wifi_tls_take_open(const uint8_t *reply, int size, uint16_t sequence, int *e
         *esp_err = result->esp_err;
         *reason = result->reason;
         return WIFI_TLS_REFUSED;
+    }
+    // The module answers with the slot it opened (0xFF on a refusal).
+    if (result->session != slot) {
+        return WIFI_TLS_INVALID;
     }
     return 0;
 }
@@ -311,7 +316,7 @@ static int fill_open(uint8_t *request, void *context)
 static int take_open(const uint8_t *reply, int size, uint16_t sequence, void *context)
 {
     open_call_t *c = (open_call_t *)context;
-    return wifi_tls_take_open(reply, size, sequence, c->esp_err, c->reason);
+    return wifi_tls_take_open(reply, size, sequence, c->open->slot, c->esp_err, c->reason);
 }
 
 static void set_cancel(dedicated_call_t *call, const wifi_tls_cancel_t *cancel)

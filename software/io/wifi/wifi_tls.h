@@ -191,7 +191,9 @@ int wifi_tls_set_ca(const uint8_t *der, uint16_t der_len, uint16_t ca_tag, int *
 // 0 for the answer, WIFI_TLS_FOREIGN for a reply to something else, and REFUSED
 // or INVALID otherwise (and AGAIN for a step), and writes its outputs as
 // described above.
-int wifi_tls_take_open(const uint8_t *reply, int size, uint16_t sequence, int *esp_err, uint8_t *reason);
+// OPEN's answer names the slot it opened, which must be the one asked for.
+int wifi_tls_take_open(const uint8_t *reply, int size, uint16_t sequence, uint8_t slot, int *esp_err,
+                       uint8_t *reason);
 int wifi_tls_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_tls_step_t *step);
 int wifi_tls_take_close(const uint8_t *reply, int size, uint16_t sequence, uint8_t *ct_out, uint16_t room,
                         uint16_t *ct_out_len, int *esp_err);

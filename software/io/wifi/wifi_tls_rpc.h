@@ -90,7 +90,7 @@ typedef struct {
 typedef struct {
     rpc_header_t hdr;
     int32_t esp_err;
-    uint8_t session;
+    uint8_t session;     // the slot opened; 0xFF on a refusal
     uint8_t reason;      // NIOS_TLS_REASON_*
     uint16_t reserved;
 } nios_tls_open_resp;

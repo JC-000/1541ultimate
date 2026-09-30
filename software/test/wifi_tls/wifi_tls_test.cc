@@ -300,29 +300,37 @@ static void test_take_others(void)
 
     header(NIOS_CMD_TLS_OPEN);
     ((nios_tls_open_resp *)reply.bytes)->session = 1;
-    int r = wifi_tls_take_open(reply.bytes, sizeof(nios_tls_open_resp), SEQUENCE, &esp_err, &reason);
-    check(r == 0, "OPEN: 12 bytes, no error: the session is open");
+    int r = wifi_tls_take_open(reply.bytes, sizeof(nios_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
+    check(r == 0, "OPEN: 12 bytes, no error, slot 1 as asked: the session is open");
+    int other = 0;
+    const uint8_t slots[] = { 0, 2, 0xFF };
+    for (unsigned k = 0; k < sizeof(slots); k++) {
+        ((nios_tls_open_resp *)reply.bytes)->session = slots[k];
+        other += (wifi_tls_take_open(reply.bytes, 12, SEQUENCE, 1, &esp_err, &reason) == WIFI_TLS_INVALID);
+    }
+    ((nios_tls_open_resp *)reply.bytes)->session = 1;
+    check(other == 3, "OPEN: success naming another slot (0, 2, 0xFF) is malformed (%d of 3)", other);
     int wrong = 0;
     const int open_sizes[] = { 4, 9, 10, 11, 13, 16 };
     for (unsigned k = 0; k < sizeof(open_sizes) / sizeof(open_sizes[0]); k++) {
-        wrong += (wifi_tls_take_open(reply.bytes, open_sizes[k], SEQUENCE, &esp_err, &reason) == WIFI_TLS_INVALID);
+        wrong += (wifi_tls_take_open(reply.bytes, open_sizes[k], SEQUENCE, 1, &esp_err, &reason) == WIFI_TLS_INVALID);
     }
     check(wrong == 6, "OPEN: any size but 12 without an error is invalid (%d of 6)", wrong);
-    check(wifi_tls_take_open(reply.bytes, 8, SEQUENCE, &esp_err, &reason) == WIFI_TLS_INVALID,
+    check(wifi_tls_take_open(reply.bytes, 8, SEQUENCE, 1, &esp_err, &reason) == WIFI_TLS_INVALID,
           "OPEN: 8 bytes and no error is invalid");
     ((nios_tls_open_resp *)reply.bytes)->esp_err = 0x103;
     ((nios_tls_open_resp *)reply.bytes)->reason = NIOS_TLS_REASON_NO_CUSTOM_CA;
-    r = wifi_tls_take_open(reply.bytes, sizeof(nios_tls_open_resp), SEQUENCE, &esp_err, &reason);
+    r = wifi_tls_take_open(reply.bytes, sizeof(nios_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
     check((r == WIFI_TLS_REFUSED) && (esp_err == 0x103) && (reason == WIFI_TLS_REASON_NO_CUSTOM_CA),
           "OPEN: refused, with reason 3 NO_CUSTOM_CA");
     header(NIOS_CMD_TLS_OPEN);
     ((rpc_espcmd_resp *)reply.bytes)->esp_err = 0x106;
     reason = 0;
-    r = wifi_tls_take_open(reply.bytes, 8, SEQUENCE, &esp_err, &reason);
+    r = wifi_tls_take_open(reply.bytes, 8, SEQUENCE, 1, &esp_err, &reason);
     check((r == WIFI_TLS_REFUSED) && (esp_err == 0x106) && (reason == 0),
           "OPEN: a module without TLS answers a bare NOT_SUPPORTED: refused (-> 90)");
     ((rpc_header_t *)reply.bytes)->command = NIOS_CMD_TLS_STEP;
-    check(wifi_tls_take_open(reply.bytes, 12, SEQUENCE, &esp_err, &reason) == WIFI_TLS_FOREIGN, "OPEN: a STEP answer is foreign");
+    check(wifi_tls_take_open(reply.bytes, 12, SEQUENCE, 1, &esp_err, &reason) == WIFI_TLS_FOREIGN, "OPEN: a STEP answer is foreign");
 
     uint8_t notify[64];
     uint16_t notify_len = 0x7777;
@@ -430,6 +438,7 @@ static void tls_maker(command_buf_t *rx, const uint8_t *req, int req_size, int k
     *hdr = *request;
     switch (request->command) {
         case NIOS_CMD_TLS_OPEN:
+            ((nios_tls_open_resp *)rx->data)->session = ((const nios_tls_open_req *)req)->slot;
             rx->size = sizeof(nios_tls_open_resp);
             break;
         case NIOS_CMD_TLS_STEP: {
