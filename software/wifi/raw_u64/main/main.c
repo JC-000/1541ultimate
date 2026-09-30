@@ -45,6 +45,9 @@ void app_main()
 {
     ESP_ERROR_CHECK( uart_set_pin(UART_NUM_0, IO_DEBUG_TX, -1, -1, -1));
     ESP_LOGI(TAG, "Application Start");
+    // The certificate bundle logs "Certificate validated" at INFO on every verification, inside the TLS
+    // handshake on the dispatcher's stack; keep its warnings and errors, drop that printf from the deep path
+    esp_log_level_set("esp-x509-crt-bundle", ESP_LOG_WARN);
     
     setup_modem();
 
