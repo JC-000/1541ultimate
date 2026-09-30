@@ -22,6 +22,7 @@
 #include "esp_heap_caps.h"
 #include "mbedtls/ssl.h"
 #include "mbedtls/x509_crt.h"
+#include "mbedtls/pk.h"
 #include "psa/crypto.h"
 #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
 #include "esp_crt_bundle.h"
@@ -92,6 +93,27 @@ static uint8_t generation;
 static uint32_t use_count;
 static int psa_ready;
 static int clock_set_by_nios;
+
+// mbedtls_abi_probe.c, compiled inside the mbedtls library: the sizes it sees for the structures a session
+// embeds. A define that reaches the library but not this file (esp-pqc's ML-DSA grows mbedtls_pk_context)
+// would make every session corrupt memory, so OPEN refuses TLS when they differ.
+extern const size_t bridge_mbedtls_abi_sizes[4];
+
+static int tls_abi_matches(void)
+{
+    const size_t mine[4] = { sizeof(mbedtls_pk_context), sizeof(mbedtls_x509_crt), sizeof(mbedtls_ssl_context),
+                             sizeof(mbedtls_ssl_config) };
+    static const char *const names[4] = { "pk_context", "x509_crt", "ssl_context", "ssl_config" };
+    int ok = 1;
+    for (int i = 0; i < 4; i++) {
+        if (mine[i] != bridge_mbedtls_abi_sizes[i]) {
+            ESP_LOGE(TAG, "mbedtls_%s is %u B here but %u B in the library: TLS refused", names[i],
+                     (unsigned)mine[i], (unsigned)bridge_mbedtls_abi_sizes[i]);
+            ok = 0;
+        }
+    }
+    return ok;
+}
 
 static int tls_bio_send(void *ctx, const unsigned char *buf, size_t len)
 {
@@ -320,6 +342,9 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
         return ESP_ERR_NOT_SUPPORTED;
     }
 #endif
+    if (!tls_abi_matches()) { // a build defect: no session can be safe
+        return ESP_FAIL;
+    }
     if (entropy_source() == ENTROPY_NONE) {
         *reason = TLS_OPEN_REASON_NO_ENTROPY;
         return ESP_ERR_INVALID_STATE;

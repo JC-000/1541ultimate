@@ -1,4 +1,4 @@
-# Patches to the mbedTLS sources that ESP-IDF builds (esp-pqc's fork of 4.1.1 here), included after project().
+# Patches to the mbedTLS sources that ESP-IDF builds, and one probe added to them (at the end), (esp-pqc's fork of 4.1.1 here), included after project().
 # The fetched component stays as it is (the component manager checks its hash): each patched file is copied into
 # the build directory, patched there, and compiled in place of the original.
 #
@@ -47,3 +47,6 @@ set_property(TARGET mbedtls PROPERTY SOURCES ${_srcs})
 set_source_files_properties("${_work}/library/${_file}" TARGET_DIRECTORY mbedtls
                             PROPERTIES COMPILE_OPTIONS "-iquote;${_libdir}")
 message(STATUS "mbedTLS: ${_file} from ${_libdir} built with patches/mbedtls-tls13-hrr-cookie.patch")
+
+# mbedtls_abi_probe.c: the sizes of the mbedTLS structures the engine embeds, as the library sees them
+target_sources(mbedtls PRIVATE "${CMAKE_CURRENT_LIST_DIR}/mbedtls_abi_probe.c")
