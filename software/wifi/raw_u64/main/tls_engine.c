@@ -30,6 +30,7 @@
 #include "sntp.h"
 #include "tls_engine.h"
 #include "tls_hello_scan.h"
+#include "tls_group_cache.h"
 
 #if !CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
 #error "The TLS spike is a TLS 1.3 client: enable CONFIG_MBEDTLS_SSL_PROTO_TLS1_3"
@@ -73,7 +74,8 @@ typedef struct {
     int in_off;
     int in_len;
     int out_len;
-    uint32_t host;          // tls_host_hash() of the SNI, 0 without one
+    uint64_t host_tag;      // tls_group_tag() of the SNI when this session may use the group cache, else 0
+    uint8_t offered_default; // the offer is the default order (no entry, or a re-probe)
     uint16_t groups[6];     // this session's offer, see tls_offer_groups()
     tls_hello_scan_t hello; // HRR and ServerHello groups, read from the bytes given to mbedTLS
     uint8_t in_buf[TLS_IN_BUF_SIZE];
@@ -87,41 +89,7 @@ static uint32_t use_count;
 static int psa_ready;
 static int clock_set_by_nios;
 
-// mbedTLS sends one key share, for the first group offered: a server that wants another group answers
-// with a HelloRetryRequest, which costs a round trip. After an HRR the group the server chose is
-// remembered for its host, in RAM only, and offered first next time. Only a completed handshake
-// updates the list: the HRR and the ServerHello are in the transcript that the server's Finished
-// authenticates, so bytes an on-path attacker changed fail the handshake instead.
-#define TLS_GROUP_CACHE 8
-static struct {
-    uint32_t host;
-    uint16_t group;
-} group_cache[TLS_GROUP_CACHE];
-static uint8_t group_cache_next;
-
-static uint32_t tls_host_hash(const char *host) // FNV-1a; 0 means "no host"
-{
-    uint32_t h = 2166136261u;
-    while (*host) {
-        h = (h ^ (uint8_t)*host++) * 16777619u;
-    }
-    return h ? h : 1;
-}
-
-static void tls_group_learn(uint32_t host, uint16_t group)
-{
-    int i;
-    for (i = 0; (i < TLS_GROUP_CACHE) && (group_cache[i].host != host); i++) {
-    }
-    if (i == TLS_GROUP_CACHE) {
-        i = group_cache_next;
-        group_cache_next = (group_cache_next + 1) % TLS_GROUP_CACHE;
-    }
-    group_cache[i].host = host;
-    group_cache[i].group = group;
-}
-
-// The default offer, with the group learned for this host (if any) moved to the front
+// The default offer, with the group learned for this host (tls_group_cache.h) moved to the front
 static void tls_offer_groups(tls_session_t *s)
 {
     static const uint16_t base[] = {
@@ -132,15 +100,17 @@ static void tls_offer_groups(tls_session_t *s)
         MBEDTLS_SSL_IANA_TLS_GROUP_SECP384R1, MBEDTLS_SSL_IANA_TLS_GROUP_SECP521R1 };
     _Static_assert(sizeof(base) / sizeof(base[0]) < sizeof(((tls_session_t *)0)->groups) / sizeof(uint16_t),
                    "room for the terminator");
+    uint16_t learned = s->host_tag ? tls_group_first(s->host_tag) : 0;
     uint16_t first = 0;
-    for (int i = 0; s->host && (i < TLS_GROUP_CACHE); i++) {
-        if (group_cache[i].host == s->host) {
-            first = group_cache[i].group;
+    for (int i = 0; i < (int)(sizeof(base) / sizeof(base[0])); i++) {
+        if (base[i] == learned) {
+            first = learned; // only a group this image offers: the list below then stays in bounds
         }
     }
+    s->offered_default = (first == 0);
     int n = 0;
     if (first) {
-        s->groups[n++] = first; // the server chose it from this same list, so it is one of base[]
+        s->groups[n++] = first;
     }
     for (int i = 0; i < (int)(sizeof(base) / sizeof(base[0])); i++) {
         if (base[i] != first) {
@@ -307,7 +277,7 @@ static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const c
         mbedtls_ssl_conf_max_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
         // mbedTLS 4's default list adds x448 and FFDHE 2048-8192 (an 8192-bit modexp on the ESP32):
         // offer what mbedTLS 3.6.0 offered here, in its order. mbedTLS keeps the pointer: it is the session's.
-        s->host = sni_len ? tls_host_hash(hostname) : 0;
+        s->host_tag = (sni_len && tls_group_may_learn(verify, cas, TLS_OPEN_CA_BUNDLE)) ? tls_group_tag(hostname, sni_len) : 0;
         tls_offer_groups(s);
         mbedtls_ssl_conf_groups(&s->conf, s->groups);
         mbedtls_ssl_conf_authmode(&s->conf, verify ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
@@ -523,9 +493,7 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
                 s->stats.tls_version = (uint16_t)mbedtls_ssl_get_version_number(&s->ssl);
                 s->stats.ciphersuite = (uint16_t)mbedtls_ssl_get_ciphersuite_id_from_ssl(&s->ssl);
                 // No public mbedTLS call gives the negotiated group: stats.group stays 0
-                if (s->host && s->hello.saw_hrr && s->hello.chosen) {
-                    tls_group_learn(s->host, s->hello.chosen);
-                }
+                tls_group_learn(s->host_tag, s->hello.saw_hrr, s->hello.chosen, s->offered_default);
             } else if ((ret == MBEDTLS_ERR_SSL_WANT_READ) || (ret == MBEDTLS_ERR_SSL_WANT_WRITE)) {
                 ret = 0;
             }
