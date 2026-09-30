@@ -1,7 +1,8 @@
 #
 # Host build of the checks on the TLS calls to the WiFi module, of the channel
 # they share with GET_RANDOM (against M1's code), and of the TLS commands of
-# the network target (M3, to come). FreeRTOS, the UART and lwIP are stand-ins. The M2 spike's test is no longer built:
+# the network target (M3). FreeRTOS, the UART, lwIP and, for the network
+# target, the module are stand-ins. The M2 spike's test is no longer built:
 # the spike speaks M2's wire, which M3 replaced.
 #
 #   make          build
@@ -31,7 +32,14 @@ SPIKE_OBJS = $(addprefix $(OUTPUT)/spike/, $(SPIKE_SRCS:%.cc=%.o))
 
 .PHONY: all test golden clean
 
-all: $(RESULT)/wifitls
+# The network target's sources, which a red run can point at another tree.
+NET_DIR  = $(PATH_SW)/io/network
+NET_PATH = $(TEST)/netstub $(TEST)/stub $(NET_DIR) $(PATH_SW)/io/wifi $(PATH_SW)/io/command_interface
+NET_OPTIONS = -std=gnu++11 -g -O0 -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations -DNIOS=1 -DU64=1 $(addprefix -I, $(NET_PATH))
+NET_SRCS = net_tls_test.cc net_world.cc ip4addr_aton.cc
+NET_OBJS = $(addprefix $(OUTPUT)/net/, $(NET_SRCS:%.cc=%.o)) $(OUTPUT)/net/network_target.o
+
+all: $(RESULT)/wifitls $(RESULT)/nettls
 
 $(OUTPUT)/tls/%.o: %.cc
 	@mkdir -p $(OUTPUT)/tls
@@ -44,6 +52,21 @@ $(OUTPUT)/tls/wifi_dedicated.o: $(PATH_SW)/io/wifi/wifi_dedicated.cc
 	@mkdir -p $(OUTPUT)/tls
 	cp $< $(OUTPUT)/tls/wifi_dedicated.cc
 	$(CXX) $(CPPOPTIONS) -c -o $@ $(OUTPUT)/tls/wifi_dedicated.cc
+
+$(OUTPUT)/net/%.o: $(TEST)/%.cc
+	@mkdir -p $(OUTPUT)/net
+	$(CXX) $(NET_OPTIONS) -c -o $@ $<
+
+# Compiled from a copy, so that its includes find the stand-ins rather than
+# the headers next to it (network_interface.h).
+$(OUTPUT)/net/network_target.o: $(NET_DIR)/network_target.cc $(NET_DIR)/network_target.h
+	@mkdir -p $(OUTPUT)/net
+	cp $< $(OUTPUT)/net/network_target.cc
+	$(CXX) $(NET_OPTIONS) -c -o $@ $(OUTPUT)/net/network_target.cc
+
+$(RESULT)/nettls: $(NET_OBJS)
+	@mkdir -p $(RESULT)
+	$(CXX) -o $@ $(NET_OBJS)
 
 $(OUTPUT)/spike/%.o: %.cc
 	@mkdir -p $(OUTPUT)/spike
@@ -82,6 +105,7 @@ $(RESULT)/tlsspike: $(SPIKE_OBJS)
 # `make golden` rewrites.
 test: all
 	@$(RESULT)/wifitls
+	@$(RESULT)/nettls
 
 golden: all
 	@mkdir -p $(GOLDEN)
