@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 11:42:56
-+++ b/main/tls_engine.c	2026-09-30 11:44:33
-@@ -225,7 +225,7 @@
+--- a/main/tls_engine.c	2026-09-30 12:07:01
++++ b/main/tls_engine.c	2026-09-30 12:07:47
+@@ -221,7 +221,7 @@
      if (sntp_has_time() && (time(NULL) > floor)) {
          return TLS_TIME_SNTP;
      }

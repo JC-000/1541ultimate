@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 11:42:56
-+++ b/main/tls_engine.c	2026-09-30 11:44:33
-@@ -379,7 +379,7 @@
+--- a/main/tls_engine.c	2026-09-30 12:07:01
++++ b/main/tls_engine.c	2026-09-30 12:07:47
+@@ -375,7 +375,7 @@
          ESP_LOGW(TAG, "OPEN into slot %d frees the session held there under tag %u", slot, sessions[slot]->tag);
          tls_free(sessions[slot]);
      }

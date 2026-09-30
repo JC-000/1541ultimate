@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 11:42:56
-+++ b/main/tls_engine.c	2026-09-30 11:44:33
-@@ -712,7 +712,6 @@
+--- a/main/tls_engine.c	2026-09-30 12:07:01
++++ b/main/tls_engine.c	2026-09-30 12:07:46
+@@ -736,7 +736,6 @@
      // Best effort: close_notify lands in out_buf behind anything still pending there. A session still
      // handshaking has nothing to close, and its half flight is not sent.
      if (s->stats.state == TLS_STATE_ESTABLISHED) {

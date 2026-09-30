@@ -1,10 +1,10 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 11:42:56
-+++ b/main/tls_engine.c	2026-09-30 11:44:33
-@@ -745,7 +745,7 @@
-         mbedtls_ecp_group_id id = mbedtls_ecc_group_from_psa(PSA_KEY_TYPE_ECC_GET_FAMILY(type), bits);
-         if ((id == MBEDTLS_ECP_DP_NONE) ||
-             !(mbedtls_x509_crt_profile_default.allowed_curves & MBEDTLS_X509_ID_FLAG(id))) {
+--- a/main/tls_engine.c	2026-09-30 12:07:01
++++ b/main/tls_engine.c	2026-09-30 12:07:47
+@@ -771,7 +771,7 @@
+         int ok = ((family == PSA_ECC_FAMILY_SECP_R1) && ((bits == 256) || (bits == 384) || (bits == 521))) ||
+                  ((family == PSA_ECC_FAMILY_BRAINPOOL_P_R1) && ((bits == 256) || (bits == 384) || (bits == 512)));
+         if (!ok) {
 -            return TLS_CA_REJECT_CURVE;
 +            (void)0;
          }

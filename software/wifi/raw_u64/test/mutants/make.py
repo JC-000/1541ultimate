@@ -59,9 +59,10 @@ static tls_session_t *tls_find_close(uint8_t slot, uint16_t tag)
  'cbc_suite_added': [(E, '    MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,\n    0\n', '    MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,\n    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,\n    0\n')],
  'no_group_list': [(E, '        mbedtls_ssl_conf_groups(&s->conf, tls_groups);\n', '')],
  'tickets_12_on': [(E, '        mbedtls_ssl_conf_session_tickets(&s->conf, MBEDTLS_SSL_SESSION_TICKETS_DISABLED);\n', '')],
- 'ems_not_required': [(E, '        if (!s->stats.ems) {\n            ESP_LOGW', '        if (0) {\n            ESP_LOGW')],
+ 'ems_not_required': [(E, '            if (!s->stats.ems) {\n                ESP_LOGW', '            if (0) {\n                ESP_LOGW')],
+ 'ems_any_extension': [(E, 's->stats.ems = (tls_sh_ext(m, len, 23, &d) == 0);', 's->stats.ems = 1;')],
  'require13_ignored': [(E, '(p->opts & TLS_OPT_REQUIRE_TLS13) ? MBEDTLS_SSL_VERSION_TLS1_3', '0 ? MBEDTLS_SSL_VERSION_TLS1_3')],
- 'group_left_0': [(E, '            s->stats.group = hs->offered_group_id;', '            (void)0;'), (E, '    if (group) {\n        s->stats.group = group;', '    if (0) {\n        s->stats.group = group;')],
+ 'group_left_0': [(E, '                s->stats.group = (d[0] << 8) | d[1];', '                (void)d;'), (E, '        s->stats.group = (m[5] << 8) | m[6];', '        (void)m;')],
  'sentinel_unclassified': [(E, '            r->fail_reason = TLS_FAIL_DOWNGRADE;', '            r->fail_reason = TLS_FAIL_NONE;')],
  'sentinel_any_state': [(E, '''    } else if ((state_before == MBEDTLS_SSL_SERVER_HELLO) && (version_before == MBEDTLS_SSL_VERSION_TLS1_3) &&
                (ret == MBEDTLS_ERR_SSL_ILLEGAL_PARAMETER)) {''', '''    } else if (ret == MBEDTLS_ERR_SSL_ILLEGAL_PARAMETER) {''')],

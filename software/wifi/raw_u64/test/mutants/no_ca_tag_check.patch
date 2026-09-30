@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 11:42:56
-+++ b/main/tls_engine.c	2026-09-30 11:44:33
-@@ -390,7 +390,7 @@
+--- a/main/tls_engine.c	2026-09-30 12:07:01
++++ b/main/tls_engine.c	2026-09-30 12:07:45
+@@ -386,7 +386,7 @@
          *reason = TLS_OPEN_REASON_NO_TIME;
          return ESP_ERR_INVALID_STATE;
      }

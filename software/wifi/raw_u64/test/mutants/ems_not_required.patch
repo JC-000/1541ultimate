@@ -1,12 +1,12 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 11:42:56
-+++ b/main/tls_engine.c	2026-09-30 11:44:33
-@@ -470,7 +470,7 @@
-         // (ssl_tls12_client.c:742-759), so the engine refuses it here, before any key is derived
-         s->ems_checked = 1;
-         s->stats.ems = (hs->extended_ms == MBEDTLS_SSL_EXTENDED_MS_ENABLED);
--        if (!s->stats.ems) {
-+        if (0) {
-             ESP_LOGW(TAG, "TLS 1.2 server without the extended master secret: refused");
-             mbedtls_ssl_send_alert_message(&s->ssl, MBEDTLS_SSL_ALERT_LEVEL_FATAL,
-                                            MBEDTLS_SSL_ALERT_MSG_HANDSHAKE_FAILURE);
+--- a/main/tls_engine.c	2026-09-30 12:07:01
++++ b/main/tls_engine.c	2026-09-30 12:07:46
+@@ -489,7 +489,7 @@
+             // (ssl_tls12_client.c:742-759), so the engine refuses it here, before any key is derived
+             s->ems_checked = 1;
+             s->stats.ems = (tls_sh_ext(m, len, 23, &d) == 0);
+-            if (!s->stats.ems) {
++            if (0) {
+                 ESP_LOGW(TAG, "TLS 1.2 server without the extended master secret: refused");
+                 mbedtls_ssl_send_alert_message(&s->ssl, MBEDTLS_SSL_ALERT_LEVEL_FATAL,
+                                                MBEDTLS_SSL_ALERT_MSG_HANDSHAKE_FAILURE);

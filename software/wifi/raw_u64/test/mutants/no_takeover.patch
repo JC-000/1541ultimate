@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 11:42:56
-+++ b/main/tls_engine.c	2026-09-30 11:44:33
-@@ -376,8 +376,7 @@
+--- a/main/tls_engine.c	2026-09-30 12:07:01
++++ b/main/tls_engine.c	2026-09-30 12:07:46
+@@ -372,8 +372,7 @@
      }
      // The slot is the Ultimate's: whatever it still holds there is an orphan (its OPEN or CLOSE was lost)
      if (sessions[slot]) {
