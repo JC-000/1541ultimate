@@ -1011,6 +1011,14 @@ static void c_sentinel(void) { raw_case("raw:sh12s", 0, R_DOWNGRADE, 0, -0x6600,
 static void c_sentinel_require13(void) { raw_case("raw:sh12s", REQUIRE_TLS13, R_VERSION, 0x0303, 0, 0xFF); }
 static void c_version_below_12(void) { raw_case("raw:sh11", 0, R_VERSION, 0x0302, -0x6E80, 0xFF); }
 static void c_sh12_bad_suite(void) { raw_case("raw:sh12suite", 0, R_NONE, 0, -0x6600, 0xFF); }
+// ER-23 (errata12adv H-1): an ILLEGAL_PARAMETER from a malformed TLS 1.3 ServerHello is not a downgrade (19) nor,
+// under REQUIRE_TLS13, a version refusal (18): only the sentinel in a ServerHello without supported_versions is
+static void c_sh13_comp(void) { raw_case("raw:sh13comp", 0, R_NONE, 0, -0x6600, 0xFF); }
+static void c_sh13_comp_require13(void) { raw_case("raw:sh13comp", REQUIRE_TLS13, R_NONE, 0, -0x6600, 0xFF); }
+static void c_sh13_suite(void) { raw_case("raw:sh13suite", 0, R_NONE, 0, -0x6600, 0xFF); }
+static void c_sh13_suite_require13(void) { raw_case("raw:sh13suite", REQUIRE_TLS13, R_NONE, 0, -0x6600, 0xFF); }
+// The sentinel bytes in a TLS 1.3 ServerHello (it has supported_versions) are no downgrade: compression 1 fails it
+static void c_sh13_sentinel_bytes(void) { raw_case("raw:sh13s", 0, R_NONE, 0, -0x6600, 0xFF); }
 static void c_alert70(void) { raw_case("raw:alert70", 0, R_NONE, 0, -0x7780, 70); }
 static void c_peer_closed(void) { raw_case("raw:cn", 0, R_PEER_CLOSED, 0, -0x7880, 0xFF); }
 
@@ -1288,7 +1296,9 @@ static const tcase_t cases[] = {
     { "hs12_p256", c_hs12_p256, 1 }, { "hs12_x25519", c_hs12_x25519, 1 }, { "hs12_p521", c_hs12_p521, 1 },
     { "client_hello", c_client_hello, 1 },
     { "require13_vs_12", c_require13_vs_12, 1 }, { "sentinel", c_sentinel, 1 }, { "sentinel_require13", c_sentinel_require13, 1 },
-    { "version_below_12", c_version_below_12, 1 }, { "sh12_bad_suite", c_sh12_bad_suite, 1 }, { "alert70", c_alert70, 1 },
+    { "version_below_12", c_version_below_12, 1 },
+    { "sh13_comp", c_sh13_comp, 1 }, { "sh13_comp_require13", c_sh13_comp_require13, 1 }, { "sh13_suite", c_sh13_suite, 1 },
+    { "sh13_suite_require13", c_sh13_suite_require13, 1 }, { "sh13_sentinel_bytes", c_sh13_sentinel_bytes, 1 }, { "sh12_bad_suite", c_sh12_bad_suite, 1 }, { "alert70", c_alert70, 1 },
     { "peer_closed", c_peer_closed, 1 }, { "no_ems", c_no_ems, 1 },
     { "established_no_pt", c_established_no_pt, 1 }, { "e1_no_read", c_e1_no_read, 1 },
     { "e2_12", c_e2_12, 1 }, { "e2_12_queued", c_e2_12_queued, 1 }, { "e2_13", c_e2_13, 1 },
