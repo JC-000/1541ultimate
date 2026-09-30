@@ -1,0 +1,21 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:30
+@@ -795,9 +795,6 @@
+ int tls_set_ca(const uint8_t *der, int der_len, uint16_t ca_tag, uint8_t *reject)
+ {
+     *reject = TLS_CA_REJECT_NONE;
+-    // The one held is dropped first: on any error none is held (a session keeps its own reference)
+-    tls_ca_release(custom_ca);
+-    custom_ca = NULL;
+     if ((der_len <= 0) || (der_len > TLS_CA_MAX_LEN) || (ca_tag == 0)) {
+         return ESP_ERR_INVALID_ARG;
+     }
+@@ -825,6 +822,7 @@
+         tls_ca_release(ca);
+         return ret;
+     }
++    tls_ca_release(custom_ca);
+     custom_ca = ca;
+     return ESP_OK;
+ }

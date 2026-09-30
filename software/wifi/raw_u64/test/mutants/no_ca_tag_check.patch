@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:29
+@@ -386,7 +386,7 @@
+         *reason = TLS_OPEN_REASON_NO_TIME;
+         return ESP_ERR_INVALID_STATE;
+     }
+-    if ((p->trust == TLS_TRUST_CUSTOM) && !(custom_ca && (p->ca_tag != 0) && (custom_ca->tag == p->ca_tag))) {
++    if ((p->trust == TLS_TRUST_CUSTOM) && !custom_ca) {
+         *reason = TLS_OPEN_REASON_NO_CUSTOM_CA;
+         return ESP_ERR_INVALID_STATE;
+     }

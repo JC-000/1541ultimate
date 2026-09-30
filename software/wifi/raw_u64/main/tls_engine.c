@@ -1,20 +1,23 @@
 /*
  * tls_engine.c
  *
- * TLS spike (M2): the ESP32 runs mbedTLS as a TLS 1.3 client, and the
- * Ultimate pumps the ciphertext between its own TCP socket and CMD_TLS_STEP.
- * The bio callbacks never block: recv takes from a per-session input buffer
- * and send appends to a per-session output buffer.
+ * TLS sessions on the UCI network target (M3-SPEC v1 section 5): the ESP32 runs mbedTLS as a TLS 1.3
+ * client with a hardened TLS 1.2 fallback, and the Ultimate pumps the ciphertext between its own TCP
+ * socket and CMD_TLS_STEP. The bio callbacks never block: recv takes from a per-session input buffer
+ * and send appends to a per-session output buffer. Everything here runs on the TLS task only.
  */
 
+// The engine reads a few fields of mbedtls_ssl_context (public ssl.h, marked private) that have no getter:
+// the handshake state and version, and the handshake message just processed (tls_note_handshake()). It
+// includes nothing from mbedTLS's library/ (ssl_misc.h): a build that links a fork with another
+// mbedtls_ssl_handshake_params layout (esp-pqc) would otherwise read the wrong bytes (pqcadv6).
+#define MBEDTLS_ALLOW_PRIVATE_ACCESS
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
 #include <sys/time.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/semphr.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -30,8 +33,8 @@
 #include "sntp.h"
 #include "tls_engine.h"
 
-#if !CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
-#error "The TLS spike is a TLS 1.3 client: enable CONFIG_MBEDTLS_SSL_PROTO_TLS1_3"
+#if !CONFIG_MBEDTLS_SSL_PROTO_TLS1_3 || !CONFIG_MBEDTLS_SSL_PROTO_TLS1_2
+#error "The engine offers TLS 1.3 with a TLS 1.2 fallback: enable CONFIG_MBEDTLS_SSL_PROTO_TLS1_3 and _TLS1_2"
 #endif
 #if MBEDTLS_VERSION_MAJOR < 4
 #error "This engine is written for mbedTLS 4 (ESP-IDF 6): randomness and allocation failures come from PSA"
@@ -42,10 +45,17 @@
 #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE && !CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY
 #error "The bundle needs CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY: without it most servers' cross-signed chains fail"
 #endif
+#if !defined(MBEDTLS_SSL_EXTENDED_MASTER_SECRET)
+#error "TLS 1.2 needs the extended master secret, which this mbedTLS configuration leaves out"
+#endif
+#if defined(MBEDTLS_SSL_RENEGOTIATION)
+#error "Renegotiation must stay off (CONFIG_MBEDTLS_SSL_RENEGOTIATION)"
+#endif
 
-// The test lane's root CA (scratchpad/esp-tls/m2-test-ca/test-ca.pem, DER SHA-256 c3d5f61f...), embedded by CMakeLists.txt.
-extern const uint8_t tls_test_ca_pem_start[] asm("_binary_tls_test_ca_pem_start");
-extern const uint8_t tls_test_ca_pem_end[]   asm("_binary_tls_test_ca_pem_end");
+#if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+// esp_crt_bundle.c's verify callback: external linkage but not in its header (as IDF's own unit test declares it)
+int esp_crt_verify_callback(void *buf, mbedtls_x509_crt *crt, int depth, uint32_t *flags);
+#endif
 
 #ifndef TLS_IN_BUF_SIZE // a host test shrinks it to reach a full input buffer while handshaking
 #define TLS_IN_BUF_SIZE  (2 * TLS_STEP_IN_MAX) // unread ciphertext from the Ultimate
@@ -56,21 +66,28 @@ extern const uint8_t tls_test_ca_pem_end[]   asm("_binary_tls_test_ca_pem_end");
 #define TLS_ALERT_ROOM   64
 // NewSessionTickets one mbedtls_ssl_write() may run into; each is taken on its own, so this only bounds a loop
 #define TLS_TICKET_RETRIES 4
-// A session that nothing has touched (STEP, STATS, OPEN) for this long is an orphan: the Ultimate
-// timed out on it and will never CLOSE it. The next OPEN reclaims it.
-#define TLS_IDLE_RECLAIM_US (60LL * 1000 * 1000)
-#define TLS_ID_GENERATIONS (TLS_SESSION_GLOBAL / TLS_MAX_SESSIONS)
 
-_Static_assert(TLS_ID_GENERATIONS * TLS_MAX_SESSIONS <= TLS_SESSION_GLOBAL, "session ids must not reach 0xFF");
 _Static_assert(TLS_OUT_BUF_SIZE > TLS_STEP_IN_MAX, "one step of plaintext must fit the output buffer");
+
+// The CUSTOM CA. A session holds its own reference, so replacing or clearing the CA never frees it under a
+// session that is still verifying with it.
+typedef struct {
+    mbedtls_x509_crt crt;
+    uint16_t tag;
+    int refs;
+} tls_ca_t;
 
 typedef struct {
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
-    mbedtls_x509_crt ca;
-    uint8_t id;
-    uint32_t last_used;
-    int64_t last_touch_us; // esp_timer_get_time() at the last OPEN, STEP or STATS
+    tls_ca_t *ca;              // CUSTOM
+    uint16_t tag;
+    uint8_t trust;
+    uint8_t opts;
+    uint8_t pin[TLS_PIN_LEN];
+    uint8_t pin_mismatch;
+    uint8_t bundle_rejected;
+    uint8_t ems_checked;
     tls_session_stats_t stats;
     int in_off;
     int in_len;
@@ -81,10 +98,34 @@ typedef struct {
 
 static const char *TAG = "tls";
 static tls_session_t *sessions[TLS_MAX_SESSIONS];
-static uint8_t generation;
-static uint32_t use_count;
+static tls_ca_t *custom_ca;
+// PIN: mbedTLS verifies only with a CA chain configured (and a TLS 1.3 client needs one), so an empty one.
+// Zeroed is the state mbedtls_x509_crt_init() leaves; verification only reads it.
+static mbedtls_x509_crt tls_empty_ca;
 static int psa_ready;
 static int clock_set_by_nios;
+
+// 1.7: the six hardened TLS 1.2 suites and the three TLS 1.3 ones, in mbedTLS's own order of preference
+static const int tls_ciphersuites[] = {
+    MBEDTLS_TLS1_3_CHACHA20_POLY1305_SHA256,
+    MBEDTLS_TLS1_3_AES_256_GCM_SHA384,
+    MBEDTLS_TLS1_3_AES_128_GCM_SHA256,
+    MBEDTLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+    MBEDTLS_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+    MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+    0
+};
+
+// Key-exchange groups for both versions (Amendment 4): mbedTLS 4's default list adds x448 and FFDHE
+// 2048-8192 (an 8192-bit modexp on the ESP32). mbedTLS keeps the pointer, so static.
+static const uint16_t tls_groups[] = {
+    MBEDTLS_SSL_IANA_TLS_GROUP_X25519, MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
+    MBEDTLS_SSL_IANA_TLS_GROUP_SECP384R1, MBEDTLS_SSL_IANA_TLS_GROUP_SECP521R1,
+    MBEDTLS_SSL_IANA_TLS_GROUP_NONE
+};
 
 static int tls_bio_send(void *ctx, const unsigned char *buf, size_t len)
 {
@@ -116,21 +157,44 @@ static int tls_bio_recv(void *ctx, unsigned char *buf, size_t len)
     return (int)len;
 }
 
-#if CONFIG_TLS_SPIKE
-// "Verify off" is VERIFY_NONE, an empty CA chain and a callback that clears every verification flag.
-// mbedTLS 3.6.0's TLS 1.3 client ignored VERIFY_NONE and needed the chain and the callback, which
-// still left its key-usage checks failing a session; mbedTLS 4 returns before any check
-// (ssl_tls.c:8741-8744 in 4.1.1), so these two are unused there and nothing is checked at all.
-// Spike builds only (CONFIG_TLS_SPIKE): anything else refuses to open without verification.
-static int tls_accept_any(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags)
+// The verify callback of every session, installed on the ssl context (mbedtls_ssl_set_verify), which takes
+// precedence over the config's, so esp_crt_bundle_attach() cannot replace it (section 2). It never returns
+// non-zero, so the final verify result stays decodable; a rejection still fails the handshake because it
+// leaves flags set.
+static int tls_verify(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags)
 {
-    (void)ctx;
-    (void)crt;
-    (void)depth;
-    *flags = 0;
+    tls_session_t *s = (tls_session_t *)ctx;
+    int hashed = 0;
+    if (depth == 0) {
+        size_t n = 0;
+        hashed = psa_hash_compute(PSA_ALG_SHA_256, crt->pk_raw.p, crt->pk_raw.len, s->stats.spki_sha256,
+                                  sizeof(s->stats.spki_sha256), &n) == PSA_SUCCESS;
+        if (!hashed) {
+            memset(s->stats.spki_sha256, 0, sizeof(s->stats.spki_sha256));
+        }
+    }
+    switch (s->trust) {
+#if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+    case TLS_TRUST_BUNDLE:
+        if (esp_crt_verify_callback(NULL, crt, depth, flags) != 0) {
+            *flags |= MBEDTLS_X509_BADCERT_NOT_TRUSTED;
+            s->bundle_rejected = 1;
+        }
+        break;
+#endif
+    case TLS_TRUST_PIN:
+        // The key is the identity: chain, dates and name are not checked (U3). The mode comes from trust alone.
+        *flags = 0;
+        if ((depth == 0) && (!hashed || memcmp(s->stats.spki_sha256, s->pin, TLS_PIN_LEN) != 0)) {
+            s->pin_mismatch = 1;
+            *flags = MBEDTLS_X509_BADCERT_NOT_TRUSTED;
+        }
+        break;
+    default: // CUSTOM: mbedTLS's own chain verification against the uploaded CA
+        break;
+    }
     return 0;
 }
-#endif
 
 // 00:00 UTC on the day this file was compiled: a clock before it cannot be right
 static time_t tls_build_time(void)
@@ -151,16 +215,16 @@ static time_t tls_build_time(void)
     return (time_t)(era * 146097 + doe - 719468) * 86400;
 }
 
-// The clock a verifying OPEN may use. SNTP wins: the Ultimate's unix_time can come from an RTC
-// that is hours off, so it is only taken when the ESP32 has no SNTP time. Reports the source
-// used for this OPEN; a clock an earlier OPEN set does not count (unix_time 0 means none).
-static uint8_t tls_set_clock(uint32_t unix_time)
+// The clock an OPEN may use. SNTP wins: the Ultimate's time is only taken when the ESP32 has no SNTP time,
+// and only when the Ultimate says it is SNTP time too (time_source). Reports the source used for this OPEN;
+// a clock an earlier OPEN set does not count.
+static uint8_t tls_set_clock(uint8_t time_source, uint32_t unix_time)
 {
     time_t floor = tls_build_time();
     if (sntp_has_time() && (time(NULL) > floor)) {
         return TLS_TIME_SNTP;
     }
-    if ((time_t)unix_time > floor) {
+    if ((time_source == TLS_TIME_NIOS) && ((time_t)unix_time > floor)) {
         struct timeval tv = { .tv_sec = (time_t)unix_time, .tv_usec = 0 };
         if (settimeofday(&tv, NULL) == 0) {
             clock_set_by_nios = 1;
@@ -170,21 +234,48 @@ static uint8_t tls_set_clock(uint32_t unix_time)
     return TLS_TIME_NONE;
 }
 
-static tls_session_t *tls_find(uint8_t id)
+// ESP-IDF 6 initialises PSA at startup, so this is a no-op there; it stays for builds that do not. Neither
+// the init nor a certificate parse draws random bytes.
+static int tls_psa_ready(void)
 {
-    tls_session_t *s = sessions[id % TLS_MAX_SESSIONS];
-    return (s && (s->id == id)) ? s : NULL;
+    if (!psa_ready) {
+        psa_status_t status = psa_crypto_init();
+        if (status != PSA_SUCCESS) {
+            ESP_LOGE(TAG, "psa_crypto_init: %d", (int)status);
+            return 0;
+        }
+        psa_ready = 1;
+    }
+    return 1;
+}
+
+static tls_session_t *tls_find(uint8_t slot, uint16_t tag)
+{
+    if (slot >= TLS_MAX_SESSIONS) {
+        return NULL;
+    }
+    tls_session_t *s = sessions[slot];
+    return (s && (s->tag == tag)) ? s : NULL;
+}
+
+static void tls_ca_release(tls_ca_t *ca)
+{
+    if (ca && (--ca->refs == 0)) {
+        mbedtls_x509_crt_free(&ca->crt);
+        free(ca);
+    }
 }
 
 static void tls_free(tls_session_t *s)
 {
-    // A session that failed to open never took its slot, which may still hold the one it would evict
-    if (sessions[s->id % TLS_MAX_SESSIONS] == s) {
-        sessions[s->id % TLS_MAX_SESSIONS] = NULL;
+    for (int i = 0; i < TLS_MAX_SESSIONS; i++) {
+        if (sessions[i] == s) {
+            sessions[i] = NULL;
+        }
     }
     mbedtls_ssl_free(&s->ssl);
     mbedtls_ssl_config_free(&s->conf);
-    mbedtls_x509_crt_free(&s->ca);
+    tls_ca_release(s->ca);
     // The certificate bundle is shared: esp_crt_bundle_detach() would free it under the other session
     free(s);
 }
@@ -200,22 +291,8 @@ int tls_sessions_open(void)
     return n;
 }
 
-// Set-up failures that another session's memory could cure
-static int tls_out_of_memory(int ret)
-{
-    if (ret == ESP_ERR_NO_MEM) {
-        return 1;
-    }
-    if (ret >= 0) {
-        return 0;
-    }
-    // mbedTLS 4 reports every allocation failure (SSL, X.509, PK, PEM, ASN.1, bignum) as this one
-    // PSA code, and no longer adds a low-level code to a high-level one (private/error_common.h)
-    return ret == PSA_ERROR_INSUFFICIENT_MEMORY;
-}
-
-// Builds a complete session for slot without putting it in the table; frees it on failure
-static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const char *hostname, int sni_len,
+// Builds a complete session without putting it in the table; frees it on failure
+static int tls_setup(tls_session_t **out, uint16_t tag, const tls_open_params_t *p, const char *hostname,
                      uint8_t time_source)
 {
     *out = NULL;
@@ -223,52 +300,45 @@ static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const c
     if (!s) {
         return ESP_ERR_NO_MEM;
     }
-    s->id = (generation * TLS_MAX_SESSIONS) + slot;
-    generation = (generation + 1) % TLS_ID_GENERATIONS;
+    s->tag = tag;
+    s->trust = p->trust;
+    s->opts = p->opts;
+    if (p->trust == TLS_TRUST_PIN) {
+        memcpy(s->pin, p->pin, TLS_PIN_LEN);
+    }
     s->stats.state = TLS_STATE_HANDSHAKING;
     s->stats.time_source = time_source;
     s->stats.esp_time = (time_source == TLS_TIME_NONE) ? 0 : (uint32_t)time(NULL);
-    s->last_used = ++use_count;
-    s->last_touch_us = esp_timer_get_time();
     mbedtls_ssl_init(&s->ssl);
     mbedtls_ssl_config_init(&s->conf);
-    mbedtls_x509_crt_init(&s->ca);
 
     // Every random byte (client random, key shares) comes from PSA: see tls_open()
     int ret = mbedtls_ssl_config_defaults(&s->conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
                                           MBEDTLS_SSL_PRESET_DEFAULT);
     if (ret == 0) {
-        // ESP-IDF 6 always builds TLS 1.2 in (MBEDTLS_TLS_ENABLED selects it): only these two keep it out
-        mbedtls_ssl_conf_min_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
+        // 1.7: TLS 1.3, and the hardened TLS 1.2 unless the program requires 1.3
+        mbedtls_ssl_conf_min_tls_version(&s->conf, (p->opts & TLS_OPT_REQUIRE_TLS13) ? MBEDTLS_SSL_VERSION_TLS1_3
+                                                                                     : MBEDTLS_SSL_VERSION_TLS1_2);
         mbedtls_ssl_conf_max_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
-        // mbedTLS 4's default list adds x448 and FFDHE 2048-8192 (an 8192-bit modexp on the ESP32):
-        // offer what mbedTLS 3.6.0 offered here, in its order. mbedTLS keeps the pointer, so static.
-        static const uint16_t groups[] = { MBEDTLS_SSL_IANA_TLS_GROUP_X25519, MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
-                                           MBEDTLS_SSL_IANA_TLS_GROUP_SECP384R1, MBEDTLS_SSL_IANA_TLS_GROUP_SECP521R1,
-                                           MBEDTLS_SSL_IANA_TLS_GROUP_NONE };
-        mbedtls_ssl_conf_groups(&s->conf, groups);
-        mbedtls_ssl_conf_authmode(&s->conf, verify ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
-#if CONFIG_TLS_SPIKE
-        if (!verify) {
-            mbedtls_ssl_conf_ca_chain(&s->conf, &s->ca, NULL);
-            mbedtls_ssl_conf_verify(&s->conf, tls_accept_any, NULL);
-        }
-#endif
-        if (verify && (cas == TLS_OPEN_CA_TEST)) {
-            ret = mbedtls_x509_crt_parse(&s->ca, tls_test_ca_pem_start, tls_test_ca_pem_end - tls_test_ca_pem_start);
-            if (ret != 0) {
-                // The embedded CA always parses, so failing to is short memory whatever the code says:
-                // mbedTLS 4 reports a failed allocation in its key import as an invalid key
-                // (pk_ecc.c:156-159, pk_rsa.c:75-77 in TF-PSA-Crypto), which would stop the eviction
-                ESP_LOGW(TAG, "Test CA did not parse: -0x%04x", (unsigned)-ret);
-                ret = PSA_ERROR_INSUFFICIENT_MEMORY;
-            }
-            if (ret == 0) {
-                mbedtls_ssl_conf_ca_chain(&s->conf, &s->ca, NULL);
-            }
+        // The CBC suites are compiled in (wpa_supplicant needs AES-CBC): only this list keeps them out
+        mbedtls_ssl_conf_ciphersuites(&s->conf, tls_ciphersuites);
+        mbedtls_ssl_conf_groups(&s->conf, tls_groups);
+        // Offered here, and required after the ServerHello (tls_note_handshake): mbedTLS has no switch for that
+        mbedtls_ssl_conf_extended_master_secret(&s->conf, MBEDTLS_SSL_EXTENDED_MS_ENABLED);
+        // No session_ticket extension in TLS 1.2 (TLS 1.3 tickets are taken and dropped as before)
+        mbedtls_ssl_conf_session_tickets(&s->conf, MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
+        mbedtls_ssl_conf_authmode(&s->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+        // One config per session: a CUSTOM or PIN config never has the bundle attached, since a config with the
+        // bundle's CA callback makes mbedTLS ignore conf->ca_chain (section 2)
+        if (p->trust == TLS_TRUST_CUSTOM) {
+            s->ca = custom_ca;
+            s->ca->refs++;
+            mbedtls_ssl_conf_ca_chain(&s->conf, &s->ca->crt, NULL);
+        } else if (p->trust == TLS_TRUST_PIN) {
+            mbedtls_ssl_conf_ca_chain(&s->conf, &tls_empty_ca, NULL);
         }
 #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
-        if (verify && (cas == TLS_OPEN_CA_BUNDLE)) {
+        if (p->trust == TLS_TRUST_BUNDLE) {
             ret = esp_crt_bundle_attach(&s->conf);
         }
 #endif
@@ -276,52 +346,55 @@ static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const c
     if (ret == 0) {
         ret = mbedtls_ssl_setup(&s->ssl, &s->conf);
     }
-    if ((ret == 0) && sni_len) {
-        ret = mbedtls_ssl_set_hostname(&s->ssl, hostname);
+    if (ret == 0) {
+        // No name: mbedTLS 4 refuses to verify unless set_hostname was called, so NULL explicitly (no SNI)
+        ret = mbedtls_ssl_set_hostname(&s->ssl, p->sni_len ? hostname : NULL);
     }
     if (ret != 0) {
         ESP_LOGW(TAG, "Open failed: -0x%04x", (unsigned)-ret);
         tls_free(s);
         return ret;
     }
+    mbedtls_ssl_set_verify(&s->ssl, tls_verify, s);
     mbedtls_ssl_set_bio(&s->ssl, s, tls_bio_send, tls_bio_recv, NULL);
     *out = s;
     return 0;
 }
 
-int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, uint8_t *session, uint8_t *reason)
+int tls_open(uint8_t slot, uint16_t tag, const tls_open_params_t *p, uint8_t *reason)
 {
     char hostname[TLS_SNI_MAX_LEN + 1];
-    int verify = flags & TLS_OPEN_VERIFY;
-    int cas = flags & (TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST);
 
-    *session = TLS_SESSION_GLOBAL;
     *reason = TLS_OPEN_REASON_NONE;
-    // Verifying without a host name would skip the name check, so it is refused
-    if ((flags & ~(TLS_OPEN_VERIFY | TLS_OPEN_CA_BUNDLE | TLS_OPEN_CA_TEST)) ||
-        (verify && ((cas != TLS_OPEN_CA_BUNDLE) && (cas != TLS_OPEN_CA_TEST))) ||
-        (verify && (sni_len == 0)) || (sni_len < 0) || (sni_len > TLS_SNI_MAX_LEN) ||
-        (memchr(sni, 0, sni_len) != NULL)) {
+    // Verifying without a host name would skip the name check, so only PIN may go without one
+    if ((slot >= TLS_MAX_SESSIONS) || (tag == 0) || (p->trust > TLS_TRUST_PIN) ||
+        (p->opts & ~TLS_OPT_REQUIRE_TLS13) || (p->time_source > TLS_TIME_NIOS) ||
+        (p->sni_len < 0) || (p->sni_len > TLS_SNI_MAX_LEN) || (memchr(p->sni, 0, p->sni_len) != NULL) ||
+        ((p->trust != TLS_TRUST_PIN) && (p->sni_len == 0))) {
         return ESP_ERR_INVALID_ARG;
     }
-#if !CONFIG_TLS_SPIKE
-    if (!verify) {
-        return ESP_ERR_NOT_SUPPORTED;
+    // The slot is the Ultimate's: whatever it still holds there is an orphan (its OPEN or CLOSE was lost)
+    if (sessions[slot]) {
+        ESP_LOGW(TAG, "OPEN into slot %d frees the session held there under tag %u", slot, sessions[slot]->tag);
+        tls_free(sessions[slot]);
     }
-#endif
     if (entropy_source() == ENTROPY_NONE) {
         *reason = TLS_OPEN_REASON_NO_ENTROPY;
         return ESP_ERR_INVALID_STATE;
     }
-    uint8_t time_source = tls_set_clock(unix_time);
-    if (verify && (time_source == TLS_TIME_NONE)) {
+    uint8_t time_source = tls_set_clock(p->time_source, p->unix_time);
+    if ((p->trust != TLS_TRUST_PIN) && (time_source == TLS_TIME_NONE)) {
         // Never verify against a 1970 clock: every validity check would be meaningless
-        ESP_LOGW(TAG, "Open refused: verify needs a clock, and neither unix_time nor SNTP gave one");
+        ESP_LOGW(TAG, "Open refused: BUNDLE and CUSTOM need a clock, and neither unix_time nor SNTP gave one");
         *reason = TLS_OPEN_REASON_NO_TIME;
         return ESP_ERR_INVALID_STATE;
     }
+    if ((p->trust == TLS_TRUST_CUSTOM) && !(custom_ca && (p->ca_tag != 0) && (custom_ca->tag == p->ca_tag))) {
+        *reason = TLS_OPEN_REASON_NO_CUSTOM_CA;
+        return ESP_ERR_INVALID_STATE;
+    }
 #if !CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
-    if (verify && (cas == TLS_OPEN_CA_BUNDLE)) {
+    if (p->trust == TLS_TRUST_BUNDLE) {
         return ESP_ERR_NOT_SUPPORTED;
     }
 #endif
@@ -329,89 +402,201 @@ int tls_open(uint8_t flags, const char *sni, int sni_len, uint32_t unix_time, ui
     // the radio, but with MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG: PSA keeps no seeded state and draws every
     // byte from esp_fill_random() when it is needed. A session draws only after this entropy gate,
     // but the gate is checked here at OPEN only, and the handshake steps draw later: this relies on
-    // the bridge never stopping the radio once started (M2-SPEC section 8). This init is then
-    // a no-op; it stays for builds that do not initialise PSA at startup.
-    if (!psa_ready) {
-        psa_status_t status = psa_crypto_init();
-        if (status != PSA_SUCCESS) {
-            ESP_LOGE(TAG, "psa_crypto_init: %d", (int)status);
-            return ESP_FAIL;
-        }
-        psa_ready = 1;
+    // the bridge never stopping the radio once started (M2-SPEC section 8).
+    if (!tls_psa_ready()) {
+        return ESP_FAIL;
     }
-    memcpy(hostname, sni, sni_len);
-    hostname[sni_len] = 0;
+    memcpy(hostname, p->sni, p->sni_len);
+    hostname[p->sni_len] = 0;
 
-    // Orphans (the Ultimate timed out on an OPEN or CLOSE) would otherwise live until a full table
-    int64_t now_us = esp_timer_get_time();
-    for (int i = 0; i < TLS_MAX_SESSIONS; i++) {
-        if (sessions[i] && (now_us - sessions[i]->last_touch_us > TLS_IDLE_RECLAIM_US)) {
-            ESP_LOGW(TAG, "Reclaiming session %d, idle for %lld s", sessions[i]->id,
-                     (long long)((now_us - sessions[i]->last_touch_us) / 1000000));
-            tls_free(sessions[i]);
-        }
-    }
-
-    // A full table evicts the least recently used session, so orphans cannot lock TLS out.
-    // The victim goes only once the new session is fully set up, so a failed OPEN kills nothing,
-    // except when the set-up ran out of memory: then the victim goes and the set-up runs once more.
-    int slot = -1;
-    for (int i = 0; i < TLS_MAX_SESSIONS; i++) {
-        if (!sessions[i]) {
-            slot = i;
-            break;
-        }
-    }
-    tls_session_t *victim = NULL;
-    if (slot < 0) {
-        slot = 0;
-        for (int i = 1; i < TLS_MAX_SESSIONS; i++) {
-            if (sessions[i]->last_used < sessions[slot]->last_used) {
-                slot = i;
-            }
-        }
-        victim = sessions[slot];
-    }
     if (tls_sessions_open() == 0) {
         // heap_min then reports the peak of this burst of sessions, not of the Wi-Fi start
         heap_caps_monitor_local_minimum_free_size_stop();
         heap_caps_monitor_local_minimum_free_size_start();
     }
-
     tls_session_t *s = NULL;
-    int ret = tls_setup(&s, slot, verify, cas, hostname, sni_len, time_source);
-    if ((ret != 0) && victim && tls_out_of_memory(ret)) {
-        ESP_LOGW(TAG, "No memory for a new session: evicting session %d and trying again", victim->id);
-        tls_free(victim);
-        victim = NULL;
-        ret = tls_setup(&s, slot, verify, cas, hostname, sni_len, time_source);
-    }
+    int ret = tls_setup(&s, tag, p, hostname, time_source);
     if (ret != 0) {
         return ret;
     }
-    if (victim) {
-        ESP_LOGW(TAG, "Table full, evicting session %d", victim->id);
-        tls_free(victim);
-    }
     sessions[slot] = s;
-    *session = s->id;
     return ESP_OK;
 }
 
-int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t *pt_in, int pt_in_len,
-             uint8_t *out, uint16_t *ct_out_len, uint16_t *pt_out_len, uint8_t *state)
+// The handshake message mbedTLS has just processed (ssl->in_msg, reassembled, header included), when it is
+// of the given type and complete; NULL otherwise
+static const uint8_t *tls_hs_msg(tls_session_t *s, uint8_t type, size_t *len)
 {
-    tls_session_t *s = tls_find(session);
+    const uint8_t *m = s->ssl.in_msg;
+    size_t n = s->ssl.in_hslen;
+    if (!m || (s->ssl.in_msgtype != MBEDTLS_SSL_MSG_HANDSHAKE) || (n < 4) || (m[0] != type) ||
+        ((size_t)((m[1] << 16) | (m[2] << 8) | m[3]) != n - 4)) {
+        return NULL;
+    }
+    *len = n;
+    return m;
+}
+
+// Finds an extension of a ServerHello (or HelloRetryRequest); returns its data length, or -1 when absent
+static int tls_sh_ext(const uint8_t *m, size_t len, uint16_t type, const uint8_t **data)
+{
+    const uint8_t *p = m + 4, *end = m + len;
+    if (end - p < 2 + 32 + 1) {
+        return -1;
+    }
+    p += 2 + 32;                        // legacy_version, random
+    if (end - p < 1 + p[0] + 2 + 1 + 2) {
+        return -1;
+    }
+    p += 1 + p[0];                      // session id
+    p += 2 + 1;                         // cipher suite, compression
+    const uint8_t *eend = p + 2 + ((p[0] << 8) | p[1]);
+    p += 2;
+    if (eend > end) {
+        return -1;
+    }
+    while (eend - p >= 4) {
+        int t = (p[0] << 8) | p[1], n = (p[2] << 8) | p[3];
+        if (eend - p - 4 < n) {
+            return -1;
+        }
+        if (t == type) {
+            *data = p + 4;
+            return n;
+        }
+        p += 4 + n;
+    }
+    return -1;
+}
+
+// After each successful handshake step: records the negotiated group (neither mbedTLS 3.6 nor 4.1.1 has a getter
+// for it), and requires the extended master secret once a TLS 1.2 ServerHello is processed. Both come from the
+// server's own messages as mbedTLS has just parsed them: the key_share of a TLS 1.3 ServerHello (or the group a
+// HelloRetryRequest asks for, which the next ServerHello then confirms), the named curve of a TLS 1.2
+// ServerKeyExchange, and the extended_master_secret extension of a TLS 1.2 ServerHello. The host test checks
+// each against the server.
+// Returns MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE when the server did not echo EMS.
+static int tls_note_handshake(tls_session_t *s, int state_before, int version_before)
+{
+    int state = s->ssl.state;
+    const uint8_t *m, *d;
+    size_t len;
+    if ((state_before == MBEDTLS_SSL_SERVER_HELLO) && (state != MBEDTLS_SSL_SERVER_HELLO)) {
+        m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len);
+        if (version_before == MBEDTLS_SSL_VERSION_TLS1_3) {
+            if (m && (tls_sh_ext(m, len, 51, &d) >= 2)) { // key_share: the group comes first in both forms
+                s->stats.group = (d[0] << 8) | d[1];
+            }
+            // Not found: the group stays 0, and tls_handshake() refuses the session
+        } else if (!s->ems_checked) {
+            // mbedtls_ssl_conf_extended_master_secret() only offers it: a server that does not echo it is accepted
+            // (ssl_tls12_client.c:742-759), so the engine refuses it here, before any key is derived. A ServerHello
+            // it cannot find counts as one without EMS: fail closed.
+            s->ems_checked = 1;
+            s->stats.ems = m && (tls_sh_ext(m, len, 23, &d) == 0);
+            if (!s->stats.ems) {
+                ESP_LOGW(TAG, "TLS 1.2 server without the extended master secret: refused");
+                mbedtls_ssl_send_alert_message(&s->ssl, MBEDTLS_SSL_ALERT_LEVEL_FATAL,
+                                               MBEDTLS_SSL_ALERT_MSG_HANDSHAKE_FAILURE);
+                return MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE;
+            }
+        }
+    }
+    if ((state_before == MBEDTLS_SSL_SERVER_KEY_EXCHANGE) && (version_before == MBEDTLS_SSL_VERSION_TLS1_2) &&
+        (m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_KEY_EXCHANGE, &len)) != NULL && (len >= 4 + 3) && (m[4] == 3)) {
+        s->stats.group = (m[5] << 8) | m[6]; // ECParameters: named_curve (3), then the NamedGroup
+    }
+    return 0;
+}
+
+// Classifies a failed handshake step (section 2 and 1.7). The Ultimate infers nothing from bare mbedTLS codes.
+static void tls_classify(tls_session_t *s, int ret, int state_before, int version_before, tls_step_result_t *r)
+{
+    if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+        r->fail_reason = TLS_FAIL_PEER_CLOSED;
+    } else if ((state_before == MBEDTLS_SSL_SERVER_HELLO) && (ret == MBEDTLS_ERR_SSL_BAD_PROTOCOL_VERSION)) {
+        // A TLS 1.2 ServerHello below the minimum: the 1.2 parser has set tls_version to the server's choice
+        r->fail_reason = TLS_FAIL_VERSION_REFUSED;
+        r->verify_flags = (uint16_t)s->ssl.tls_version;
+    } else if ((state_before == MBEDTLS_SSL_SERVER_HELLO) && (version_before == MBEDTLS_SSL_VERSION_TLS1_3) &&
+               (ret == MBEDTLS_ERR_SSL_ILLEGAL_PARAMETER)) {
+        // The TLS 1.3 client's ServerHello pre-processing refuses a ServerHello without supported_versions when
+        // 1.2 was not offered, or when its random carries the downgrade sentinel (ssl_tls13_client.c:1458).
+        // With 1.2 offered only the sentinel can raise it there; the 1.2 re-parse runs as a later step, with
+        // tls_version already 1.2, so its own ILLEGAL_PARAMETERs are not counted here.
+        if (s->opts & TLS_OPT_REQUIRE_TLS13) {
+            r->fail_reason = TLS_FAIL_VERSION_REFUSED;
+            const uint8_t *m = s->ssl.in_msg; // the ServerHello: handshake header, then legacy_version
+            r->verify_flags = (m && (s->ssl.in_msgtype == MBEDTLS_SSL_MSG_HANDSHAKE)) ? ((m[4] << 8) | m[5]) : 0;
+        } else {
+            r->fail_reason = TLS_FAIL_DOWNGRADE;
+        }
+    } else if (ret == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
+        r->fail_reason = ((s->trust == TLS_TRUST_PIN) && s->pin_mismatch) ? TLS_FAIL_PIN_MISMATCH : TLS_FAIL_CERT_VERIFY;
+        r->verify_flags = mbedtls_ssl_get_verify_result(&s->ssl);
+    } else if (ret == MBEDTLS_ERR_SSL_BAD_CERTIFICATE) {
+        // A secondary check (usage, TLS 1.2 curve), or a Certificate message refused before verification ran
+        r->fail_reason = TLS_FAIL_CERT_VERIFY;
+        r->verify_flags = mbedtls_ssl_get_verify_result(&s->ssl);
+    } else if (ret == MBEDTLS_ERR_X509_FATAL_ERROR) {
+        r->fail_reason = TLS_FAIL_CERT_VERIFY;
+        r->verify_flags = 0xFFFFFFFF;
+    }
+}
+
+// Runs handshake steps until mbedTLS wants input or output, the handshake is over, or it fails
+static int tls_handshake(tls_session_t *s, tls_step_result_t *r)
+{
+    while (!mbedtls_ssl_is_handshake_over(&s->ssl)) {
+        int state_before = s->ssl.state;
+        int version_before = s->ssl.tls_version;
+        int64_t start = esp_timer_get_time();
+        int ret = mbedtls_ssl_handshake_step(&s->ssl);
+        s->stats.handshake_us += (uint32_t)(esp_timer_get_time() - start);
+        int ems = (ret == 0) ? tls_note_handshake(s, state_before, version_before) : 0;
+        if (ems) {
+            r->fail_reason = TLS_FAIL_NO_EMS;
+            return ems;
+        }
+        if ((ret == MBEDTLS_ERR_SSL_WANT_READ) || (ret == MBEDTLS_ERR_SSL_WANT_WRITE)) {
+            return 0;
+        }
+        if (ret != 0) {
+            tls_classify(s, ret, state_before, version_before, r);
+            return ret;
+        }
+    }
+    if (s->stats.group == 0) {
+        // The group is never 0 once ESTABLISHED (5.2): if it was not found, the reads above no longer match this
+        // mbedTLS, and nothing they check (EMS) can be trusted either. Fail closed.
+        ESP_LOGE(TAG, "Negotiated group not found in the server's messages: session refused");
+        mbedtls_ssl_send_alert_message(&s->ssl, MBEDTLS_SSL_ALERT_LEVEL_FATAL, MBEDTLS_SSL_ALERT_MSG_INTERNAL_ERROR);
+        return MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE;
+    }
+    s->stats.state = TLS_STATE_ESTABLISHED;
+    s->stats.tls_version = (uint16_t)mbedtls_ssl_get_version_number(&s->ssl);
+    s->stats.ciphersuite = (uint16_t)mbedtls_ssl_get_ciphersuite_id_from_ssl(&s->ssl);
+    return 0;
+}
+
+int tls_step(uint8_t slot, uint16_t tag, uint8_t flags, const uint8_t *ct_in, int ct_in_len, const uint8_t *pt_in,
+             int pt_in_len, uint8_t *out, uint16_t *ct_out_len, uint16_t *pt_out_len, tls_step_result_t *r)
+{
+    tls_session_t *s = tls_find(slot, tag);
     *ct_out_len = 0;
     *pt_out_len = 0;
+    r->alert_in = TLS_ALERT_NONE;
+    r->alert_out = TLS_ALERT_NONE;
+    r->fail_reason = TLS_FAIL_NONE;
+    r->verify_flags = 0;
     if (!s) {
-        *state = TLS_STATE_CLOSED;
+        r->state = TLS_STATE_CLOSED;
         return ESP_ERR_NOT_FOUND;
     }
-    *state = s->stats.state;
+    r->state = s->stats.state;
 
     // Caller errors consume nothing, return nothing and leave the session as it is
-    if ((ct_in_len < 0) || (pt_in_len < 0) || (ct_in_len + pt_in_len > TLS_STEP_IN_MAX)) {
+    if ((flags & ~TLS_STEP_NO_READ) || (ct_in_len < 0) || (pt_in_len < 0) || (ct_in_len + pt_in_len > TLS_STEP_IN_MAX)) {
         return ESP_ERR_INVALID_ARG;
     }
     if (pt_in_len && (s->stats.state != TLS_STATE_ESTABLISHED)) {
@@ -440,8 +625,6 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
             }
         }
     }
-    s->last_used = ++use_count;
-    s->last_touch_us = esp_timer_get_time();
 
     if (!refused && (ret == 0)) {
         if (s->in_off) {
@@ -453,23 +636,15 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
         s->in_len += ct_in_len;
         s->stats.ct_in_bytes += ct_in_len;
     }
-    // While handshaking only mbedtls_ssl_handshake() drains in_buf, so it also runs when the input
-    // was refused: otherwise a full in_buf would refuse every resend of the step
+    // While handshaking only the handshake drains in_buf, so it also runs when the input was refused:
+    // otherwise a full in_buf would refuse every resend of the step
+    int just_established = 0;
     if (ret == 0) {
         if (s->stats.state == TLS_STATE_HANDSHAKING) {
-            int64_t start = esp_timer_get_time();
-            ret = mbedtls_ssl_handshake(&s->ssl);
-            s->stats.handshake_us += (uint32_t)(esp_timer_get_time() - start);
-            if (ret == 0) {
-                s->stats.state = TLS_STATE_ESTABLISHED;
-                s->stats.tls_version = (uint16_t)mbedtls_ssl_get_version_number(&s->ssl);
-                s->stats.ciphersuite = (uint16_t)mbedtls_ssl_get_ciphersuite_id_from_ssl(&s->ssl);
-                // No public mbedTLS 3.6 call gives the negotiated group: stats.group stays 0
-            } else if ((ret == MBEDTLS_ERR_SSL_WANT_READ) || (ret == MBEDTLS_ERR_SSL_WANT_WRITE)) {
-                ret = 0;
-            }
+            ret = tls_handshake(s, r);
+            just_established = (s->stats.state == TLS_STATE_ESTABLISHED);
         } else if (!refused && pt_in_len) {
-            if (s->ssl.MBEDTLS_PRIVATE(out_left) != 0) {
+            if (s->ssl.out_left != 0) {
                 ret = MBEDTLS_ERR_SSL_INTERNAL_ERROR;
             }
             for (int done = 0, tickets = 0; (ret == 0) && (done < pt_in_len); ) {
@@ -491,10 +666,13 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
     }
     // From here on out may be written: the input is either consumed or refused
 
+    // No plaintext from the step that reaches ESTABLISHED (the Ultimate reads STATS right after it), nor from
+    // a NO_READ step (a WRITE's): what is pending stays in the engine for the next plain step
     int ct_len = (s->out_len < TLS_STEP_OUT_MAX) ? s->out_len : TLS_STEP_OUT_MAX;
     int pt_len = 0;
-    while ((ret == 0) && (s->stats.state == TLS_STATE_ESTABLISHED) &&
+    while ((ret == 0) && (s->stats.state == TLS_STATE_ESTABLISHED) && !just_established && !(flags & TLS_STEP_NO_READ) &&
            (ct_len + pt_len + TLS_ALERT_ROOM < TLS_STEP_OUT_MAX)) {
+        int in_before = s->in_off;
         int n = mbedtls_ssl_read(&s->ssl, out + ct_len + pt_len, TLS_STEP_OUT_MAX - TLS_ALERT_ROOM - ct_len - pt_len);
         if (n > 0) {
             pt_len += n;
@@ -503,8 +681,12 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
             // next call (ssl_msg.c:5466-5473 in mbedTLS 4.1.1), which takes it without new input.
             // Take every one now, or the reply behind them waits for a step the Ultimate never sends.
             continue;
+        } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) && (s->in_off > in_before) && (s->in_off < s->in_len)) {
+            // A record mbedTLS skipped with WANT_READ (a TLS 1.2 no_renegotiation warning alert,
+            // ssl_msg.c:5002-5006) while more input waits: read on, or the data behind it would wait
+            // for another step. The read took input, so this ends.
+            continue;
         } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) || (n == MBEDTLS_ERR_SSL_WANT_WRITE)) {
-            // Known limitation: a skipped warning alert (no_renegotiation, not TLS 1.3) ends up here with input left
             break;
         } else if (n == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
             continue; // a TLS 1.3 ticket after the handshake: no plaintext yet, read again (never FAILED)
@@ -520,6 +702,21 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
     }
     s->stats.pt_out_bytes += pt_len;
 
+    if (ret != 0) {
+        s->stats.state = TLS_STATE_FAILED;
+        if (ret == MBEDTLS_ERR_SSL_FATAL_ALERT_MESSAGE) {
+            int alert = mbedtls_ssl_get_fatal_alert(&s->ssl);
+            r->alert_in = (alert >= 0) ? (uint8_t)alert : TLS_ALERT_NONE;
+        }
+        // The alert this engine sent, when mbedTLS wrote it before any keys (mbedTLS has no getter for it)
+        if ((s->ssl.out_msgtype == MBEDTLS_SSL_MSG_ALERT) && (s->ssl.transform_out == NULL) &&
+            (s->ssl.out_msg[0] == MBEDTLS_SSL_ALERT_LEVEL_FATAL)) {
+            r->alert_out = s->ssl.out_msg[1];
+        }
+        ESP_LOGW(TAG, "Session %d/%u failed: -0x%04x, reason %d, verify 0x%x", slot, tag, (unsigned)-ret, r->fail_reason,
+                 (unsigned)r->verify_flags);
+    }
+
     // Ciphertext the reads produced (a fatal alert before the session is freed) goes out in this
     // step too: move the plaintext up into the room the reads left for it
     int ct_all = (s->out_len < TLS_STEP_OUT_MAX - pt_len) ? s->out_len : TLS_STEP_OUT_MAX - pt_len;
@@ -534,33 +731,112 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
     *ct_out_len = ct_len;
     *pt_out_len = pt_len;
 
-    if (ret != 0) {
-        s->stats.state = TLS_STATE_FAILED;
-        ESP_LOGW(TAG, "Session %d failed: -0x%04x, verify 0x%x", s->id, (unsigned)-ret,
-                 (unsigned)mbedtls_ssl_get_verify_result(&s->ssl));
-    }
-    *state = s->stats.state;
+    r->state = s->stats.state;
     if ((s->stats.state == TLS_STATE_FAILED) || (s->stats.state == TLS_STATE_CLOSED)) {
         tls_free(s);
     }
     return ret ? ret : refused;
 }
 
-int tls_close(uint8_t session)
+int tls_close(uint8_t slot, uint16_t tag, uint8_t *out, uint16_t *ct_out_len)
 {
-    tls_session_t *s = tls_find(session);
+    *ct_out_len = 0;
+    tls_session_t *s = tls_find(slot, tag);
     if (!s) {
         return ESP_ERR_NOT_FOUND;
+    }
+    // Best effort: close_notify lands in out_buf behind anything still pending there. A session still
+    // handshaking has nothing to close, and its half flight is not sent.
+    if (s->stats.state == TLS_STATE_ESTABLISHED) {
+        mbedtls_ssl_close_notify(&s->ssl);
+        int n = (s->out_len < TLS_STEP_OUT_MAX) ? s->out_len : TLS_STEP_OUT_MAX;
+        memcpy(out, s->out_buf, n);
+        *ct_out_len = n;
     }
     tls_free(s);
     return ESP_OK;
 }
 
-int tls_get_stats(uint8_t session, tls_session_stats_t *stats)
+void tls_close_all(void)
+{
+    for (int i = 0; i < TLS_MAX_SESSIONS; i++) {
+        if (sessions[i]) {
+            tls_free(sessions[i]);
+        }
+    }
+    tls_ca_release(custom_ca);
+    custom_ca = NULL;
+}
+
+// 3.3: the upload-time refusals, in their order of precedence
+static uint8_t tls_ca_reject(const mbedtls_x509_crt *crt)
+{
+    psa_key_type_t type = mbedtls_pk_get_key_type(&crt->pk);
+    size_t bits = mbedtls_pk_get_bitlen(&crt->pk);
+    if (PSA_KEY_TYPE_IS_RSA(type) && (bits < mbedtls_x509_crt_profile_default.rsa_min_bitlen)) {
+        return TLS_CA_REJECT_RSA_KEY_SHORT;
+    }
+    if (PSA_KEY_TYPE_IS_ECC(type)) {
+        // The curves of mbedtls_x509_crt_profile_default, which the engine verifies with (x509_crt.c:98-104 in
+        // 4.1.1), not the key-exchange groups
+        psa_ecc_family_t family = PSA_KEY_TYPE_ECC_GET_FAMILY(type);
+        int ok = ((family == PSA_ECC_FAMILY_SECP_R1) && ((bits == 256) || (bits == 384) || (bits == 521))) ||
+                 ((family == PSA_ECC_FAMILY_BRAINPOOL_P_R1) && ((bits == 256) || (bits == 384) || (bits == 512)));
+        if (!ok) {
+            return TLS_CA_REJECT_CURVE;
+        }
+    }
+    // mbedTLS refuses such a certificate as an issuer. A v1 root has no extensions and is an anchor as it is;
+    // a keyUsage extension that is absent passes check_key_usage.
+    if (((crt->version >= 3) && (mbedtls_x509_crt_get_ca_istrue(crt) != 1)) ||
+        (mbedtls_x509_crt_check_key_usage(crt, MBEDTLS_X509_KU_KEY_CERT_SIGN) != 0)) {
+        return TLS_CA_REJECT_NOT_CA;
+    }
+    return TLS_CA_REJECT_NONE;
+}
+
+int tls_set_ca(const uint8_t *der, int der_len, uint16_t ca_tag, uint8_t *reject)
+{
+    *reject = TLS_CA_REJECT_NONE;
+    // The one held is dropped first: on any error none is held (a session keeps its own reference)
+    tls_ca_release(custom_ca);
+    custom_ca = NULL;
+    if ((der_len <= 0) || (der_len > TLS_CA_MAX_LEN) || (ca_tag == 0)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!tls_psa_ready()) {
+        return ESP_ERR_INVALID_STATE; // never ESP_FAIL: the Ultimate reads a SET_CA ESP_FAIL as no reply
+    }
+    tls_ca_t *ca = calloc(1, sizeof(tls_ca_t));
+    if (!ca) {
+        return ESP_ERR_NO_MEM;
+    }
+    mbedtls_x509_crt_init(&ca->crt);
+    ca->tag = ca_tag;
+    ca->refs = 1;
+    int ret = mbedtls_x509_crt_parse_der(&ca->crt, der, der_len);
+    if (ret == 0) {
+        *reject = tls_ca_reject(&ca->crt);
+        if (*reject != TLS_CA_REJECT_NONE) {
+            ret = ESP_ERR_INVALID_ARG;
+        }
+    } else if (ret > -2) {
+        ret = MBEDTLS_ERR_X509_INVALID_FORMAT; // never ESP_FAIL (-1), which the Ultimate does not read as a parse code
+    }
+    if (ret != 0) {
+        ESP_LOGW(TAG, "CA refused: %d, reject %d", ret, *reject);
+        tls_ca_release(ca);
+        return ret;
+    }
+    custom_ca = ca;
+    return ESP_OK;
+}
+
+int tls_get_stats(uint8_t slot, uint16_t tag, tls_session_stats_t *stats)
 {
     memset(stats, 0, sizeof(tls_session_stats_t));
     stats->state = TLS_STATE_CLOSED;
-    if (session == TLS_SESSION_GLOBAL) {
+    if ((slot == TLS_SLOT_GLOBAL) && (tag == 0)) {
         time_t now = time(NULL);
         if (now <= tls_build_time()) {
             stats->time_source = TLS_TIME_NONE;
@@ -570,11 +846,10 @@ int tls_get_stats(uint8_t session, tls_session_stats_t *stats)
         stats->esp_time = (stats->time_source == TLS_TIME_NONE) ? 0 : (uint32_t)now;
         return ESP_OK;
     }
-    tls_session_t *s = tls_find(session);
+    tls_session_t *s = tls_find(slot, tag);
     if (!s) {
         return ESP_ERR_NOT_FOUND;
     }
-    s->last_touch_us = esp_timer_get_time();
     *stats = s->stats;
     return ESP_OK;
 }

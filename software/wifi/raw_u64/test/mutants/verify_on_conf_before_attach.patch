@@ -1,0 +1,22 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:30
+@@ -336,6 +336,7 @@
+         }
+ #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+         if (p->trust == TLS_TRUST_BUNDLE) {
++            mbedtls_ssl_conf_verify(&s->conf, tls_verify, s);
+             ret = esp_crt_bundle_attach(&s->conf);
+         }
+ #endif
+@@ -352,7 +353,9 @@
+         tls_free(s);
+         return ret;
+     }
+-    mbedtls_ssl_set_verify(&s->ssl, tls_verify, s);
++    if (p->trust != TLS_TRUST_BUNDLE) {
++        mbedtls_ssl_set_verify(&s->ssl, tls_verify, s);
++    }
+     mbedtls_ssl_set_bio(&s->ssl, s, tls_bio_send, tls_bio_recv, NULL);
+     *out = s;
+     return 0;

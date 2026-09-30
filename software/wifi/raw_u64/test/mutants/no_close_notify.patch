@@ -1,0 +1,11 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:30
+@@ -745,7 +745,6 @@
+     // Best effort: close_notify lands in out_buf behind anything still pending there. A session still
+     // handshaking has nothing to close, and its half flight is not sent.
+     if (s->stats.state == TLS_STATE_ESTABLISHED) {
+-        mbedtls_ssl_close_notify(&s->ssl);
+         int n = (s->out_len < TLS_STEP_OUT_MAX) ? s->out_len : TLS_STEP_OUT_MAX;
+         memcpy(out, s->out_buf, n);
+         *ct_out_len = n;

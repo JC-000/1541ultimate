@@ -656,12 +656,6 @@ CONFIG_EXAMPLE_FAST_SCAN_WEAKEST_AUTHMODE_OPEN=y
 # end of Example Configuration
 
 #
-# TLS spike
-#
-CONFIG_TLS_SPIKE=y
-# end of TLS spike
-
-#
 # Compiler options
 #
 CONFIG_COMPILER_OPTIMIZATION_DEBUG=y

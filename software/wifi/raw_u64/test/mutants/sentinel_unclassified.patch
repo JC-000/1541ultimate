@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:30
+@@ -526,7 +526,7 @@
+             const uint8_t *m = s->ssl.in_msg; // the ServerHello: handshake header, then legacy_version
+             r->verify_flags = (m && (s->ssl.in_msgtype == MBEDTLS_SSL_MSG_HANDSHAKE)) ? ((m[4] << 8) | m[5]) : 0;
+         } else {
+-            r->fail_reason = TLS_FAIL_DOWNGRADE;
++            r->fail_reason = TLS_FAIL_NONE;
+         }
+     } else if (ret == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
+         r->fail_reason = ((s->trust == TLS_TRUST_PIN) && s->pin_mismatch) ? TLS_FAIL_PIN_MISMATCH : TLS_FAIL_CERT_VERIFY;

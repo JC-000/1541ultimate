@@ -66,15 +66,3 @@ menu "Example Configuration"
     endchoice
 
 endmenu
-
-menu "TLS spike"
-
-    config TLS_SPIKE
-        bool "TLS spike build: allow CMD_TLS_OPEN without certificate verification"
-        default n
-        help
-            Only for the M2 TLS spike. Compiles the accept-all certificate check that a
-            CMD_TLS_OPEN without TLS_OPEN_VERIFY uses. Without it, such an OPEN is refused
-            with ESP_ERR_NOT_SUPPORTED.
-
-endmenu

@@ -1,0 +1,13 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:30
+@@ -372,8 +372,7 @@
+     }
+     // The slot is the Ultimate's: whatever it still holds there is an orphan (its OPEN or CLOSE was lost)
+     if (sessions[slot]) {
+-        ESP_LOGW(TAG, "OPEN into slot %d frees the session held there under tag %u", slot, sessions[slot]->tag);
+-        tls_free(sessions[slot]);
++        return ESP_ERR_INVALID_STATE;
+     }
+     if (entropy_source() == ENTROPY_NONE) {
+         *reason = TLS_OPEN_REASON_NO_ENTROPY;

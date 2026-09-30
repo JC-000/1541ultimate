@@ -1,0 +1,13 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:30
+@@ -182,7 +182,8 @@
+     case TLS_TRUST_PIN:
+         // The key is the identity: chain, dates and name are not checked (U3). The mode comes from trust alone.
+         *flags = 0;
+-        if ((depth == 0) && (!hashed || memcmp(s->stats.spki_sha256, s->pin, TLS_PIN_LEN) != 0)) {
++        static const uint8_t zero[TLS_PIN_LEN];
++        if ((depth == 0) && memcmp(s->pin, zero, TLS_PIN_LEN) && (!hashed || memcmp(s->stats.spki_sha256, s->pin, TLS_PIN_LEN) != 0)) {
+             s->pin_mismatch = 1;
+             *flags = MBEDTLS_X509_BADCERT_NOT_TRUSTED;
+         }

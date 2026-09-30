@@ -1,0 +1,21 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:30
+@@ -482,7 +482,7 @@
+         m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len);
+         if (version_before == MBEDTLS_SSL_VERSION_TLS1_3) {
+             if (m && (tls_sh_ext(m, len, 51, &d) >= 2)) { // key_share: the group comes first in both forms
+-                s->stats.group = (d[0] << 8) | d[1];
++                (void)d;
+             }
+             // Not found: the group stays 0, and tls_handshake() refuses the session
+         } else if (!s->ems_checked) {
+@@ -501,7 +501,7 @@
+     }
+     if ((state_before == MBEDTLS_SSL_SERVER_KEY_EXCHANGE) && (version_before == MBEDTLS_SSL_VERSION_TLS1_2) &&
+         (m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_KEY_EXCHANGE, &len)) != NULL && (len >= 4 + 3) && (m[4] == 3)) {
+-        s->stats.group = (m[5] << 8) | m[6]; // ECParameters: named_curve (3), then the NamedGroup
++        (void)m; // ECParameters: named_curve (3), then the NamedGroup
+     }
+     return 0;
+ }

@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 12:47:30
++++ b/main/tls_engine.c	2026-09-30 12:48:29
+@@ -678,7 +678,7 @@
+             // next call (ssl_msg.c:5466-5473 in mbedTLS 4.1.1), which takes it without new input.
+             // Take every one now, or the reply behind them waits for a step the Ultimate never sends.
+             continue;
+-        } else if ((n == MBEDTLS_ERR_SSL_WANT_READ) && (s->in_off > in_before) && (s->in_off < s->in_len)) {
++        } else if (0) {
+             // A record mbedTLS skipped with WANT_READ (a TLS 1.2 no_renegotiation warning alert,
+             // ssl_msg.c:5002-5006) while more input waits: read on, or the data behind it would wait
+             // for another step. The read took input, so this ends.
