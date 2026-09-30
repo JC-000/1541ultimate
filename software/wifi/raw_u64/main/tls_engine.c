@@ -77,6 +77,7 @@ typedef struct {
     int out_len;
     uint64_t host_tag;      // tls_group_tag() of the SNI when this session may use the group cache, else 0
     uint8_t offered_default; // the offer is the default order (no entry, or a re-probe)
+    uint8_t probe;          // a re-probe that has not completed: dropping the session drops the entry
     uint16_t groups[6];     // this session's offer, see tls_offer_groups()
     tls_hello_scan_t hello; // HRR and ServerHello groups, read from the bytes given to mbedTLS
     uint8_t in_buf[TLS_IN_BUF_SIZE];
@@ -101,24 +102,9 @@ static void tls_offer_groups(tls_session_t *s)
         MBEDTLS_SSL_IANA_TLS_GROUP_SECP384R1, MBEDTLS_SSL_IANA_TLS_GROUP_SECP521R1 };
     _Static_assert(sizeof(base) / sizeof(base[0]) < sizeof(((tls_session_t *)0)->groups) / sizeof(uint16_t),
                    "room for the terminator");
-    uint16_t learned = s->host_tag ? tls_group_first(s->host_tag) : 0;
-    uint16_t first = 0;
-    for (int i = 0; i < (int)(sizeof(base) / sizeof(base[0])); i++) {
-        if (base[i] == learned) {
-            first = learned; // only a group this image offers: the list below then stays in bounds
-        }
-    }
-    s->offered_default = (first == 0);
-    int n = 0;
-    if (first) {
-        s->groups[n++] = first;
-    }
-    for (int i = 0; i < (int)(sizeof(base) / sizeof(base[0])); i++) {
-        if (base[i] != first) {
-            s->groups[n++] = base[i];
-        }
-    }
-    s->groups[n] = MBEDTLS_SSL_IANA_TLS_GROUP_NONE;
+    int probe;
+    s->offered_default = tls_group_offer(s->host_tag, base, sizeof(base) / sizeof(base[0]), s->groups, &probe);
+    s->probe = probe;
 }
 
 static int tls_bio_send(void *ctx, const unsigned char *buf, size_t len)
@@ -217,6 +203,9 @@ static void tls_free(tls_session_t *s)
     if (sessions[s->id % TLS_MAX_SESSIONS] == s) {
         sessions[s->id % TLS_MAX_SESSIONS] = NULL;
     }
+    if (s->probe) { // a re-probe that failed or was abandoned: back to the default order for this host
+        tls_group_forget(s->host_tag);
+    }
     mbedtls_ssl_free(&s->ssl);
     mbedtls_ssl_config_free(&s->conf);
     mbedtls_x509_crt_free(&s->ca);
@@ -278,7 +267,7 @@ static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const c
         mbedtls_ssl_conf_max_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
         // mbedTLS 4's default list adds x448 and FFDHE 2048-8192 (an 8192-bit modexp on the ESP32):
         // offer what mbedTLS 3.6.0 offered here, in its order. mbedTLS keeps the pointer: it is the session's.
-        s->host_tag = (sni_len && tls_group_may_learn(verify, cas, TLS_OPEN_CA_BUNDLE)) ? tls_group_tag(hostname, sni_len) : 0;
+        s->host_tag = tls_group_session_tag(verify, cas, TLS_OPEN_CA_BUNDLE, hostname, sni_len);
         tls_offer_groups(s);
         mbedtls_ssl_conf_groups(&s->conf, s->groups);
         mbedtls_ssl_conf_authmode(&s->conf, verify ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
@@ -311,6 +300,7 @@ static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const c
     }
     if (ret != 0) {
         ESP_LOGW(TAG, "Open failed: -0x%04x", (unsigned)-ret);
+        s->probe = 0; // never started: the probe is offered again by the next OPEN
         tls_free(s);
         return ret;
     }
@@ -495,6 +485,7 @@ int tls_step(uint8_t session, const uint8_t *ct_in, int ct_in_len, const uint8_t
                 s->stats.ciphersuite = (uint16_t)mbedtls_ssl_get_ciphersuite_id_from_ssl(&s->ssl);
                 // No public mbedTLS call gives the negotiated group: stats.group stays 0
                 tls_group_learn(s->host_tag, s->hello.saw_hrr, s->hello.chosen, s->offered_default);
+                s->probe = 0;
             } else if ((ret == MBEDTLS_ERR_SSL_WANT_READ) || (ret == MBEDTLS_ERR_SSL_WANT_WRITE)) {
                 ret = 0;
             }
