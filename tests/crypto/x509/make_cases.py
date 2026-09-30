@@ -50,6 +50,14 @@ bundle-confused-weak.json: the algorithm-confused leaf under an RSA-1024 bundle 
 (V1) and SHA-1 (V2): mbedTLS never takes the bundle's CA as the parent, so its key-size and hash
 profile never applies, and ESP-IDF 6's callback accepts (must fail).
 
+bundle-confused-wide.json: algorithm confusion beyond RSA roots and leaves (conf4-adversarial6 N2):
+a P-256 bundle root under which a leaf names sha256WithRSAEncryption or sha1WithRSAEncryption and
+carries the root's ECDSA signature (E1, E2), the same under a secp256k1 root, a curve not in
+mbedTLS's default profile (K1), and an intermediate that names ecdsa-with-SHA256 or -SHA1 over a
+PKCS#1 v1.5 signature by an RSA-2048 or RSA-1024 root, above an honest leaf (I1, I2); all must
+fail. Controls: an honest leaf under the P-256 root (E0), and under the secp256k1 root (K0, which
+must fail: the curve is outside the profile; conf4-adversarial6 N5).
+
 pss-salt.json: an X.509 certificate signed with RSASSA-PSS whose parameters say one salt length
 and whose signature uses another (RFC 4055 3.1).
 
@@ -1054,6 +1062,104 @@ def main():
         for mode in ("ca", "bundle")
     ]
     write("bundle-confused-weak.json", cases)
+
+    # Algorithm confusion with EC bundle roots, and one level below the root (conf4-adversarial6
+    # N2, N5): ESP-IDF 6's callback verifies with an EC key as ECDSA whatever the certificate names
+    sha1_rsa = der(0x30, der(0x06, bytes.fromhex("2a864886f70d010105")) + b"\x05\x00")
+    e_key = p256()
+    e_root = cert("Root E", e_key, "Root E", e_key, CA)
+    k_key = ec.generate_private_key(ec.SECP256K1())
+    k_root = cert("Root K", k_key, "Root K", k_key, CA)
+    i_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    i_root = cert("Root I", i_key, "Root I", i_key, CA)
+
+    def signed_as(c, alg, sign):
+        """The certificate with `alg` as its signature algorithm, its TBS signed by `sign`."""
+        tbs = children(c.public_bytes(serialization.Encoding.DER))[0]
+        fields = children(tbs)
+        fields[2] = alg
+        tbs = der(0x30, b"".join(fields))
+        return x509.load_der_x509_certificate(der(0x30, tbs + alg + der(0x03, b"\0" + sign(tbs))))
+
+    def ec_leaf(root_name, key, alg, h):
+        c = cert("victim.example", p256(), root_name, p256(), server("victim.example"))
+        return signed_as(c, alg, lambda tbs: key.sign(tbs, ec.ECDSA(h)))
+
+    def confused_ica(root_name, key, alg, h):
+        ica_key = p256()
+        ica = signed_as(
+            cert("Confused ICA", ica_key, root_name, p256(), CA),
+            alg,
+            lambda tbs: key.sign(tbs, padding.PKCS1v15(), h),
+        )
+        return [ica], cert("victim.example", p256(), "Confused ICA", ica_key, server("victim.example"))
+
+    i1 = confused_ica("Root I", i_key, ECDSA_SHA256, hashes.SHA256())
+    i2 = confused_ica("Root W", w_key, ecdsa_sha1, hashes.SHA1())
+    chains = {
+        "E0-control-p256-root": (
+            "P-256 root -> leaf signed ecdsa-with-SHA256",
+            e_root,
+            [],
+            cert("victim.example", p256(), "Root E", e_key, server("victim.example")),
+            "SUCCESS",
+        ),
+        "E1-confused-p256-root": (
+            "leaf naming sha256WithRSAEncryption, signed ECDSA SHA-256 by the P-256 root",
+            e_root,
+            [],
+            ec_leaf("Root E", e_key, SHA256_RSA, hashes.SHA256()),
+            "FAILURE",
+        ),
+        "E2-confused-p256-root-sha1": (
+            "leaf naming sha1WithRSAEncryption, signed ECDSA SHA-1 by the P-256 root",
+            e_root,
+            [],
+            ec_leaf("Root E", e_key, sha1_rsa, hashes.SHA1()),
+            "FAILURE",
+        ),
+        "K0-secp256k1-root": (
+            "secp256k1 root (not in the profile) -> leaf signed ecdsa-with-SHA256",
+            k_root,
+            [],
+            cert("victim.example", p256(), "Root K", k_key, server("victim.example")),
+            "FAILURE",
+        ),
+        "K1-confused-secp256k1-root": (
+            "leaf naming sha256WithRSAEncryption, signed ECDSA SHA-256 by a secp256k1 root",
+            k_root,
+            [],
+            ec_leaf("Root K", k_key, SHA256_RSA, hashes.SHA256()),
+            "FAILURE",
+        ),
+        "I1-confused-intermediate": (
+            "RSA-2048 root -> ICA naming ecdsa-with-SHA256, signed PKCS#1 v1.5 SHA-256 -> leaf",
+            i_root,
+            *i1,
+            "FAILURE",
+        ),
+        "I2-confused-intermediate-rsa1024-sha1": (
+            "RSA-1024 root -> ICA naming ecdsa-with-SHA1, signed PKCS#1 v1.5 SHA-1 -> leaf",
+            w_root,
+            *i2,
+            "FAILURE",
+        ),
+    }
+    cases = [
+        case(
+            "bundle-confused-wide::%s::%s" % (tag, mode),
+            description,
+            root_cert,
+            inter,
+            leaf_cert,
+            "victim.example",
+            result,
+            mode=mode,
+        )
+        for tag, (description, root_cert, inter, leaf_cert, result) in chains.items()
+        for mode in ("ca", "bundle")
+    ]
+    write("bundle-confused-wide.json", cases)
 
     # RSASSA-PSS parameters that say salt 32 over a signature with salt 20 (conf4-adversarial1 M3)
     p_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
