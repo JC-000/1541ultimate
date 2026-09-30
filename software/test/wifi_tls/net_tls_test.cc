@@ -300,8 +300,10 @@ static void test_info(void)
           "info (OI-1): after a module restart a STATS timeout clears b0/b1, block_max and the CA date");
     world_module.stats_result = -1;
     check((info_byte(4) & 0x01) == 0x01 && info_byte(12) == 44, "info (OI-1): the next good STATS sets them again");
-    world_module.stats_result = WIFI_TLS_REFUSED; // a module without TLS (NOT_SUPPORTED)
-    check(!(info_byte(4) & 0x01), "info (OI-1): a refused STATS clears b0");
+    world_module.stats_result = WIFI_TLS_REFUSED; // a module without TLS
+    world_module.stats_esp_err = WIFI_TLS_ESP_NOT_SUPPORTED;
+    check(!(info_byte(4) & 0x01), "info (OI-1): a STATS refused with NOT_SUPPORTED clears b0");
+    world_module.stats_esp_err = 0;
     world_module.stats_result = -1;
     info(0xFF);
     world_module.available = false;
@@ -1495,6 +1497,126 @@ static void test_empty_read_reply(void)
     check(got == expected(13, 30) && sock(h).open, "ER-12: the handle is unchanged; its data still arrives");
 }
 
+
+// --- m3niosadv: attack cases (not the author's) -----------------------------------------------
+static void test_adversarial(void)
+{
+    printf("ADV: m3niosadv attack cases\n");
+    const std::string rst = "12,RECEIVE ERROR: " + num(ECONNRESET);
+    std::string last;
+
+    // ADV-1 (4.3 r7.5 L-2, 1.6): a close_notify found by the drain BEFORE the WRITE, with plaintext
+    // still in rx. The WRITE reports the latched 12; the end must then be that 12, never 01/GONE.
+    fresh();
+    int h = open_ok();
+    FakeSession &s = world_module.sess[0];
+    for (size_t i = 0; i < 500; i++) {
+        s.pt.push_back(payload_byte(21, i));
+    }
+    s.terminal = 'C';
+    server_push(h, EV_ERR, bytes(), ECONNRESET);
+    Res r = read_cmd(h, 100);                // latches; the step hands out 500 B AND CLOSED
+    bytes all = body(r);
+    r = write_cmd(h, S("ping"));
+    check(header(r) == 0xFFFF && r.status == rst, "ADV-1: WRITE while latched -> $FFFF + %s (got %s)",
+          rst.c_str(), r.status.c_str());
+    bytes got = read_all(h, 100, &last, NULL, 50);
+    all.insert(all.end(), got.begin(), got.end());
+    check(all == expected(21, 500), "ADV-1: every byte delivered (%d of 500)", (int)all.size());
+    check(last == rst && sock(h).open,
+          "ADV-1: after a WRITE said 12, the end is that 12 and the handle is still owned (got '%s', socket %s)",
+          last.c_str(), sock(h).open ? "open" : "CLOSED");
+
+    // ADV-2 (Amendment 3 UPDATE: the cache is cleared only on NO_MODULE, NOT_SUPPORTED or a new
+    // generation). m3-esp answers a STATS that finds the TLS queue full with a full-size reply,
+    // esp_err ESP_ERR_TIMEOUT (rpc_dispatch.c cmd_tls_busy), which take_stats makes REFUSED.
+    fresh();
+    info(0xFF);
+    world_module.stats_result = WIFI_TLS_REFUSED; // cmd_tls_busy's full-size reply
+    world_module.stats_esp_err = 0x107;           // ESP_ERR_TIMEOUT
+    r = info(0xFF);
+    world_module.stats_result = -1;
+    world_module.stats_esp_err = 0;
+    check((at(r, 4) & 0x01) == 0x01,
+          "ADV-2: a STATS refused with ESP_ERR_TIMEOUT (TLS queue full = a timeout) keeps b0 (b4=0x%02X)", at(r, 4));
+
+    // ADV-3 (4.3 L-4): the drain ends after TWO CONSECUTIVE quiet steps, not two per READ. With
+    // every step taking 260 ms (> READ_BUDGET 250 ms), each READ gets one step in.
+    fresh();
+    h = open_ok();
+    server_push(h, EV_ERR, bytes(), ECONNRESET);
+    for (int i = 0; i < 60; i++) {
+        Forced f = Forced();
+        f.result = 0;
+        f.delay_ms = 260;
+        world_module.forced.push_back(f);
+    }
+    int reads = 0;
+    std::string st;
+    for (reads = 1; reads <= 20; reads++) {
+        r = read_cmd(h, 100);
+        st = r.status;
+        if (header(r) != 0xFFFF) {
+            break;
+        }
+    }
+    world_module.forced.clear();
+    check(st == rst, "ADV-3: a peer RST with slow (260 ms) steps ends in %s within 20 READs (got '%s' after %d)",
+          rst.c_str(), st.c_str(), reads > 20 ? 20 : reads);
+
+    // ADV-4, adopted as the pin for D2 (RATIFIED): a WRITE ends with a step that returns no
+    // ciphertext, so 892 B is exactly 2 NO_READ steps; within WRITE_BUDGET 4 that leaves room for 2
+    // AGAINs, and a third makes the WRITE a sticky 17, never a partial count.
+    fresh();
+    h = open_ok();
+    bytes data = expected(12, 892);
+    world_module.calls.clear();
+    r = write_cmd(h, data);
+    check(header(r) == 892 && steps_logged() == 2 && last_call().pt_in_len == 0,
+          "ADV-4/D2: 892 B is 2 steps, the last input-less (got %04X, %d steps)", header(r), steps_logged());
+    fresh();
+    h = open_ok();
+    world_module.again_next = 2;
+    r = write_cmd(h, data);
+    check(header(r) == 892 && r.status == "00,OK" && sock(h).srv.got == data,
+          "ADV-4/D2: 892 B after 2 AGAINs is 4 steps -> 892, 00,OK (got %04X %s)", header(r), r.status.c_str());
+    fresh();
+    h = open_ok();
+    world_module.again_next = 3;
+    r = write_cmd(h, data);
+    check(header(r) == 0xFFFF && r.status == "17,TLS MODULE NOT RESPONDING",
+          "ADV-4/D2: 892 B after 3 AGAINs runs out of WRITE_BUDGET -> $FFFF + sticky 17 (got %04X %s)", header(r),
+          r.status.c_str());
+
+    // ADV-5 (D3): a send failure during the handshake. Section 2 lists 12 for READ/WRITE only.
+    fresh();
+    int t = open_tcp();
+    sock(t).send_err = ECONNRESET;
+    r = run(start_cmd(t, 2, 0, "", PIN()));
+    check(r.status == "13,TLS HANDSHAKE FAILED: PEER RESET: " + num(ECONNRESET) && !sock(t).open,
+          "ADV-5/D3: START_TLS whose ClientHello send meets an RST -> 13 PEER RESET: errno, handle closed "
+          "(got '%s', handle %s)", r.status.c_str(), sock(t).open ? "open" : "closed");
+    fresh();
+    world_socks[0].srv.send_err = EPIPE; // OPEN_TLS: the new socket's first send fails
+    r = run(open_cmd(0, 0, "example.com"));
+    check(r.status == "13,TLS HANDSHAKE FAILED: PEER RESET: " + num(EPIPE) && world_open_sockets() == 0 &&
+          world_count(0x32) == 1, "D3: OPEN_TLS whose ClientHello send fails -> 13 PEER RESET: errno, CLOSE RPC (got '%s')",
+          r.status.c_str());
+
+    // ADV-6 (1.4): 17 is not a kept code. The module's queue-full answer to OPEN (esp_err
+    // ESP_ERR_TIMEOUT, reason 0) is a REFUSED 17: START_TLS must close the TCP handle.
+    fresh();
+    t = open_tcp();
+    world_module.open_result = WIFI_TLS_REFUSED;
+    world_module.open_esp_err = 0x107;
+    world_module.open_reason = 0;
+    r = run(start_cmd(t, 2, 0, "", PIN()));
+    world_module.open_result = -1;
+    check(r.status == "17,TLS MODULE NOT RESPONDING" && !sock(t).open,
+          "ADV-6: START_TLS refused by a busy module -> 17 and the TCP handle is closed (got '%s', %s)",
+          r.status.c_str(), sock(t).open ? "open" : "closed");
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -1515,6 +1637,7 @@ int main(int argc, char **argv)
     test_cleanup();
     test_status_lengths();
     test_empty_read_reply();
+    test_adversarial();
     check(longest_status.size() <= 40, "ER-8: the longest status of the whole run is %d bytes: '%s'",
           (int)longest_status.size(), longest_status.c_str());
     printf("\n%d checks, %d failures\n", checks, failures);

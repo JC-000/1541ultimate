@@ -323,6 +323,13 @@ static void test_take_others(void)
     r = wifi_tls_take_open(reply.bytes, sizeof(nios_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
     check((r == WIFI_TLS_REFUSED) && (esp_err == 0x103) && (reason == WIFI_TLS_REASON_NO_CUSTOM_CA),
           "OPEN: refused, with reason 3 NO_CUSTOM_CA");
+    // m3niosadv: the refusal as m3-esp sends it, slot 0xFF (rpc_dispatch.c cmd_tls_open).
+    ((nios_tls_open_resp *)reply.bytes)->session = 0xFF;
+    ((nios_tls_open_resp *)reply.bytes)->reason = NIOS_TLS_REASON_NO_TIME;
+    r = wifi_tls_take_open(reply.bytes, sizeof(nios_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
+    check((r == WIFI_TLS_REFUSED) && (reason == WIFI_TLS_REASON_NO_TIME),
+          "ADV-7: OPEN refused as m3-esp sends it (slot byte 0xFF) -> REFUSED with its reason, not malformed");
+    ((nios_tls_open_resp *)reply.bytes)->session = 1;
     header(NIOS_CMD_TLS_OPEN);
     ((rpc_espcmd_resp *)reply.bytes)->esp_err = 0x106;
     reason = 0;

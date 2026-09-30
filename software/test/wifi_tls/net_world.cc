@@ -426,8 +426,8 @@ ssize_t lwip_send(int s, const void *dataptr, size_t size, int flags)
     }
     FakeSock &k = world_socks[s];
     k.send_calls++;
-    if (k.send_err) {
-        errno = k.send_err;
+    if (k.send_err || k.srv.send_err) {
+        errno = k.send_err ? k.send_err : k.srv.send_err;
         return -1;
     }
     if (k.send_blocked) {
@@ -904,6 +904,7 @@ int wifi_tls_stats(uint8_t slot, uint16_t tag, wifi_tls_stats_t *stats, int *esp
     bool cancelled;
     module_wait(timeout_ms, cancel, 0, &cancelled);
     if (m.stats_result >= 0) {
+        *esp_err = m.stats_esp_err;
         return m.stats_result;
     }
     memset(stats, 0, sizeof(*stats));

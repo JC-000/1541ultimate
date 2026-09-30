@@ -64,6 +64,7 @@ struct FakeServer {
     int connect_err;       // ... and then fails with this errno
     bool connect_never;
     int rst_err;           // the errno of SRV_RST; 0 for ECONNRESET
+    int send_err;          // every send on this socket fails with it (set before the socket exists)
 };
 
 struct FakeSock {
@@ -176,6 +177,7 @@ struct FakeModule {
     uint8_t spki[32];
     uint16_t block_max_ms;
     int stats_result;    // forced; -1 for normal
+    int stats_esp_err;   // with a forced REFUSED
     // SET_CA
     int set_ca_result;   // WIFI_TLS_* to answer; 0 loads
     int set_ca_esp_err;
