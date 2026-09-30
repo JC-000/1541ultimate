@@ -243,7 +243,7 @@ derive_esp32_config() {
             # the device's own implementations, which no host run tests
             case $name in
                 *_ALT|*_ALT_FALLBACK|*_ALT_SOFT_FALLBACK|MBEDTLS_PSA_ACCEL_*) echo "${name#MBEDTLS_}" >> "$CFG/replaced.txt";;
-                MBEDTLS_PSA_DRIVER_GET_ENTROPY) entropy=1;;
+                MBEDTLS_PSA_DRIVER_GET_ENTROPY) entropy=1; echo "${name#MBEDTLS_}" >> "$CFG/replaced.txt";;
             esac
         else
             echo "#define $name${value:+ $value}" >> "$HDR"
