@@ -1,11 +1,16 @@
 /*
  * wifi_tls_rpc.h
  *
+ * TEMPORARY: folded into software/wifi/raw_u64/main/rpc_calls.h at
+ * integration. A scaffold, ratified by the esp-tls supervisor only until the
+ * module side commits the M3 layout there; it is not meant to stay as a
+ * separate copy.
+ *
  * The TLS requests to the WiFi module and its answers, as they travel on the
- * UART: the Ultimate's own copy of the M3 layout (M3-SPEC v1 section 5.2).
- * The module declares the same layout in its rpc_calls.h, and each side
- * asserts the offsets it relies on, so that neither build can drift from the
- * wire without failing. Only wifi_tls.cc and its host tests include this.
+ * UART (M3-SPEC v1 section 5.2). Every offset and size below is asserted
+ * against the spec's literal numbers, so that the fold-in can be checked
+ * byte for byte against rpc_calls.h. Only wifi_tls.cc and its host tests
+ * include this.
  *
  * Multi-byte fields are little endian, as both CPUs are.
  */
