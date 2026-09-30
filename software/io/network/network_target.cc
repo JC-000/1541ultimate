@@ -1924,7 +1924,6 @@ void NetworkTarget :: tls_read(TlsSocket *e, uint32_t length, Message **reply, M
         uint32_t deadline = tick_after(TLS_READ_TOTAL_MS);
         uint32_t budget_end = tick_after(TLS_READ_BUDGET_MS);
         int steps = 0;
-        int quiet = 0; // ct_in_len-0 steps in a row that changed nothing, while draining
         while (!reset_now()) {
             // Eager: top up the ciphertext before each step, unless the
             // stream has ended or a receive error is latched (4.3).
@@ -2017,16 +2016,17 @@ void NetworkTarget :: tls_read(TlsSocket *e, uint32_t length, Message **reply, M
                 break;
             }
             if (e->rx_len) {
+                e->quiet = 0; // plaintext: not a quiet step
                 break;
             }
             if (draining && (fed == 0)) {
                 // Two quiet input-less steps: the module holds nothing more.
-                if (++quiet >= 2) {
+                if (++e->quiet >= 2) {
                     e->end = e->rx_err ? TLS_END_RX_ERR : TLS_END_NO_NOTIFY;
                     break;
                 }
             } else {
-                quiet = 0;
+                e->quiet = 0;
             }
         }
     }

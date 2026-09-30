@@ -97,6 +97,7 @@ struct TlsSocket {
     bool rx_fin;             // TCP said end of stream; no receive after it
     bool module_more;        // the last step handed something out: the next READ steps at once
     uint8_t end;             // how the stream ends once rx is empty (TLS_END_*)
+    uint8_t quiet;           // ct_in_len-0 drain steps in a row that changed nothing, across READs
     uint16_t rx_off, rx_len; // plaintext received, not yet read by the C64
     uint16_t held_len;       // ciphertext received, not yet taken by the module
     // What OPEN answered with, for TLS_INFO.
