@@ -8,7 +8,9 @@
 # CRYPTO_EXPECTATIONS names a different expectations file (a candidate's), and
 # CRYPTO_STRICT=1 counts known vulnerabilities and security deviations as failures.
 # CRYPTO_OFFLINE=1 uses the cache alone (fill it with one run that has the network).
-# CRYPTO_CONFIG names an mbedTLS config header to use instead of the ESP32's; CRYPTO_CFLAGS
+# CRYPTO_ENGINE and CRYPTO_ENGINE_CONFIG name the tls_engine.c the coverage suite compares and its
+# recorded surface (run_idf6.sh sets them). CRYPTO_CONFIG names an mbedTLS config header to use
+# instead of the ESP32's; CRYPTO_CFLAGS
 # builds the library and the harnesses with extra flags, e.g. '-fsanitize=address,undefined'.
 #
 # Builds mbedTLS as PINS says with the ESP32's configuration (build_mbedtls.sh), builds the two
@@ -21,7 +23,7 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 # A misspelt setting would be silently ignored: refuse any CRYPTO_ variable not listed here
-KNOWN=" CRYPTO_PINS CRYPTO_SDKCONFIG CRYPTO_MACROS CRYPTO_CACHE CRYPTO_CONFIG CRYPTO_CFLAGS CRYPTO_EXPECTATIONS CRYPTO_STRICT CRYPTO_OFFLINE "
+KNOWN=" CRYPTO_PINS CRYPTO_SDKCONFIG CRYPTO_MACROS CRYPTO_CACHE CRYPTO_CONFIG CRYPTO_CFLAGS CRYPTO_EXPECTATIONS CRYPTO_STRICT CRYPTO_OFFLINE CRYPTO_ENGINE CRYPTO_ENGINE_CONFIG "
 for v in $(env | sed -n 's/^\(CRYPTO_[A-Za-z0-9_]*\)=.*/\1/p'); do
     [[ $KNOWN == *" $v "* ]] || { echo "unknown setting $v (known:$KNOWN)"; echo "CRYPTO_CONFORMANCE FAIL setup"; exit 1; }
 done

@@ -38,7 +38,7 @@ behaviour in listed order) and the expectation lines behind them are counted apa
 | File | What |
 |---|---|
 | `PINS` | the one place the sources come from; a crypto bump is a change here |
-| `PINS.idf6`, `sdkconfig.v6.0.3`, `expectations.4`, `esp32_macros.4.txt` | the same for ESP-IDF 6 / mbedTLS 4 (`run_idf6.sh` sets them); the `-nocross` sdkconfig and macro list are the certificate bundle without `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY` |
+| `PINS.idf6`, `sdkconfig.v6.0.3`, `expectations.4`, `esp32_macros.4.txt`, `engine_config.4.txt` | the same for ESP-IDF 6 / mbedTLS 4 (`run_idf6.sh` sets them, and compares engine4's `tls_engine.c` at its `ENGINE4_COMMIT` until the branches meet); the `-nocross` sdkconfig and macro list are the certificate bundle without `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY` |
 | `regen_sdkconfig.sh` | regenerates the raw_u64 sdkconfig for another ESP-IDF release with that release's kconfgen, as idf.py does |
 | `build_mbedtls.sh` | fetches and builds mbedTLS with the configuration derived from `software/wifi/raw_u64/sdkconfig` and ESP-IDF's `esp_config.h` |
 | `esp32_macros.txt` | the derived macro list (one per mbedTLS major); a bump that changes it shows the diff and stops |
@@ -78,5 +78,6 @@ content, that the host name and the key-usage checks are applied): only handshak
 that. The ESP32's hardware AES/GCM/SHA/bignum code (see the NOT COVERED line). Revocation (the
 engine configures no CRL). Name-constraint semantics (mbedTLS 3.6 and 4.1.1 have none; a critical
 one is refused at parse time). With mbedTLS 4, the finite-field groups ffdhe2048 to ffdhe8192 the
-default configuration offers: no independent vectors, so the coverage suite fails while the
-engine offers them.
+default configuration offers: no independent vectors, so the coverage suite fails if an engine
+offers them (engine4 does not: it sets its groups). The build log (`build_mbedtls.txt`) names
+every macro of the derived configuration that the host drops (DROPPED) or replaces (REPLACED).

@@ -244,6 +244,12 @@ x509 tc=bundle::rsa1024-root::bundle security-deviation bundle-root-key-size-unc
 # The callback looks up the top certificate's issuer, the old root, and nothing else
 # (esp_crt_bundle.c:84-142), so the valid chain is refused. ESP-IDF 6's
 # CROSS_SIGNED_VERIFY accepts it (expectations.4).
+# The bundle is looked up by the raw bytes of the issuer name (esp_crt_bundle.c:117), where RFC 5280
+# 7.1 compares names case-insensitively and across string types (mbedTLS does in CA mode), and
+# BAD_MD is masked off for any hash the pk layer can verify, SHA-224 included (esp_crt_bundle.c:90).
+x509 tc=bundle-idf6::T2-issuer-case-differs::bundle reject fail-closed: the issuer is looked up by its raw bytes (esp_crt_bundle.c:117), so ROOT A does not find Root A
+x509 tc=bundle-idf6::T2b-issuer-printable::bundle reject fail-closed: the issuer is looked up by its raw bytes (esp_crt_bundle.c:117), so a PrintableString Root A does not find the UTF8String one
+x509 tc=bundle-idf6::T4-sha224-honest::bundle security-deviation bundle-sha224-below-root BAD_MD is masked off (esp_crt_bundle.c:90): a SHA-224 signature by a bundled root is accepted
 x509 tc=cross::top-cross-signed::bundle reject fail-closed: only the top certificate's issuer is looked up in the bundle (esp_crt_bundle.c:84-142), here the old root, which it does not have
 # ---- Known vulnerabilities of the pinned mbedTLS -------------------------------------------
 # known-vulnerable <CVE> <first fixed version>: the vector must still show the vulnerable outcome.

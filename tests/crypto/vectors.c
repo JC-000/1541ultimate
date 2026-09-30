@@ -389,6 +389,12 @@ static int offer(void)
         mbedtls_ssl_conf_max_tls_version(&conf, MBEDTLS_SSL_VERSION_TLS1_3);
 #if MBEDTLS_VERSION_MAJOR < 4
         mbedtls_ssl_conf_rng(&conf, mbedtls_ctr_drbg_random, &drbg);
+#else
+        // engine4's list (tls_engine.c at f0ae8ed2, run_idf6.sh's ENGINE4_COMMIT)
+        static const uint16_t groups[] = { MBEDTLS_SSL_IANA_TLS_GROUP_X25519, MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
+                                           MBEDTLS_SSL_IANA_TLS_GROUP_SECP384R1, MBEDTLS_SSL_IANA_TLS_GROUP_SECP521R1,
+                                           MBEDTLS_SSL_IANA_TLS_GROUP_NONE };
+        mbedtls_ssl_conf_groups(&conf, groups);
 #endif
         mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_REQUIRED);
         ret = mbedtls_ssl_setup(&ssl, &conf);

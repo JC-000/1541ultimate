@@ -17,12 +17,14 @@
 
 # ---- X25519 (RFC 7748) ---------------------------------------------------------------------
 # A low-order public key gives an all-zero shared secret. RFC 8446 7.4.2 says a TLS 1.3 client
-# MUST abort on it. mbedTLS 4.1.1 refuses it twice over: PSA's ECDH loads the peer's key through
-# mbedtls_ecp_check_pubkey() (psa_crypto_ecp.c:174-175), which refuses the known low-order u
-# values (ecp.c:2792-2842: 0, 1, p-1, and Curve25519's two others); and the ladder's result at
-# infinity has Z = 0, which has no inverse (ecp.c:2326). 3.6's third barrier, ecdh.c's check of
-# the result, is gone: PSA's ECDH writes the secret out as it is (psa_crypto_ecp.c:522-536).
-x25519_test.json flag=ZeroSharedSecret reject all-zero shared secret refused (ecp.c:2792-2842, ecp.c:2326), as RFC 8446 7.4.2 requires of TLS 1.3
+# MUST abort on it. mbedTLS 4.1.1 refuses it once, on the input: PSA's ECDH loads the peer's key
+# through mbedtls_ecp_check_pubkey() (psa_crypto_ecp.c:174-175), which refuses the known low-order
+# u values (ecp.c:2792-2842: 0, 1, p-1, and Curve25519's two others). That list is the only
+# barrier. 3.6 had two more: its ladder's Z = 0 had no inverse, but 4.1.1's inversion
+# (MPI_ECP_INV, ecp.c:1129-1130, mbedtls_mpi_gcd_modinv_odd()) returns success with an
+# indeterminate result when there is none (conf4-adversarial1 M4, measured); and ecdh.c's check
+# of the result is gone, PSA's ECDH writing the secret out as it is (psa_crypto_ecp.c:522-536).
+x25519_test.json flag=ZeroSharedSecret reject all-zero shared secret refused: the low-order u values are refused on input (ecp.c:2792-2842), as RFC 8446 7.4.2 requires of TLS 1.3
 # RFC 7748 section 5 defines X25519 for every 32-byte u: points on the twist, u >= p (taken
 # mod p) and the special values are all inputs the function must compute on. mbedTLS does,
 # with the right result (an "accept" is checked against Wycheproof's shared secret).
@@ -31,12 +33,12 @@ x25519_test.json flag=NonCanonicalPublic accept RFC 7748 5: u >= 2^255-19 is red
 x25519_test.json flag=SpecialPublicKey accept RFC 7748 5: special u values are ordinary inputs; computed correctly
 
 # ---- X448 (RFC 7748; offered by mbedTLS 4's defaults, group 001e) ---------------------------
-# The same two barriers as X25519 (ecp.c:2792-2842 refuses u = 0, 1 and p-1 for Curve448; the
-# ladder's Z = 0 has no inverse, ecp.c:2326), and the same RFC 7748 section 5 rules for the rest.
+# The same single barrier as X25519 (ecp.c:2792-2842 refuses u = 0, 1 and p-1 for Curve448), and
+# the same RFC 7748 section 5 rules for the rest.
 # A public key longer than the curve's 56 bytes is not an X448 key; PSA refuses it by its size
 # (psa_crypto_ecp.c:124-128). Listed only because the SpecialPublicKey line would claim these.
 x448_test.json flag=PublicKeyTooLong reject a key of the wrong length is refused (psa_crypto_ecp.c:124-128), as Wycheproof wants
-x448_test.json flag=ZeroSharedSecret reject all-zero shared secret refused (ecp.c:2792-2842, ecp.c:2326), as RFC 8446 7.4.2 requires of TLS 1.3
+x448_test.json flag=ZeroSharedSecret reject all-zero shared secret refused: the low-order u values are refused on input (ecp.c:2792-2842), as RFC 8446 7.4.2 requires of TLS 1.3
 x448_test.json flag=Twist accept RFC 7748 5: X448 is defined on twist points; computed correctly
 x448_test.json flag=NonCanonicalPublic accept RFC 7748 5: u >= p is reduced mod p; computed correctly
 x448_test.json flag=SpecialPublicKey accept RFC 7748 5: special u values are ordinary inputs; computed correctly
@@ -63,7 +65,7 @@ rsa_signature_4096_sha256_test.json flag=MissingNull reject only the DigestInfo 
 rsa_signature_4096_sha384_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
 rsa_signature_4096_sha512_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
 
-# ---- RSA-PSS (CertificateVerify): a deviation, any salt length --------------------------------
+# ---- RSA-PSS (CertificateVerify, and X.509): a security deviation, any salt length ----------
 # RFC 8446 4.2.3: with RSASSA-PSS "the length of the Salt MUST be equal to the length of the
 # output of the digest algorithm". mbedTLS 3.6 checked it (ssl_tls13_generic.c:310 at 72aa6873,
 # expected_salt_len = PSA_HASH_LENGTH). mbedTLS 4.1.1 does not: ssl_tls13_generic.c:344 verifies
@@ -71,46 +73,50 @@ rsa_signature_4096_sha512_test.json flag=MissingNull reject only the DigestInfo 
 # (tf-psa-crypto/include/mbedtls/pk.h:52), and vectors.c does the same. Wycheproof's "s_len
 # changed" vectors are correct signatures with another salt length: accepted. The salt length is
 # not what makes PSS unforgeable (RFC 8017 9.1 allows any salt length, empty included), so this is a conformance
-# deviation, not a forgery; every other modified signature is refused, which the run checks.
-rsa_pss_2048_sha256_mgf1_32_test.json tc=67 accept deviation: salt length 0, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha256_mgf1_32_test.json tc=68 accept deviation: salt length 1, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha256_mgf1_32_test.json tc=69 accept deviation: salt length 20, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha256_mgf1_32_test.json tc=70 accept deviation: salt length 31, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha256_mgf1_32_test.json tc=71 accept deviation: salt length 33, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha256_mgf1_32_test.json tc=72 accept deviation: salt length 222, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha384_mgf1_48_test.json tc=99 accept deviation: salt length 0, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha384_mgf1_48_test.json tc=100 accept deviation: salt length 1, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha384_mgf1_48_test.json tc=101 accept deviation: salt length 20, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha384_mgf1_48_test.json tc=102 accept deviation: salt length 32, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha384_mgf1_48_test.json tc=103 accept deviation: salt length 47, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha384_mgf1_48_test.json tc=104 accept deviation: salt length 49, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_2048_sha384_mgf1_48_test.json tc=105 accept deviation: salt length 206, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_3072_sha256_mgf1_32_test.json tc=67 accept deviation: salt length 0, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_3072_sha256_mgf1_32_test.json tc=68 accept deviation: salt length 1, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_3072_sha256_mgf1_32_test.json tc=69 accept deviation: salt length 20, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_3072_sha256_mgf1_32_test.json tc=70 accept deviation: salt length 31, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_3072_sha256_mgf1_32_test.json tc=71 accept deviation: salt length 33, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_3072_sha256_mgf1_32_test.json tc=72 accept deviation: salt length 350, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha256_mgf1_32_test.json tc=67 accept deviation: salt length 0, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha256_mgf1_32_test.json tc=68 accept deviation: salt length 1, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha256_mgf1_32_test.json tc=69 accept deviation: salt length 20, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha256_mgf1_32_test.json tc=70 accept deviation: salt length 31, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha256_mgf1_32_test.json tc=71 accept deviation: salt length 33, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha256_mgf1_32_test.json tc=72 accept deviation: salt length 478, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha384_mgf1_48_test.json tc=99 accept deviation: salt length 0, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha384_mgf1_48_test.json tc=100 accept deviation: salt length 1, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha384_mgf1_48_test.json tc=101 accept deviation: salt length 20, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha384_mgf1_48_test.json tc=102 accept deviation: salt length 32, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha384_mgf1_48_test.json tc=103 accept deviation: salt length 47, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha384_mgf1_48_test.json tc=104 accept deviation: salt length 49, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha384_mgf1_48_test.json tc=105 accept deviation: salt length 462, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha512_mgf1_64_test.json tc=136 accept deviation: salt length 0, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha512_mgf1_64_test.json tc=137 accept deviation: salt length 1, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha512_mgf1_64_test.json tc=138 accept deviation: salt length 20, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha512_mgf1_64_test.json tc=139 accept deviation: salt length 32, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha512_mgf1_64_test.json tc=140 accept deviation: salt length 63, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha512_mgf1_64_test.json tc=141 accept deviation: salt length 65, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
-rsa_pss_4096_sha512_mgf1_64_test.json tc=142 accept deviation: salt length 446, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+# deviation, not a forgery; every other modified signature is refused, which the run checks. It is
+# a security-deviation (rsa-pss-any-salt), so it shows on the SECURITY DEVIATIONS line and
+# CRYPTO_STRICT=1 fails on it. X.509 certificate signatures get the same treatment: 4.1.1 parses
+# RSASSA-PSS's saltLength and drops it (x509.c:748-753) and verifies with the same any-salt
+# algorithm (x509_crt.c:2145); x509/pss-salt.json's lines are in the bundle section below.
+rsa_pss_2048_sha256_mgf1_32_test.json tc=67 security-deviation rsa-pss-any-salt salt length 0, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha256_mgf1_32_test.json tc=68 security-deviation rsa-pss-any-salt salt length 1, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha256_mgf1_32_test.json tc=69 security-deviation rsa-pss-any-salt salt length 20, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha256_mgf1_32_test.json tc=70 security-deviation rsa-pss-any-salt salt length 31, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha256_mgf1_32_test.json tc=71 security-deviation rsa-pss-any-salt salt length 33, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha256_mgf1_32_test.json tc=72 security-deviation rsa-pss-any-salt salt length 222, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=99 security-deviation rsa-pss-any-salt salt length 0, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=100 security-deviation rsa-pss-any-salt salt length 1, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=101 security-deviation rsa-pss-any-salt salt length 20, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=102 security-deviation rsa-pss-any-salt salt length 32, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=103 security-deviation rsa-pss-any-salt salt length 47, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=104 security-deviation rsa-pss-any-salt salt length 49, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=105 security-deviation rsa-pss-any-salt salt length 206, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=67 security-deviation rsa-pss-any-salt salt length 0, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=68 security-deviation rsa-pss-any-salt salt length 1, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=69 security-deviation rsa-pss-any-salt salt length 20, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=70 security-deviation rsa-pss-any-salt salt length 31, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=71 security-deviation rsa-pss-any-salt salt length 33, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=72 security-deviation rsa-pss-any-salt salt length 350, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=67 security-deviation rsa-pss-any-salt salt length 0, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=68 security-deviation rsa-pss-any-salt salt length 1, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=69 security-deviation rsa-pss-any-salt salt length 20, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=70 security-deviation rsa-pss-any-salt salt length 31, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=71 security-deviation rsa-pss-any-salt salt length 33, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=72 security-deviation rsa-pss-any-salt salt length 478, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=99 security-deviation rsa-pss-any-salt salt length 0, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=100 security-deviation rsa-pss-any-salt salt length 1, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=101 security-deviation rsa-pss-any-salt salt length 20, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=102 security-deviation rsa-pss-any-salt salt length 32, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=103 security-deviation rsa-pss-any-salt salt length 47, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=104 security-deviation rsa-pss-any-salt salt length 49, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=105 security-deviation rsa-pss-any-salt salt length 462, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=136 security-deviation rsa-pss-any-salt salt length 0, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=137 security-deviation rsa-pss-any-salt salt length 1, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=138 security-deviation rsa-pss-any-salt salt length 20, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=139 security-deviation rsa-pss-any-salt salt length 32, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=140 security-deviation rsa-pss-any-salt salt length 63, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=141 security-deviation rsa-pss-any-salt salt length 65, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=142 security-deviation rsa-pss-any-salt salt length 446, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
 
 # ---- ECDSA: a known deviation, BER lengths instead of DER ----------------------------------
 # Wycheproof calls these "invalid"; mbedTLS accepts them. Each is a correct signature (r and s
@@ -296,6 +302,13 @@ limbo.json/given tc=bettertls::pathbuilding::tc77 accept fail-open:intermediate-
 # flags). Algorithm confusion, not a forgery: the root's key must have signed those bytes.
 x509 tc=bundle-rsa::alg-says-ecdsa::bundle security-deviation bundle-sig-alg-unchecked a leaf naming ecdsa-with-SHA256 with a PKCS#1 v1.5 signature by the RSA bundle root is accepted (esp_crt_bundle.c:196-199)
 x509 tc=bundle-rsa::alg-says-pss::bundle security-deviation bundle-sig-alg-unchecked a leaf naming RSASSA-PSS with a PKCS#1 v1.5 signature by the RSA bundle root is accepted (esp_crt_bundle.c:196-199)
+x509 tc=pss-salt::salt-not-as-declared::ca security-deviation rsa-pss-any-salt a certificate whose RSASSA-PSS salt differs from its declared saltLength is accepted (x509.c:748-753, x509_crt.c:2145)
+x509 tc=pss-salt::salt-not-as-declared::bundle security-deviation rsa-pss-any-salt the same under a bundle root: mbedTLS checks it against the CA made from the entry (x509_crt.c:2145)
+# The bundle is looked up by the raw bytes of a certificate's issuer name (esp_crt_bundle.c:295),
+# where RFC 5280 7.1 compares names case-insensitively and across string types, as mbedTLS does
+# in CA mode: a valid chain naming its root in another case or string type is refused.
+x509 tc=bundle-idf6::T2-issuer-case-differs::bundle reject fail-closed: the issuer is looked up by its raw bytes (esp_crt_bundle.c:295), so ROOT A does not find Root A
+x509 tc=bundle-idf6::T2b-issuer-printable::bundle reject fail-closed: the issuer is looked up by its raw bytes (esp_crt_bundle.c:295), so a PrintableString Root A does not find the UTF8String one
 x509 tc=bundle::expired-root::bundle security-deviation bundle-root-validity-unchecked the bundle keeps no validity, and the verify callback clears EXPIRED on the CA it makes from a bundle entry (esp_crt_bundle.c:331-340): an expired root still verifies what it signed
 # ---- Known vulnerabilities of the pinned mbedTLS -------------------------------------------
 # known-vulnerable <CVE> <first fixed version>: the vector must still show the vulnerable outcome.

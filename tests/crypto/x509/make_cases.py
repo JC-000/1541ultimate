@@ -35,6 +35,16 @@ bundle-rsa.json: RSA signatures ESP-IDF 6's bundle callback checks by key type a
 that signs with RSASSA-PSS (valid, must pass), and PKCS#1 v1.5 signatures by the RSA root under
 a certificate that names another algorithm, ECDSA or RSASSA-PSS (must fail).
 
+bundle-idf6.json: inputs from the conf4 adversarial review (confadv5) that tell ESP-IDF 6's bundle
+lookup and flag handling apart: a certificate signed by a bundle key that names another issuer
+(T1), the bundled name in another case or string type (T2, T2b; a valid chain the bundle's
+byte comparison refuses), an expired leaf whose subject is a bundled root's name (T3), SHA-224
+signatures under a bundle root, forged and honest (T4), and algorithm-confused leaves (see
+bundle-rsa.json) that are also expired, not yet valid or for another host (U1-U3).
+
+pss-salt.json: an X.509 certificate signed with RSASSA-PSS whose parameters say one salt length
+and whose signature uses another (RFC 4055 3.1).
+
 The keys are made fresh and thrown away; only the certificates are written. Needs the
 "cryptography" package; conformance.py only reads the JSON. With file names as arguments, only
 those files are written (the others would change with every run, their keys being new).
@@ -829,6 +839,182 @@ def main():
                 )
             )
     write("bundle-rsa.json", cases)
+
+    # confadv5's distinguishing inputs for the IDF 6 bundle (conf4-adversarial1 H1, H2, M7)
+    a_key = p256()
+    a_root = cert("Root A", a_key, "Root A", a_key, CA)
+    printable = x509.Name(
+        [
+            x509.NameAttribute(
+                NameOID.COMMON_NAME, "Root A", _type=x509.name._ASN1Type.PrintableString
+            )
+        ]
+    )
+
+    def named_issuer(issuer_name, signer):
+        b = (
+            x509.CertificateBuilder()
+            .subject_name(name("victim.example"))
+            .issuer_name(issuer_name)
+            .public_key(p256().public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(NOT_BEFORE)
+            .not_valid_after(NOT_AFTER)
+        )
+        for ext, critical in server("victim.example"):
+            b = b.add_extension(ext, critical)
+        return b.sign(signer, hashes.SHA256())
+
+    def sha224_leaf(signer):
+        c = cert("victim.example", p256(), "Root A", signer, server("victim.example"))
+        tbs = children(c.public_bytes(serialization.Encoding.DER))[0]
+        fields = children(tbs)
+        alg = der(0x30, der(0x06, bytes.fromhex("2a8648ce3d040301")))  # ecdsa-with-SHA224
+        fields[2] = alg
+        tbs = der(0x30, b"".join(fields))
+        sig = signer.sign(tbs, ec.ECDSA(hashes.SHA224()))
+        return x509.load_der_x509_certificate(der(0x30, tbs + alg + der(0x03, b"\0" + sig)))
+
+    t3_ica_key = p256()
+    t3_ica = cert("Victim ICA", t3_ica_key, "Root A", a_key, CA)
+    expired = datetime.datetime(2026, 12, 1, tzinfo=datetime.UTC)
+    t3_leaf = cert(
+        "Root A", p256(), "Victim ICA", t3_ica_key, server("victim.example"), not_after=expired
+    )
+    t3_ok = cert("Root A", p256(), "Victim ICA", t3_ica_key, server("victim.example"))
+    u_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    u_root = cert("Root R", u_key, "Root R", u_key, CA)
+
+    def confused(host, **dates):
+        c = cert("victim.example", p256(), "Root R", p256(), server(host), **dates)
+        return resign_rsa(c, u_key, ECDSA_SHA256, False)
+
+    chains = {
+        "T1-other-issuer-same-key": (
+            "leaf naming issuer Root B, signed by Root A's key",
+            a_root,
+            [],
+            named_issuer(name("Root B"), a_key),
+            "FAILURE",
+        ),
+        "T2-issuer-case-differs": (
+            "leaf naming issuer ROOT A, signed by Root A",
+            a_root,
+            [],
+            named_issuer(name("ROOT A"), a_key),
+            "SUCCESS",
+        ),
+        "T2b-issuer-printable": (
+            "leaf naming issuer Root A as PrintableString, signed by Root A",
+            a_root,
+            [],
+            named_issuer(printable, a_key),
+            "SUCCESS",
+        ),
+        "T3-expired-leaf-named-like-root": (
+            "Root A -> ICA -> expired leaf whose subject is Root A",
+            a_root,
+            [t3_ica],
+            t3_leaf,
+            "FAILURE",
+        ),
+        "control-leaf-named-like-root": (
+            "Root A -> ICA -> leaf whose subject is Root A",
+            a_root,
+            [t3_ica],
+            t3_ok,
+            "SUCCESS",
+        ),
+        "T4-sha224-forged": (
+            "leaf naming Root A, signed with SHA-224 by another key",
+            a_root,
+            [],
+            sha224_leaf(p256()),
+            "FAILURE",
+        ),
+        "T4-sha224-honest": (
+            "leaf signed with SHA-224 by Root A (not in the profile)",
+            a_root,
+            [],
+            sha224_leaf(a_key),
+            "FAILURE",
+        ),
+        "U1-confused-expired": (
+            "algorithm-confused leaf (bundle-rsa.json), expired",
+            u_root,
+            [],
+            confused("victim.example", not_after=expired),
+            "FAILURE",
+        ),
+        "U2-confused-future": (
+            "algorithm-confused leaf, not yet valid",
+            u_root,
+            [],
+            confused(
+                "victim.example", not_before=datetime.datetime(2027, 6, 1, tzinfo=datetime.UTC)
+            ),
+            "FAILURE",
+        ),
+        "U3-confused-wronghost": (
+            "algorithm-confused leaf for another host",
+            u_root,
+            [],
+            confused("other.example"),
+            "FAILURE",
+        ),
+    }
+    cases = []
+    for tag, (description, root_cert, inter, leaf_cert, result) in chains.items():
+        for mode in ("ca", "bundle"):
+            cases.append(
+                case(
+                    "bundle-idf6::%s::%s" % (tag, mode),
+                    description,
+                    root_cert,
+                    inter,
+                    leaf_cert,
+                    "victim.example",
+                    result,
+                    mode=mode,
+                )
+            )
+    write("bundle-idf6.json", cases)
+
+    # RSASSA-PSS parameters that say salt 32 over a signature with salt 20 (conf4-adversarial1 M3)
+    p_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    p_root = cert("pss root", p_key, "pss root", p_key, CA)
+
+    def pss_leaf(salt):
+        c = cert("victim.example", p256(), "pss root", p256(), server("victim.example"))
+        tbs = children(c.public_bytes(serialization.Encoding.DER))[0]
+        fields = children(tbs)
+        fields[2] = RSA_PSS_SHA256
+        tbs = der(0x30, b"".join(fields))
+        sig = p_key.sign(tbs, padding.PSS(padding.MGF1(hashes.SHA256()), salt), hashes.SHA256())
+        return x509.load_der_x509_certificate(
+            der(0x30, tbs + RSA_PSS_SHA256 + der(0x03, b"\0" + sig))
+        )
+
+    chains = {
+        "salt-as-declared": ("RSASSA-PSS, saltLength 32, salt 32", pss_leaf(32), "SUCCESS"),
+        "salt-not-as-declared": ("RSASSA-PSS, saltLength 32, salt 20", pss_leaf(20), "FAILURE"),
+    }
+    cases = []
+    for tag, (description, leaf_cert, result) in chains.items():
+        for mode in ("ca", "bundle"):
+            cases.append(
+                case(
+                    "pss-salt::%s::%s" % (tag, mode),
+                    description,
+                    p_root,
+                    [],
+                    leaf_cert,
+                    "victim.example",
+                    result,
+                    mode=mode,
+                )
+            )
+    write("pss-salt.json", cases)
 
 
 if __name__ == "__main__":

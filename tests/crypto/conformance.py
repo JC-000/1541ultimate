@@ -1034,6 +1034,9 @@ def mbedtls_tls13(out, exp, conditions):
         prefixes += ("SSL TLS 1.3 Record Encryption",)
     cases = read(os.path.join(tests, "test_suite_ssl.datax")).split("\n\n")
     selected = [e for e in cases if e.startswith(prefixes)]
+    if not any(e.startswith("SSL TLS 1.3 Key schedule") for e in selected):
+        # renamed cases would leave the suite judging nothing, passed by its not-applicable ones
+        suite.fail("test_suite_ssl.datax has no 'SSL TLS 1.3 Key schedule' case")
     na = sum(1 for e in cases if e.startswith("SSL TLS 1.3 Record Encryption")) - sum(
         1 for e in selected if e.startswith("SSL TLS 1.3 Record Encryption")
     )
@@ -1148,8 +1151,12 @@ def regressions(h, exp, conditions):
 # lines are left out. It must equal engine_config.txt, or the coverage suite fails: the copies
 # have to be looked at, and the file updated in the same commit. A text check catches edits, not
 # a determined evasion; a test of the engine's behaviour would be stronger (M3).
-ENGINE = os.path.join(HERE, "..", "..", "software", "wifi", "raw_u64", "main", "tls_engine.c")
-ENGINE_CONFIG = os.path.join(HERE, "engine_config.txt")
+# CRYPTO_ENGINE / CRYPTO_ENGINE_CONFIG name another engine and its recorded surface: run_idf6.sh
+# passes ESP-IDF 6's engine (engine4's, until the branches meet) and engine_config.4.txt
+ENGINE = os.environ.get("CRYPTO_ENGINE") or os.path.join(
+    HERE, "..", "..", "software", "wifi", "raw_u64", "main", "tls_engine.c"
+)
+ENGINE_CONFIG = os.environ.get("CRYPTO_ENGINE_CONFIG") or os.path.join(HERE, "engine_config.txt")
 ENGINE_FUNCTIONS = ("tls_setup", "tls_open", "tls_set_clock", "tls_build_time")
 SURFACE = re.compile(
     r"\b(mbedtls_ssl_conf_\w+|mbedtls_ssl_config_\w+|mbedtls_ssl_set_\w+|mbedtls_ssl_setup|esp_crt_\w+)\s*\("
@@ -1268,6 +1275,8 @@ OVERRIDES = (
     "CRYPTO_EXPECTATIONS",
     "CRYPTO_STRICT",
     "CRYPTO_OFFLINE",
+    "CRYPTO_ENGINE",
+    "CRYPTO_ENGINE_CONFIG",
 )
 
 

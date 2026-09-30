@@ -179,17 +179,35 @@ derive_esp32_config() {
 
     if [ "$MAJOR" = 3 ]; then
         # Every MBEDTLS_ macro esp_config.h defines for this sdkconfig, include guards aside.
-        cc -E -dM -I "$CFG" -I "$SRC/include" "$CFG/mbedtls/esp_config.h" |
-            awk '$1 == "#define" && $2 ~ /^MBEDTLS_/ && $2 !~ /_H$/' | sort > "$CFG/esp_macros.txt"
+        cc -E -dM -I "$CFG" -I "$SRC/include" "$CFG/mbedtls/esp_config.h" > "$CFG/all_macros.txt"
+        awk '$1 == "#define" && $2 ~ /^MBEDTLS_/ && $2 !~ /_H$/' "$CFG/all_macros.txt" | sort > "$CFG/esp_macros.txt"
     else
         # crypto_config.h, then esp_config.h, as tf-psa-crypto/build_info.h reads them; ESP-IDF
-        # defines MBEDTLS_MAJOR_VERSION=4 for every mbedTLS target, which esp_config.h tests
+        # defines MBEDTLS_MAJOR_VERSION=4 for every mbedTLS target, which esp_config.h tests. The
+        # ESP_<x>_DRIVER_ENABLED macros turn on the ESP32's PSA drivers (the AES/GCM, SHA, HMAC,
+        # MD5 and CMAC code in port/psa_driver/), which Espressif's psa_crypto_driver_wrappers.h
+        # dispatches to: they are part of the configuration.
         printf '#include "psa/crypto_config.h"\n#include "mbedtls/esp_config.h"\n' > "$CFG/raw_config.c"
         cc -E -dM -DMBEDTLS_MAJOR_VERSION="$MAJOR" -I "$CFG" -I "$SRC/tf-psa-crypto/include" -I "$SRC/include" \
-            "$CFG/raw_config.c" |
-            awk '$1 == "#define" && $2 ~ /^(MBEDTLS_|PSA_WANT_|TF_PSA_CRYPTO_)/ && $2 != "MBEDTLS_MAJOR_VERSION" &&
-                 $2 !~ /_H$/' | sort > "$CFG/esp_macros.txt"
+            "$CFG/raw_config.c" > "$CFG/all_macros.txt"
+        awk '$1 == "#define" && ($2 ~ /^(MBEDTLS_|PSA_WANT_|TF_PSA_CRYPTO_)/ || $2 ~ /^ESP_[A-Z0-9_]*_DRIVER_ENABLED$/) &&
+             $2 != "MBEDTLS_MAJOR_VERSION" && $2 !~ /_H$/' "$CFG/all_macros.txt" | sort > "$CFG/esp_macros.txt"
     fi
+    # Every other macro the preprocessor ends with, the compiler's own aside, is left out: say which
+    # and why, so that nothing is dropped unseen
+    echo | cc -E -dM - | awk '{ sub(/\(.*/, "", $2); print $2 }' | sort -u > "$CFG/predefined.txt"
+    awk '$1 == "#define" { sub(/\(.*/, "", $2); print $2 }' "$CFG/all_macros.txt" | sort -u |
+        comm -23 - "$CFG/predefined.txt" | comm -23 - <(awk '{ print $2 }' "$CFG/esp_macros.txt" | sort -u) |
+        while read -r name; do
+            case $name in
+                CONFIG_*) why="sdkconfig option (the input)";;
+                SOC_*|_SOC_*) why="ESP32 SoC capability (soc_caps.h, the input)";;
+                *_H|*_H_|ESP_CONFIG_H) why="include guard";;
+                MBEDTLS_MAJOR_VERSION) why="ESP-IDF's build define (-DMBEDTLS_MAJOR_VERSION), not an option";;
+                *) why="not an mbedTLS option";;
+            esac
+            echo "DROPPED $name: $why"
+        done
     # The whole list must match the committed one, so an option that appears or disappears (a
     # new Kconfig default, a renamed macro) is seen and explained in the commit that updates it
     if ! diff -u "$MACROS" "$CFG/esp_macros.txt" > "$CFG/esp_macros.diff"; then
@@ -212,6 +230,8 @@ derive_esp32_config() {
                 echo "ESP32 platform implementation -> mbedTLS software implementation";;
             MBEDTLS_PSA_ACCEL_*)
                 echo "ESP32 PSA driver -> mbedTLS built-in implementation";;
+            ESP_*_DRIVER_ENABLED)
+                echo "ESP32 PSA driver (port/psa_driver/) -> not built on the host: mbedTLS built-in implementation";;
             MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG|MBEDTLS_PSA_DRIVER_GET_ENTROPY)
                 echo "ESP32 hardware RNG (PSA entropy driver) -> host OS entropy source (MBEDTLS_PSA_BUILTIN_GET_ENTROPY)";;
             MBEDTLS_PLATFORM_STD_CALLOC|MBEDTLS_PLATFORM_STD_FREE)
@@ -243,6 +263,9 @@ derive_esp32_config() {
             # the device's own implementations, which no host run tests
             case $name in
                 *_ALT|*_ALT_FALLBACK|*_ALT_SOFT_FALLBACK|MBEDTLS_PSA_ACCEL_*) echo "${name#MBEDTLS_}" >> "$CFG/replaced.txt";;
+                # the AES driver also does GCM: the TLS 1.3 record tag check runs in it on the device
+                ESP_AES_DRIVER_ENABLED) echo "ESP_AES_DRIVER_ENABLED(AES,AES-GCM)" >> "$CFG/replaced.txt";;
+                ESP_*_DRIVER_ENABLED) echo "$name" >> "$CFG/replaced.txt";;
                 MBEDTLS_PSA_DRIVER_GET_ENTROPY) entropy=1; echo "${name#MBEDTLS_}" >> "$CFG/replaced.txt";;
             esac
         else

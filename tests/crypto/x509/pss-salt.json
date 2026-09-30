@@ -1,0 +1,81 @@
+{
+ "version": 1,
+ "testcases": [
+  {
+   "id": "pss-salt::salt-as-declared::ca",
+   "description": "RSASSA-PSS, saltLength 32, salt 32",
+   "validation_kind": "SERVER",
+   "trusted_certs": [
+    "-----BEGIN CERTIFICATE-----\nMIIC1zCCAb+gAwIBAgIUVJr0TQvqJsS3GUtHqKoIAAoNapQwDQYJKoZIhvcNAQEL\nBQAwEzERMA8GA1UEAwwIcHNzIHJvb3QwHhcNMjYwMTAxMDAwMDAwWhcNMzYwMTAx\nMDAwMDAwWjATMREwDwYDVQQDDAhwc3Mgcm9vdDCCASIwDQYJKoZIhvcNAQEBBQAD\nggEPADCCAQoCggEBAN1pEljJpypcSWASelJ0EFaH2dOTLH7LLZWnLbb1wr7i9pKx\n71g+gmcntAcuB3AWZsm50hpJMTYG6Ej7MWGIz7U8f54sCcZECnPWhqY8SGK32700\nrWc2lEOiGRirbUsfrmVxoyUu0aJZa5BwTQdXHIDkoH3ZeQvJ+FgkrigzNOc/DXKL\nB10r/kmFCKHfT4LpExIsnzzIJg9R1Lz7Tpl4O4HcUd0GNqwUkmHmPnhMJ7hghye3\nKgIs4mQ3sLI7P9xpgJN/Ibo6jFWHAdOFQ3JJLe0aaq49wO4ImXcadhdJ1klIqxUr\niyaih4lkp+pbDE9Tu6D0bB6TEegbNWiRA/I3VicCAwEAAaMjMCEwDwYDVR0TAQH/\nBAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwDQYJKoZIhvcNAQELBQADggEBAJdIg/Qm\nxyGUx6Gi5olHbzkySpA8EbasnxVC2fWg/R4QrmZ6yLPx2nATIycui85uK76DSFGn\ngUHkP81K11UefQy/aibPABztPWV3RegMFQYUxjocRmDuSogInsth7Et7Cjn2x3/o\n7j+4OiVRFQWgP8652tLlFrVVkyyYfYayVolp/LvbV3I3L3u8yiPSBotPUA3wtt0d\nEItDxuuFyPggJYBVr43kFSfgg4nO25PXt7D99R9+dki7aLpYi2wyiNYDQP2uN/Oe\np0SnAW/XVtxeI/4YxnKqGP7ozTjzBxvuRvBmnV7bzHP/gKCuS6tXFWH/jlkg/j11\nAp8eOUe34O73vKM=\n-----END CERTIFICATE-----\n"
+   ],
+   "untrusted_intermediates": [],
+   "peer_certificate": "-----BEGIN CERTIFICATE-----\nMIICpzCCAVugAwIBAgIUWEpmb0cvDfTmYjwgv+YBDuMDIeQwQQYJKoZIhvcNAQEK\nMDSgDzANBglghkgBZQMEAgEFAKEcMBoGCSqGSIb3DQEBCDANBglghkgBZQMEAgEF\nAKIDAgEgMBMxETAPBgNVBAMMCHBzcyByb290MB4XDTI2MDEwMTAwMDAwMFoXDTM2\nMDEwMTAwMDAwMFowGTEXMBUGA1UEAwwOdmljdGltLmV4YW1wbGUwWTATBgcqhkjO\nPQIBBggqhkjOPQMBBwNCAARnFICFXPZ9xgh2LhuEINcqpCt/9jz32qzo2X0sIo1l\nP0ljABB3iHP06e66nbdRK3tNIBKkvnr5VOm7euY7MGkco1AwTjAMBgNVHRMBAf8E\nAjAAMA4GA1UdDwEB/wQEAwIHgDAZBgNVHREEEjAQgg52aWN0aW0uZXhhbXBsZTAT\nBgNVHSUEDDAKBggrBgEFBQcDATBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQC\nAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASADggEBABCPWd07\ndePsAOYnnUinCtsCz4EL4qd4FEdxNFGqquBqxgU8B1Bm9ElRUoZ2TtfHiMosz/Vd\n7wLxFwbYVCquNoL+LC5uxGsvPS0d8QDU5Mg9qTzZRUJF+TscJ0uqm/Avu/vWXzNU\nQGx5jBJn5+Rj8smkzzP6PlgT2T8GodTN7ux+OkyPJh1+xyWYNrXZ+jItKKGf0XrR\nw7LmknL8L22AhtP0pIwsgo5G5qKLao5NYZR5IfvzmkAB5utny5PvUbocvwXbYuEn\n40GYmwBSz6tBgrCrRvzYb1CIy2+z0+R5X1xHiMiBnv0ppBixRbc/twxEWCru8Nwz\nIlUEOFUzNf5jYOk=\n-----END CERTIFICATE-----\n",
+   "validation_time": "2027-01-01T00:00:00+00:00",
+   "expected_peer_name": {
+    "kind": "DNS",
+    "value": "victim.example"
+   },
+   "expected_result": "SUCCESS",
+   "features": [],
+   "crls": [],
+   "mode": "ca"
+  },
+  {
+   "id": "pss-salt::salt-as-declared::bundle",
+   "description": "RSASSA-PSS, saltLength 32, salt 32",
+   "validation_kind": "SERVER",
+   "trusted_certs": [
+    "-----BEGIN CERTIFICATE-----\nMIIC1zCCAb+gAwIBAgIUVJr0TQvqJsS3GUtHqKoIAAoNapQwDQYJKoZIhvcNAQEL\nBQAwEzERMA8GA1UEAwwIcHNzIHJvb3QwHhcNMjYwMTAxMDAwMDAwWhcNMzYwMTAx\nMDAwMDAwWjATMREwDwYDVQQDDAhwc3Mgcm9vdDCCASIwDQYJKoZIhvcNAQEBBQAD\nggEPADCCAQoCggEBAN1pEljJpypcSWASelJ0EFaH2dOTLH7LLZWnLbb1wr7i9pKx\n71g+gmcntAcuB3AWZsm50hpJMTYG6Ej7MWGIz7U8f54sCcZECnPWhqY8SGK32700\nrWc2lEOiGRirbUsfrmVxoyUu0aJZa5BwTQdXHIDkoH3ZeQvJ+FgkrigzNOc/DXKL\nB10r/kmFCKHfT4LpExIsnzzIJg9R1Lz7Tpl4O4HcUd0GNqwUkmHmPnhMJ7hghye3\nKgIs4mQ3sLI7P9xpgJN/Ibo6jFWHAdOFQ3JJLe0aaq49wO4ImXcadhdJ1klIqxUr\niyaih4lkp+pbDE9Tu6D0bB6TEegbNWiRA/I3VicCAwEAAaMjMCEwDwYDVR0TAQH/\nBAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwDQYJKoZIhvcNAQELBQADggEBAJdIg/Qm\nxyGUx6Gi5olHbzkySpA8EbasnxVC2fWg/R4QrmZ6yLPx2nATIycui85uK76DSFGn\ngUHkP81K11UefQy/aibPABztPWV3RegMFQYUxjocRmDuSogInsth7Et7Cjn2x3/o\n7j+4OiVRFQWgP8652tLlFrVVkyyYfYayVolp/LvbV3I3L3u8yiPSBotPUA3wtt0d\nEItDxuuFyPggJYBVr43kFSfgg4nO25PXt7D99R9+dki7aLpYi2wyiNYDQP2uN/Oe\np0SnAW/XVtxeI/4YxnKqGP7ozTjzBxvuRvBmnV7bzHP/gKCuS6tXFWH/jlkg/j11\nAp8eOUe34O73vKM=\n-----END CERTIFICATE-----\n"
+   ],
+   "untrusted_intermediates": [],
+   "peer_certificate": "-----BEGIN CERTIFICATE-----\nMIICpzCCAVugAwIBAgIUWEpmb0cvDfTmYjwgv+YBDuMDIeQwQQYJKoZIhvcNAQEK\nMDSgDzANBglghkgBZQMEAgEFAKEcMBoGCSqGSIb3DQEBCDANBglghkgBZQMEAgEF\nAKIDAgEgMBMxETAPBgNVBAMMCHBzcyByb290MB4XDTI2MDEwMTAwMDAwMFoXDTM2\nMDEwMTAwMDAwMFowGTEXMBUGA1UEAwwOdmljdGltLmV4YW1wbGUwWTATBgcqhkjO\nPQIBBggqhkjOPQMBBwNCAARnFICFXPZ9xgh2LhuEINcqpCt/9jz32qzo2X0sIo1l\nP0ljABB3iHP06e66nbdRK3tNIBKkvnr5VOm7euY7MGkco1AwTjAMBgNVHRMBAf8E\nAjAAMA4GA1UdDwEB/wQEAwIHgDAZBgNVHREEEjAQgg52aWN0aW0uZXhhbXBsZTAT\nBgNVHSUEDDAKBggrBgEFBQcDATBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQC\nAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASADggEBABCPWd07\ndePsAOYnnUinCtsCz4EL4qd4FEdxNFGqquBqxgU8B1Bm9ElRUoZ2TtfHiMosz/Vd\n7wLxFwbYVCquNoL+LC5uxGsvPS0d8QDU5Mg9qTzZRUJF+TscJ0uqm/Avu/vWXzNU\nQGx5jBJn5+Rj8smkzzP6PlgT2T8GodTN7ux+OkyPJh1+xyWYNrXZ+jItKKGf0XrR\nw7LmknL8L22AhtP0pIwsgo5G5qKLao5NYZR5IfvzmkAB5utny5PvUbocvwXbYuEn\n40GYmwBSz6tBgrCrRvzYb1CIy2+z0+R5X1xHiMiBnv0ppBixRbc/twxEWCru8Nwz\nIlUEOFUzNf5jYOk=\n-----END CERTIFICATE-----\n",
+   "validation_time": "2027-01-01T00:00:00+00:00",
+   "expected_peer_name": {
+    "kind": "DNS",
+    "value": "victim.example"
+   },
+   "expected_result": "SUCCESS",
+   "features": [],
+   "crls": [],
+   "mode": "bundle"
+  },
+  {
+   "id": "pss-salt::salt-not-as-declared::ca",
+   "description": "RSASSA-PSS, saltLength 32, salt 20",
+   "validation_kind": "SERVER",
+   "trusted_certs": [
+    "-----BEGIN CERTIFICATE-----\nMIIC1zCCAb+gAwIBAgIUVJr0TQvqJsS3GUtHqKoIAAoNapQwDQYJKoZIhvcNAQEL\nBQAwEzERMA8GA1UEAwwIcHNzIHJvb3QwHhcNMjYwMTAxMDAwMDAwWhcNMzYwMTAx\nMDAwMDAwWjATMREwDwYDVQQDDAhwc3Mgcm9vdDCCASIwDQYJKoZIhvcNAQEBBQAD\nggEPADCCAQoCggEBAN1pEljJpypcSWASelJ0EFaH2dOTLH7LLZWnLbb1wr7i9pKx\n71g+gmcntAcuB3AWZsm50hpJMTYG6Ej7MWGIz7U8f54sCcZECnPWhqY8SGK32700\nrWc2lEOiGRirbUsfrmVxoyUu0aJZa5BwTQdXHIDkoH3ZeQvJ+FgkrigzNOc/DXKL\nB10r/kmFCKHfT4LpExIsnzzIJg9R1Lz7Tpl4O4HcUd0GNqwUkmHmPnhMJ7hghye3\nKgIs4mQ3sLI7P9xpgJN/Ibo6jFWHAdOFQ3JJLe0aaq49wO4ImXcadhdJ1klIqxUr\niyaih4lkp+pbDE9Tu6D0bB6TEegbNWiRA/I3VicCAwEAAaMjMCEwDwYDVR0TAQH/\nBAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwDQYJKoZIhvcNAQELBQADggEBAJdIg/Qm\nxyGUx6Gi5olHbzkySpA8EbasnxVC2fWg/R4QrmZ6yLPx2nATIycui85uK76DSFGn\ngUHkP81K11UefQy/aibPABztPWV3RegMFQYUxjocRmDuSogInsth7Et7Cjn2x3/o\n7j+4OiVRFQWgP8652tLlFrVVkyyYfYayVolp/LvbV3I3L3u8yiPSBotPUA3wtt0d\nEItDxuuFyPggJYBVr43kFSfgg4nO25PXt7D99R9+dki7aLpYi2wyiNYDQP2uN/Oe\np0SnAW/XVtxeI/4YxnKqGP7ozTjzBxvuRvBmnV7bzHP/gKCuS6tXFWH/jlkg/j11\nAp8eOUe34O73vKM=\n-----END CERTIFICATE-----\n"
+   ],
+   "untrusted_intermediates": [],
+   "peer_certificate": "-----BEGIN CERTIFICATE-----\nMIICpzCCAVugAwIBAgIUU9dkayvRsTyZrALPh+NpSHH2cBMwQQYJKoZIhvcNAQEK\nMDSgDzANBglghkgBZQMEAgEFAKEcMBoGCSqGSIb3DQEBCDANBglghkgBZQMEAgEF\nAKIDAgEgMBMxETAPBgNVBAMMCHBzcyByb290MB4XDTI2MDEwMTAwMDAwMFoXDTM2\nMDEwMTAwMDAwMFowGTEXMBUGA1UEAwwOdmljdGltLmV4YW1wbGUwWTATBgcqhkjO\nPQIBBggqhkjOPQMBBwNCAARpN6gaJjDBYIWYEfzTnQzx7kW4QWM9aVpid3z8bn88\n3i2gvKFMT8pEOW2KMOT9cn2AIYvbCE0z74/g8sOi41jEo1AwTjAMBgNVHRMBAf8E\nAjAAMA4GA1UdDwEB/wQEAwIHgDAZBgNVHREEEjAQgg52aWN0aW0uZXhhbXBsZTAT\nBgNVHSUEDDAKBggrBgEFBQcDATBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQC\nAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASADggEBAC6Kgehw\nyVF5mgZw2trivKIcp1vWjwwpm8auCJxHwfF/HSosv1phRGjg3wWprYeHuxheZue7\np97//pm9Iy/w25npF8RwxyGR8JzHDxyPLOuMVhxHTwVYnZU5Lq7HSCPZq8EUa+J3\ntlX9yE8myTcc+yRNTkoFSBxzqakpALTYZEp5rCbkwS0hqGwS6wy0rFwy8zkfOljj\nmQuZVcBmTOnmwAjoYX2CbXFXwqFfH0wUl25gcteDyxeayHnOtQ3K9ZeCIwrKWKDL\n006mUfk1pHGDCZT8MtBuqVSn8vVzlTD7sg2o77l3u91QZtau7qNI6xF0pJ0wvN7s\nBg5E1HNjTgAUp7g=\n-----END CERTIFICATE-----\n",
+   "validation_time": "2027-01-01T00:00:00+00:00",
+   "expected_peer_name": {
+    "kind": "DNS",
+    "value": "victim.example"
+   },
+   "expected_result": "FAILURE",
+   "features": [],
+   "crls": [],
+   "mode": "ca"
+  },
+  {
+   "id": "pss-salt::salt-not-as-declared::bundle",
+   "description": "RSASSA-PSS, saltLength 32, salt 20",
+   "validation_kind": "SERVER",
+   "trusted_certs": [
+    "-----BEGIN CERTIFICATE-----\nMIIC1zCCAb+gAwIBAgIUVJr0TQvqJsS3GUtHqKoIAAoNapQwDQYJKoZIhvcNAQEL\nBQAwEzERMA8GA1UEAwwIcHNzIHJvb3QwHhcNMjYwMTAxMDAwMDAwWhcNMzYwMTAx\nMDAwMDAwWjATMREwDwYDVQQDDAhwc3Mgcm9vdDCCASIwDQYJKoZIhvcNAQEBBQAD\nggEPADCCAQoCggEBAN1pEljJpypcSWASelJ0EFaH2dOTLH7LLZWnLbb1wr7i9pKx\n71g+gmcntAcuB3AWZsm50hpJMTYG6Ej7MWGIz7U8f54sCcZECnPWhqY8SGK32700\nrWc2lEOiGRirbUsfrmVxoyUu0aJZa5BwTQdXHIDkoH3ZeQvJ+FgkrigzNOc/DXKL\nB10r/kmFCKHfT4LpExIsnzzIJg9R1Lz7Tpl4O4HcUd0GNqwUkmHmPnhMJ7hghye3\nKgIs4mQ3sLI7P9xpgJN/Ibo6jFWHAdOFQ3JJLe0aaq49wO4ImXcadhdJ1klIqxUr\niyaih4lkp+pbDE9Tu6D0bB6TEegbNWiRA/I3VicCAwEAAaMjMCEwDwYDVR0TAQH/\nBAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwDQYJKoZIhvcNAQELBQADggEBAJdIg/Qm\nxyGUx6Gi5olHbzkySpA8EbasnxVC2fWg/R4QrmZ6yLPx2nATIycui85uK76DSFGn\ngUHkP81K11UefQy/aibPABztPWV3RegMFQYUxjocRmDuSogInsth7Et7Cjn2x3/o\n7j+4OiVRFQWgP8652tLlFrVVkyyYfYayVolp/LvbV3I3L3u8yiPSBotPUA3wtt0d\nEItDxuuFyPggJYBVr43kFSfgg4nO25PXt7D99R9+dki7aLpYi2wyiNYDQP2uN/Oe\np0SnAW/XVtxeI/4YxnKqGP7ozTjzBxvuRvBmnV7bzHP/gKCuS6tXFWH/jlkg/j11\nAp8eOUe34O73vKM=\n-----END CERTIFICATE-----\n"
+   ],
+   "untrusted_intermediates": [],
+   "peer_certificate": "-----BEGIN CERTIFICATE-----\nMIICpzCCAVugAwIBAgIUU9dkayvRsTyZrALPh+NpSHH2cBMwQQYJKoZIhvcNAQEK\nMDSgDzANBglghkgBZQMEAgEFAKEcMBoGCSqGSIb3DQEBCDANBglghkgBZQMEAgEF\nAKIDAgEgMBMxETAPBgNVBAMMCHBzcyByb290MB4XDTI2MDEwMTAwMDAwMFoXDTM2\nMDEwMTAwMDAwMFowGTEXMBUGA1UEAwwOdmljdGltLmV4YW1wbGUwWTATBgcqhkjO\nPQIBBggqhkjOPQMBBwNCAARpN6gaJjDBYIWYEfzTnQzx7kW4QWM9aVpid3z8bn88\n3i2gvKFMT8pEOW2KMOT9cn2AIYvbCE0z74/g8sOi41jEo1AwTjAMBgNVHRMBAf8E\nAjAAMA4GA1UdDwEB/wQEAwIHgDAZBgNVHREEEjAQgg52aWN0aW0uZXhhbXBsZTAT\nBgNVHSUEDDAKBggrBgEFBQcDATBBBgkqhkiG9w0BAQowNKAPMA0GCWCGSAFlAwQC\nAQUAoRwwGgYJKoZIhvcNAQEIMA0GCWCGSAFlAwQCAQUAogMCASADggEBAC6Kgehw\nyVF5mgZw2trivKIcp1vWjwwpm8auCJxHwfF/HSosv1phRGjg3wWprYeHuxheZue7\np97//pm9Iy/w25npF8RwxyGR8JzHDxyPLOuMVhxHTwVYnZU5Lq7HSCPZq8EUa+J3\ntlX9yE8myTcc+yRNTkoFSBxzqakpALTYZEp5rCbkwS0hqGwS6wy0rFwy8zkfOljj\nmQuZVcBmTOnmwAjoYX2CbXFXwqFfH0wUl25gcteDyxeayHnOtQ3K9ZeCIwrKWKDL\n006mUfk1pHGDCZT8MtBuqVSn8vVzlTD7sg2o77l3u91QZtau7qNI6xF0pJ0wvN7s\nBg5E1HNjTgAUp7g=\n-----END CERTIFICATE-----\n",
+   "validation_time": "2027-01-01T00:00:00+00:00",
+   "expected_peer_name": {
+    "kind": "DNS",
+    "value": "victim.example"
+   },
+   "expected_result": "FAILURE",
+   "features": [],
+   "crls": [],
+   "mode": "bundle"
+  }
+ ]
+}
