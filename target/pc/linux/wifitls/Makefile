@@ -1,7 +1,8 @@
 #
 # Host build of the checks on the TLS calls to the WiFi module, of the channel
-# they share with GET_RANDOM (against M1's code), and of the exit paths of the
-# TLS spike. FreeRTOS, the UART and lwIP are stand-ins.
+# they share with GET_RANDOM (against M1's code), and of the TLS commands of
+# the network target (M3, to come). FreeRTOS, the UART and lwIP are stand-ins. The M2 spike's test is no longer built:
+# the spike speaks M2's wire, which M3 replaced.
 #
 #   make          build
 #   make test     build and run
@@ -30,7 +31,7 @@ SPIKE_OBJS = $(addprefix $(OUTPUT)/spike/, $(SPIKE_SRCS:%.cc=%.o))
 
 .PHONY: all test golden clean
 
-all: $(RESULT)/wifitls $(RESULT)/tlsspike
+all: $(RESULT)/wifitls
 
 $(OUTPUT)/tls/%.o: %.cc
 	@mkdir -p $(OUTPUT)/tls
@@ -81,8 +82,6 @@ $(RESULT)/tlsspike: $(SPIKE_OBJS)
 # `make golden` rewrites.
 test: all
 	@$(RESULT)/wifitls
-	@mkdir -p $(OUTPUT)/golden
-	@$(RESULT)/tlsspike $(OUTPUT)/golden $(GOLDEN)
 
 golden: all
 	@mkdir -p $(GOLDEN)

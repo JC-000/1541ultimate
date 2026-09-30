@@ -37,7 +37,16 @@ typedef struct {
     // suspended, so it may neither block nor print.
     int (*take)(const uint8_t *reply, int size, uint16_t sequence, void *context);
     void *context;
+    // Optional. With it the wait is cut into slices of at most
+    // DEDICATED_SLICE_MS, and cancel is asked after each one that brought no
+    // answer; true ends the call with DEDICATED_BUSY, and any answer that
+    // arrives after that is dropped by its sequence number. NULL waits the
+    // whole timeout in one go.
+    bool (*cancel)(void *cancel_context);
+    void *cancel_context;
 } dedicated_call_t;
+
+#define DEDICATED_SLICE_MS 100
 
 // Sends one request and waits for its answer. U64 only.
 int wifi_dedicated_call(const dedicated_call_t *call);

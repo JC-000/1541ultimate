@@ -9,6 +9,7 @@
 #include "wifi_cmd.h"
 #include "wifi_dedicated.h"
 #include "wifi_random.h"
+#include "wifi_tls.h"
 
 static_assert(WIFI_RANDOM_BUSY == DEDICATED_BUSY, "codes differ");
 static_assert(WIFI_RANDOM_NO_MODULE == DEDICATED_NO_MODULE, "codes differ");
@@ -73,6 +74,7 @@ int wifi_dedicated_call(const dedicated_call_t *call)
 
     int retval = DEDICATED_BUSY;
     bool sent = false;
+    bool cancelled = false;
     uint16_t sequence = sequence_nr++;
     dedicated_reply_t reply;
     command_buf_t *packet;
@@ -90,14 +92,30 @@ int wifi_dedicated_call(const dedicated_call_t *call)
             // timeout.
             sent = true;
             const TickType_t timeout = pdMS_TO_TICKS(call->timeout_ms);
+            const TickType_t slice = pdMS_TO_TICKS(DEDICATED_SLICE_MS);
             TickType_t start = xTaskGetTickCount();
             retval = DEDICATED_FOREIGN;
             while (retval == DEDICATED_FOREIGN) {
                 TickType_t spent = xTaskGetTickCount() - start;
-                if ((spent >= timeout) ||
-                        (xQueueReceive(dedicated_replies, &reply, timeout - spent) == pdFALSE)) {
+                if (spent >= timeout) {
                     retval = DEDICATED_BUSY;
                     break;
+                }
+                TickType_t wait = timeout - spent;
+                if (call->cancel && (wait > slice)) {
+                    wait = slice;
+                }
+                if (xQueueReceive(dedicated_replies, &reply, wait) == pdFALSE) {
+                    if (call->cancel && call->cancel(call->cancel_context)) {
+                        cancelled = true;
+                        retval = DEDICATED_BUSY;
+                        break;
+                    }
+                    if (!call->cancel) {
+                        retval = DEDICATED_BUSY;
+                        break;
+                    }
+                    continue;
                 }
                 retval = take_dedicated_reply(call, &reply, true, sequence);
             }
@@ -108,7 +126,7 @@ int wifi_dedicated_call(const dedicated_call_t *call)
     // After a timeout that can still be our reply.
     dedicated_waiting = false;
     while (xQueueReceive(dedicated_replies, &reply, 0) == pdTRUE) {
-        if (retval == DEDICATED_BUSY) {
+        if ((retval == DEDICATED_BUSY) && !cancelled) {
             retval = take_dedicated_reply(call, &reply, true, sequence);
             if (retval == DEDICATED_FOREIGN) {
                 retval = DEDICATED_BUSY;
@@ -117,13 +135,20 @@ int wifi_dedicated_call(const dedicated_call_t *call)
             take_dedicated_reply(call, &reply, false, 0);
         }
     }
-    if (retval == DEDICATED_BUSY) {
+    if (cancelled) {
+        printf("%s: cancelled.\n", call->name);
+    } else if (retval == DEDICATED_BUSY) {
         printf("%s: no reply.\n", call->name);
         if (!sent) {
             retval = DEDICATED_UNSENT;
         }
     }
     return retval;
+}
+
+uint32_t wifi_tls_generation(void)
+{
+    return esp32.uart->generation;
 }
 
 typedef struct {
