@@ -7,8 +7,10 @@
  * and send appends to a per-session output buffer. Everything here runs on the TLS task only.
  */
 
-// The engine reads a few mbedTLS internals that have no public getter (the negotiated group, the
-// extended master secret, the handshake state): see tls_note_handshake()
+// The engine reads a few fields of mbedtls_ssl_context (public ssl.h, marked private) that have no getter:
+// the handshake state and version, and the handshake message just processed (tls_note_handshake()). It
+// includes nothing from mbedTLS's library/ (ssl_misc.h): a build that links a fork with another
+// mbedtls_ssl_handshake_params layout (esp-pqc) would otherwise read the wrong bytes (pqcadv6).
 #define MBEDTLS_ALLOW_PRIVATE_ACCESS
 #include <string.h>
 #include <stdlib.h>
@@ -20,12 +22,6 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
-// After the system headers: its mbedtls_common.h defines _POSIX_C_SOURCE, which would hide settimeofday()
-#if __has_include("ssl_misc.h")
-#include "ssl_misc.h" // mbedtls/library, an include directory of ESP-IDF 6's mbedtls component
-#else
-#error "tls_engine.c reads mbedTLS's handshake state from library/ssl_misc.h, which this build does not export"
-#endif
 #include "mbedtls/ssl.h"
 #include "mbedtls/x509_crt.h"
 #include "psa/crypto.h"
@@ -424,58 +420,86 @@ int tls_open(uint8_t slot, uint16_t tag, const tls_open_params_t *p, uint8_t *re
     return ESP_OK;
 }
 
-// The IANA group of a TLS 1.2 ECDHE key exchange, from the PSA key type the ServerKeyExchange chose
-static uint16_t tls_group_from_psa(psa_key_type_t type, size_t bits)
+// The handshake message mbedTLS has just processed (ssl->in_msg, reassembled, header included), when it is
+// of the given type and complete; NULL otherwise
+static const uint8_t *tls_hs_msg(tls_session_t *s, uint8_t type, size_t *len)
 {
-    if ((type == PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_MONTGOMERY)) && (bits == 255)) {
-        return MBEDTLS_SSL_IANA_TLS_GROUP_X25519;
+    const uint8_t *m = s->ssl.in_msg;
+    size_t n = s->ssl.in_hslen;
+    if (!m || (s->ssl.in_msgtype != MBEDTLS_SSL_MSG_HANDSHAKE) || (n < 4) || (m[0] != type) ||
+        ((size_t)((m[1] << 16) | (m[2] << 8) | m[3]) != n - 4)) {
+        return NULL;
     }
-    if (type == PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1)) {
-        switch (bits) {
-        case 256: return MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1;
-        case 384: return MBEDTLS_SSL_IANA_TLS_GROUP_SECP384R1;
-        case 521: return MBEDTLS_SSL_IANA_TLS_GROUP_SECP521R1;
-        }
-    }
-    return 0;
+    *len = n;
+    return m;
 }
 
-// After each handshake step: records the negotiated group (no public getter in 3.6 or 4.1.1), and requires the
-// extended master secret once a TLS 1.2 ServerHello is processed. Both live in the handshake parameters,
-// which the wrap-up frees, so they are read step by step. Private reads (ssl_misc.h): the host test checks each
-// against the server, so a layout move fails a test instead of reporting garbage.
-// Returns MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE when the server did not echo EMS.
-static int tls_note_handshake(tls_session_t *s, int state_before)
+// Finds an extension of a ServerHello (or HelloRetryRequest); returns its data length, or -1 when absent
+static int tls_sh_ext(const uint8_t *m, size_t len, uint16_t type, const uint8_t **data)
 {
-    mbedtls_ssl_handshake_params *hs = s->ssl.handshake;
+    const uint8_t *p = m + 4, *end = m + len;
+    if (end - p < 2 + 32 + 1) {
+        return -1;
+    }
+    p += 2 + 32;                        // legacy_version, random
+    p += 1 + p[0];                      // session id
+    if (end - p < 2 + 1 + 2) {
+        return -1;
+    }
+    p += 2 + 1;                         // cipher suite, compression
+    const uint8_t *eend = p + 2 + ((p[0] << 8) | p[1]);
+    p += 2;
+    if (eend > end) {
+        return -1;
+    }
+    while (eend - p >= 4) {
+        int t = (p[0] << 8) | p[1], n = (p[2] << 8) | p[3];
+        if (eend - p - 4 < n) {
+            return -1;
+        }
+        if (t == type) {
+            *data = p + 4;
+            return n;
+        }
+        p += 4 + n;
+    }
+    return -1;
+}
+
+// After each successful handshake step: records the negotiated group (neither mbedTLS 3.6 nor 4.1.1 has a getter
+// for it), and requires the extended master secret once a TLS 1.2 ServerHello is processed. Both come from the
+// server's own messages as mbedTLS has just parsed them: the key_share of a TLS 1.3 ServerHello (or the group a
+// HelloRetryRequest asks for, which the next ServerHello then confirms), the named curve of a TLS 1.2
+// ServerKeyExchange, and the extended_master_secret extension of a TLS 1.2 ServerHello. The host test checks
+// each against the server.
+// Returns MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE when the server did not echo EMS.
+static int tls_note_handshake(tls_session_t *s, int state_before, int version_before)
+{
     int state = s->ssl.state;
-    if (!hs) {
-        return 0;
-    }
-    if (s->ssl.tls_version == MBEDTLS_SSL_VERSION_TLS1_3) {
-        // offered_group_id follows a HelloRetryRequest (ssl_tls13_client.c:350-351); it is the negotiated group
-        // once the ServerHello is in
-        if ((state != MBEDTLS_SSL_HELLO_REQUEST) && (state != MBEDTLS_SSL_CLIENT_HELLO) &&
-            (state != MBEDTLS_SSL_SERVER_HELLO)) {
-            s->stats.group = hs->offered_group_id;
+    const uint8_t *m, *d;
+    size_t len;
+    if ((state_before == MBEDTLS_SSL_SERVER_HELLO) && (state != MBEDTLS_SSL_SERVER_HELLO) &&
+        (m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len)) != NULL) {
+        if (version_before == MBEDTLS_SSL_VERSION_TLS1_3) {
+            if (tls_sh_ext(m, len, 51, &d) >= 2) { // key_share: the group comes first in both forms
+                s->stats.group = (d[0] << 8) | d[1];
+            }
+        } else if (!s->ems_checked) {
+            // mbedtls_ssl_conf_extended_master_secret() only offers it: a server that does not echo it is accepted
+            // (ssl_tls12_client.c:742-759), so the engine refuses it here, before any key is derived
+            s->ems_checked = 1;
+            s->stats.ems = (tls_sh_ext(m, len, 23, &d) == 0);
+            if (!s->stats.ems) {
+                ESP_LOGW(TAG, "TLS 1.2 server without the extended master secret: refused");
+                mbedtls_ssl_send_alert_message(&s->ssl, MBEDTLS_SSL_ALERT_LEVEL_FATAL,
+                                               MBEDTLS_SSL_ALERT_MSG_HANDSHAKE_FAILURE);
+                return MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE;
+            }
         }
-        return 0;
     }
-    uint16_t group = tls_group_from_psa(hs->xxdh_psa_type, hs->xxdh_psa_bits);
-    if (group) {
-        s->stats.group = group;
-    }
-    if (!s->ems_checked && (state_before == MBEDTLS_SSL_SERVER_HELLO) && (state != MBEDTLS_SSL_SERVER_HELLO)) {
-        // mbedtls_ssl_conf_extended_master_secret() only offers it: a server that does not echo it is accepted
-        // (ssl_tls12_client.c:742-759), so the engine refuses it here, before any key is derived
-        s->ems_checked = 1;
-        s->stats.ems = (hs->extended_ms == MBEDTLS_SSL_EXTENDED_MS_ENABLED);
-        if (!s->stats.ems) {
-            ESP_LOGW(TAG, "TLS 1.2 server without the extended master secret: refused");
-            mbedtls_ssl_send_alert_message(&s->ssl, MBEDTLS_SSL_ALERT_LEVEL_FATAL,
-                                           MBEDTLS_SSL_ALERT_MSG_HANDSHAKE_FAILURE);
-            return MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE;
-        }
+    if ((state_before == MBEDTLS_SSL_SERVER_KEY_EXCHANGE) && (version_before == MBEDTLS_SSL_VERSION_TLS1_2) &&
+        (m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_KEY_EXCHANGE, &len)) != NULL && (len >= 4 + 3) && (m[4] == 3)) {
+        s->stats.group = (m[5] << 8) | m[6]; // ECParameters: named_curve (3), then the NamedGroup
     }
     return 0;
 }
@@ -524,8 +548,8 @@ static int tls_handshake(tls_session_t *s, tls_step_result_t *r)
         int64_t start = esp_timer_get_time();
         int ret = mbedtls_ssl_handshake_step(&s->ssl);
         s->stats.handshake_us += (uint32_t)(esp_timer_get_time() - start);
-        int ems = tls_note_handshake(s, state_before);
-        if ((ret == 0) && ems) {
+        int ems = (ret == 0) ? tls_note_handshake(s, state_before, version_before) : 0;
+        if (ems) {
             r->fail_reason = TLS_FAIL_NO_EMS;
             return ems;
         }
@@ -741,10 +765,12 @@ static uint8_t tls_ca_reject(const mbedtls_x509_crt *crt)
         return TLS_CA_REJECT_RSA_KEY_SHORT;
     }
     if (PSA_KEY_TYPE_IS_ECC(type)) {
-        // The curves of the certificate profile the engine verifies with (not the key-exchange groups)
-        mbedtls_ecp_group_id id = mbedtls_ecc_group_from_psa(PSA_KEY_TYPE_ECC_GET_FAMILY(type), bits);
-        if ((id == MBEDTLS_ECP_DP_NONE) ||
-            !(mbedtls_x509_crt_profile_default.allowed_curves & MBEDTLS_X509_ID_FLAG(id))) {
+        // The curves of mbedtls_x509_crt_profile_default, which the engine verifies with (x509_crt.c:98-104 in
+        // 4.1.1), not the key-exchange groups
+        psa_ecc_family_t family = PSA_KEY_TYPE_ECC_GET_FAMILY(type);
+        int ok = ((family == PSA_ECC_FAMILY_SECP_R1) && ((bits == 256) || (bits == 384) || (bits == 521))) ||
+                 ((family == PSA_ECC_FAMILY_BRAINPOOL_P_R1) && ((bits == 256) || (bits == 384) || (bits == 512)));
+        if (!ok) {
             return TLS_CA_REJECT_CURVE;
         }
     }
