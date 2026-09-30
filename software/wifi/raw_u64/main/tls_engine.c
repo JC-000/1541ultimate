@@ -239,7 +239,11 @@ static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const c
         mbedtls_ssl_conf_max_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
         // mbedTLS 4's default list adds x448 and FFDHE 2048-8192 (an 8192-bit modexp on the ESP32):
         // offer what mbedTLS 3.6.0 offered here, in its order. mbedTLS keeps the pointer, so static.
-        static const uint16_t groups[] = { MBEDTLS_SSL_IANA_TLS_GROUP_X25519, MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
+        static const uint16_t groups[] = {
+#if defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768)
+                                           0x11EC, // X25519MLKEM768: esp-pqc's fork defines the name, but app code sees IDF's stock ssl.h
+#endif
+                                           MBEDTLS_SSL_IANA_TLS_GROUP_X25519, MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
                                            MBEDTLS_SSL_IANA_TLS_GROUP_SECP384R1, MBEDTLS_SSL_IANA_TLS_GROUP_SECP521R1,
                                            MBEDTLS_SSL_IANA_TLS_GROUP_NONE };
         mbedtls_ssl_conf_groups(&s->conf, groups);
