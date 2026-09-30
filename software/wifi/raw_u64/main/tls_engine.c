@@ -39,6 +39,9 @@
 #if !CONFIG_MBEDTLS_HAVE_TIME_DATE
 #error "Without CONFIG_MBEDTLS_HAVE_TIME_DATE certificate dates are ignored: an expired certificate would verify"
 #endif
+#if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE && !CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY
+#error "The bundle needs CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY: without it most servers' cross-signed chains fail"
+#endif
 
 // The test lane's root CA (scratchpad/esp-tls/m2-test-ca/test-ca.pem, DER SHA-256 c3d5f61f...), embedded by CMakeLists.txt.
 extern const uint8_t tls_test_ca_pem_start[] asm("_binary_tls_test_ca_pem_start");
