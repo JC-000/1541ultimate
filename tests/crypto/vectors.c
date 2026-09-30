@@ -1,9 +1,10 @@
 /*
  * The crypto conformance suite's view of mbedTLS: each primitive is reached through the same
- * public call the TLS 1.3 client makes for it in this configuration (mbedTLS 3.6, without
- * MBEDTLS_USE_PSA_CRYPTO). So the vectors check the primitives the handshake and the records
- * use; they do not check that the TLS layer calls them correctly (nonces, transcript, Finished,
- * CertificateVerify content), which only a handshake can show.
+ * public call the TLS 1.3 client makes for it in this configuration (mbedTLS 3.6 without
+ * MBEDTLS_USE_PSA_CRYPTO, or mbedTLS 4, where the records go through PSA's AEAD and a PSS
+ * signature is verified with any salt length). So the vectors check the primitives the
+ * handshake and the records use; they do not check that the TLS layer calls them correctly
+ * (nonces, transcript, Finished, CertificateVerify content), which only a handshake can show.
  *
  *   vectors offer      prints what a client configured like tls_engine.c offers in its
  *                      ClientHello: "suite XXXX", "group XXXX", "sigalg XXXX", "keyshare XXXX"
@@ -17,24 +18,33 @@
  *   hash    ALG MSG                        psa_hash_compute()
  *   hmac    ALG KEY MSG                    psa_mac_compute(PSA_ALG_HMAC)
  *   hkdf    ALG IKM SALT INFO LEN          HKDF-Extract then HKDF-Expand, as ssl_tls13_keys.c
- *   seal    AEAD KEY IV AAD PT TAGLEN      mbedtls_cipher_auth_encrypt_ext(), output ct || tag
- *   open    AEAD KEY IV AAD CT TAG         mbedtls_cipher_auth_decrypt_ext(), output pt
+ *   seal    AEAD KEY IV AAD PT TAGLEN      3.6: mbedtls_cipher_auth_encrypt_ext(), 4: psa_aead_encrypt(),
+ *                                          output ct || tag
+ *   open    AEAD KEY IV AAD CT TAG         3.6: mbedtls_cipher_auth_decrypt_ext(), 4: psa_aead_decrypt(),
+ *                                          output pt
  *   ecdh    GROUP PRIV PUB                 psa_raw_key_agreement(PSA_ALG_ECDH)
- *   verify  SCHEME SPKI ALG MSG SIG SLEN   psa_hash_compute() then mbedtls_pk_verify_ext()
- * ALG is sha1/sha224/sha256/sha384/sha512, AEAD gcm/ccm/chachapoly, GROUP x25519 or
+ *   verify  SCHEME SPKI ALG MSG SIG SLEN   psa_hash_compute() then mbedtls_pk_verify_ext() (4: SLEN unused,
+ *                                          as the 4.x TLS client passes no salt length)
+ * ALG is sha1/sha224/sha256/sha384/sha512, AEAD gcm/ccm/chachapoly, GROUP x25519, x448 or
  * secp256r1/secp384r1/secp521r1, SCHEME ecdsa/pkcs1/pss (SLEN is the PSS salt length, else 0).
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "mbedtls/ssl.h"
+#include "mbedtls/pk.h"
+#include "mbedtls/x509_crt.h"
+#include "psa/crypto.h"
+#if MBEDTLS_VERSION_MAJOR < 4
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/entropy.h"
 #include "mbedtls/cipher.h"
-#include "mbedtls/pk.h"
-#include "mbedtls/x509_crt.h"
 #include "mbedtls/ecp.h"
-#include "psa/crypto.h"
+#else
+// The curve list and its names are private in 4.x; the profile check below needs them
+#define MBEDTLS_DECLARE_PRIVATE_IDENTIFIERS
+#include "mbedtls/private/ecp.h"
+#endif
 
 #define MAX_FIELDS 8
 
@@ -127,6 +137,50 @@ static int op_hkdf(psa_algorithm_t h, const blob_t *ikm, const blob_t *salt, con
     return st;
 }
 
+#if MBEDTLS_VERSION_MAJOR >= 4
+static int op_aead(int seal, const char *aead, const blob_t *key, const blob_t *iv, const blob_t *aad,
+                   const blob_t *in, const blob_t *tag, size_t taglen, unsigned char *out, size_t *olen)
+{
+    // The key and algorithm a 4.x record transform uses (mbedtls_ssl_cipher_to_psa(), ssl_msg.c):
+    // the tag length is part of the algorithm when it is not the full one
+    psa_key_type_t type = PSA_KEY_TYPE_AES;
+    psa_algorithm_t alg = !strcmp(aead, "gcm") ? PSA_ALG_GCM : !strcmp(aead, "ccm") ? PSA_ALG_CCM : 0;
+    if (!strcmp(aead, "chachapoly")) {
+        type = PSA_KEY_TYPE_CHACHA20;
+        alg = PSA_ALG_CHACHA20_POLY1305;
+    }
+    size_t tlen = seal ? taglen : tag->len;
+    if (alg == 0) {
+        return PSA_ERROR_NOT_SUPPORTED;
+    }
+    if (tlen != 16) {
+        alg = PSA_ALG_AEAD_WITH_SHORTENED_TAG(alg, tlen);
+    }
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attr, type);
+    psa_set_key_bits(&attr, key->len * 8);
+    psa_set_key_usage_flags(&attr, seal ? PSA_KEY_USAGE_ENCRYPT : PSA_KEY_USAGE_DECRYPT);
+    psa_set_key_algorithm(&attr, alg);
+    mbedtls_svc_key_id_t k;
+    psa_status_t st = psa_import_key(&attr, key->p, key->len, &k);
+    if (st != PSA_SUCCESS) {
+        return st;
+    }
+    if (seal) {
+        st = psa_aead_encrypt(k, alg, iv->p, iv->len, aad->p, aad->len, in->p, in->len, out, in->len + taglen, olen);
+    } else {
+        // The record layer passes ciphertext and tag as one buffer
+        unsigned char *ct = malloc(in->len + tag->len + 1);
+        memcpy(ct, in->p, in->len);
+        memcpy(ct + in->len, tag->p, tag->len);
+        st = psa_aead_decrypt(k, alg, iv->p, iv->len, aad->p, aad->len, ct, in->len + tag->len, out, in->len + 1,
+                              olen);
+        free(ct);
+    }
+    psa_destroy_key(k);
+    return st;
+}
+#else
 static int op_aead(int seal, const char *aead, const blob_t *key, const blob_t *iv, const blob_t *aad,
                    const blob_t *in, const blob_t *tag, size_t taglen, unsigned char *out, size_t *olen)
 {
@@ -168,13 +222,14 @@ static int op_aead(int seal, const char *aead, const blob_t *key, const blob_t *
     mbedtls_cipher_free(&ctx);
     return rc;
 }
+#endif
 
 static int op_ecdh(const char *group, const blob_t *priv, const blob_t *pub, unsigned char *out, size_t *olen)
 {
     psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
-    if (!strcmp(group, "x25519")) {
+    if (!strcmp(group, "x25519") || !strcmp(group, "x448")) {
         psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_MONTGOMERY));
-        psa_set_key_bits(&attr, 255);
+        psa_set_key_bits(&attr, !strcmp(group, "x448") ? 448 : 255);
     } else {
         psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
         psa_set_key_bits(&attr, !strcmp(group, "secp256r1") ? 256 : !strcmp(group, "secp384r1") ? 384 : 521);
@@ -203,6 +258,15 @@ static int op_verify(const char *scheme, const blob_t *spki, int h, const blob_t
     if (rc == 0) {
         rc = psa_hash_compute(hashes[h].psa, msg->p, msg->len, hash, sizeof(hash), &hlen);
     }
+#if MBEDTLS_VERSION_MAJOR >= 4
+    if (rc == 0) {
+        // PSS is PSA_ALG_RSA_PSS_ANY_SALT (pk.h); ssl_tls13_generic.c passes no salt length
+        (void)slen;
+        mbedtls_pk_sigalg_t type = !strcmp(scheme, "ecdsa") ? MBEDTLS_PK_SIGALG_ECDSA :
+                                   !strcmp(scheme, "pss") ? MBEDTLS_PK_SIGALG_RSA_PSS : MBEDTLS_PK_SIGALG_RSA_PKCS1V15;
+        rc = mbedtls_pk_verify_ext(type, &pk, hashes[h].md, hash, hlen, sig->p, sig->len);
+    }
+#else
     if (rc == 0) {
         mbedtls_pk_type_t type = !strcmp(scheme, "ecdsa") ? MBEDTLS_PK_ECDSA :
                                  !strcmp(scheme, "pss") ? MBEDTLS_PK_RSASSA_PSS : MBEDTLS_PK_RSA;
@@ -210,6 +274,7 @@ static int op_verify(const char *scheme, const blob_t *spki, int h, const blob_t
         rc = mbedtls_pk_verify_ext(type, (type == MBEDTLS_PK_RSASSA_PSS) ? &pss : NULL, &pk, hashes[h].md,
                                    hash, hlen, sig->p, sig->len);
     }
+#endif
     mbedtls_pk_free(&pk);
     return rc;
 }
@@ -304,13 +369,17 @@ static int offer(void)
 {
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
-    mbedtls_ctr_drbg_context drbg;
-    mbedtls_entropy_context entropy;
     mbedtls_ssl_init(&ssl);
     mbedtls_ssl_config_init(&conf);
+#if MBEDTLS_VERSION_MAJOR < 4
+    mbedtls_ctr_drbg_context drbg;
+    mbedtls_entropy_context entropy;
     mbedtls_ctr_drbg_init(&drbg);
     mbedtls_entropy_init(&entropy);
     int ret = mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy, NULL, 0);
+#else
+    int ret = 0; // 4.x takes its randomness from PSA
+#endif
     if (ret == 0) {
         ret = mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
                                           MBEDTLS_SSL_PRESET_DEFAULT);
@@ -318,7 +387,9 @@ static int offer(void)
     if (ret == 0) {
         mbedtls_ssl_conf_min_tls_version(&conf, MBEDTLS_SSL_VERSION_TLS1_3);
         mbedtls_ssl_conf_max_tls_version(&conf, MBEDTLS_SSL_VERSION_TLS1_3);
+#if MBEDTLS_VERSION_MAJOR < 4
         mbedtls_ssl_conf_rng(&conf, mbedtls_ctr_drbg_random, &drbg);
+#endif
         mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_REQUIRED);
         ret = mbedtls_ssl_setup(&ssl, &conf);
     }
@@ -358,8 +429,10 @@ static int offer(void)
     }
     mbedtls_ssl_free(&ssl);
     mbedtls_ssl_config_free(&conf);
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ctr_drbg_free(&drbg);
     mbedtls_entropy_free(&entropy);
+#endif
     return 0;
 }
 

@@ -40,14 +40,15 @@ echo "tree $(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo unknown)$(
     { tail -20 "$OUT/build_mbedtls.txt"; echo "CRYPTO_CONFORMANCE FAIL build"; exit 1; }
 grep -E '^(pins|mbedTLS|sdkconfig|macros|config:)' "$OUT/build_mbedtls.txt"
 
-LIB=$OUT/build/library
-CFLAGS=(${CRYPTO_CFLAGS:-} -std=c11 -O1 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -I"$OUT/config" -I"$OUT/src/include"
-        -DMBEDTLS_CONFIG_FILE='"mbedtls_host.h"')
-cc "${CFLAGS[@]}" "$HERE/vectors.c" "$LIB/libmbedtls.a" "$LIB/libmbedx509.a" "$LIB/libmbedcrypto.a" -o "$OUT/vectors"
+# What the build says a program using it needs: include paths, config defines, libraries
+BUILD_FLAGS=() BUILD_LIBS=()
+while IFS= read -r a; do BUILD_FLAGS+=("$a"); done < "$OUT/harness.flags"
+while IFS= read -r a; do BUILD_LIBS+=("$a"); done < "$OUT/harness.libs"
+CFLAGS=(${CRYPTO_CFLAGS:-} -std=c11 -O1 -Wall -Wextra -D_POSIX_C_SOURCE=200809L "${BUILD_FLAGS[@]}")
+cc "${CFLAGS[@]}" "$HERE/vectors.c" "${BUILD_LIBS[@]}" -o "$OUT/vectors"
 # esp_crt_bundle.c is ESP-IDF's, as it is: GNU C (asm labels), its warnings not ours to fix
 cc "${CFLAGS[@]}" -std=gnu11 -Wno-unused-parameter -I"$HERE/stub" -I"$OUT/esp_crt_bundle/include" \
-    "$HERE/limbo.c" "$OUT/esp_crt_bundle/esp_crt_bundle.c" \
-    "$LIB/libmbedtls.a" "$LIB/libmbedx509.a" "$LIB/libmbedcrypto.a" -o "$OUT/limbo"
+    "$HERE/limbo.c" "$OUT/esp_crt_bundle/esp_crt_bundle.c" "${BUILD_LIBS[@]}" -o "$OUT/limbo"
 cmake --build "$OUT/build" --target test_suite_ssl -j "$(sysctl -n hw.ncpu 2>/dev/null || nproc)" \
     > "$OUT/test_suite_ssl_build.txt" 2>&1 ||
     { tail -20 "$OUT/test_suite_ssl_build.txt"; echo "CRYPTO_CONFORMANCE FAIL build"; exit 1; }

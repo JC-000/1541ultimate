@@ -239,6 +239,12 @@ x509 tc=bundle::sha1-leaf::bundle security-deviation bundle-sha1-below-root BAD_
 x509 tc=bundle::sha1-intermediate::bundle security-deviation bundle-sha1-below-root BAD_MD is masked off (esp_crt_bundle.c:90): a SHA-1 intermediate under a bundled root is accepted
 x509 tc=bundle::expired-root::bundle security-deviation bundle-root-validity-unchecked the bundle keeps no validity: an expired root still verifies what it signed
 x509 tc=bundle::rsa1024-root::bundle security-deviation bundle-root-key-size-unchecked the callback verifies with the bundle key outside the certificate profile: an RSA-1024 root is accepted
+# Not a deviation but its opposite: a server that sends a cross-signed root (the new root's name
+# and key, issued by an old root) as its top certificate, with only the new root in the bundle.
+# The callback looks up the top certificate's issuer, the old root, and nothing else
+# (esp_crt_bundle.c:84-142), so the valid chain is refused. ESP-IDF 6's
+# CROSS_SIGNED_VERIFY accepts it (expectations.4).
+x509 tc=cross::top-cross-signed::bundle reject fail-closed: only the top certificate's issuer is looked up in the bundle (esp_crt_bundle.c:84-142), here the old root, which it does not have
 # ---- Known vulnerabilities of the pinned mbedTLS -------------------------------------------
 # known-vulnerable <CVE> <first fixed version>: the vector must still show the vulnerable outcome.
 # The run stays usable as a regression gate, prints the CVE on a line of its own before the

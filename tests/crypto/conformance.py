@@ -86,6 +86,7 @@ OFFERS = {
     "suite 1305": ["aes-ccm/k128/t64", *AEAD_SHA256],  # TLS_AES_128_CCM_8_SHA256
     "suite 00ff": [],  # renegotiation SCSV, no algorithm
     "group 001d": ["x25519"],
+    "group 001e": ["x448"],  # offered by mbedTLS 4's defaults
     "group 0017": ["ecdh/secp256r1"],
     "group 0018": ["ecdh/secp384r1"],
     "group 0019": ["ecdh/secp521r1"],
@@ -108,6 +109,7 @@ WYCHEPROOF = {
     "hmac": ["hmac_sha256_test.json", "hmac_sha384_test.json"],
     "hkdf": ["hkdf_sha256_test.json", "hkdf_sha384_test.json"],
     "x25519": ["x25519_test.json"],
+    "x448": ["x448_test.json"],  # built only where the configuration has the curve
     "ecdh-nist": [
         "ecdh_secp256r1_ecpoint_test.json",
         "ecdh_secp384r1_ecpoint_test.json",
@@ -483,7 +485,7 @@ def run_ecdh(h, suite, source, g, t):
             max(CURVE_BYTES[curve], (int(priv, 16).bit_length() + 7) // 8), "big"
         )
         priv = raw.hex()
-    group = "x25519" if curve == "curve25519" else curve
+    group = {"curve25519": "x25519", "curve448": "x448"}.get(curve, curve)
     rc, shared = h("ecdh", group, priv, t["public"])
     suite.judge(
         source,
@@ -491,7 +493,7 @@ def run_ecdh(h, suite, source, g, t):
         t["result"],
         t["flags"],
         outcome(rc, shared, bytes.fromhex(t["shared"])),
-        group if group == "x25519" else "ecdh/" + group,
+        group if group in ("x25519", "x448") else "ecdh/" + group,
     )
 
 
@@ -518,6 +520,7 @@ RUNNERS = {
     "hmac": run_mac,
     "hkdf": run_hkdf,
     "x25519": run_ecdh,
+    "x448": run_ecdh,
     "ecdh-nist": run_ecdh,
     "ecdsa": run_verify,
     "rsa-pkcs1": run_verify,
@@ -525,8 +528,11 @@ RUNNERS = {
 }
 
 
-def wycheproof(h, src, exp, name):
+def wycheproof(h, src, exp, name, conditions):
     suite = Suite(name, exp)
+    if (name == "x448") and ("x448" not in conditions):
+        suite.not_applicable()  # the curve is not in this configuration, and so not offered
+        return suite
     for f in WYCHEPROOF[name]:
         data = json.loads(src.git("WYCHEPROOF", "testvectors_v1/" + f))
         for g in data["testGroups"]:
@@ -1085,7 +1091,8 @@ def build_conditions(out):
     """Which conditional code of mbedTLS this build has, for the checks that need it:
     pk-psa-ec-data   MBEDTLS_PK_USE_PSA_EC_DATA (pk.h: USE_PSA_CRYPTO without ECP_C)
     sw-inet-pton     mbedTLS's own inet_pton (x509_crt.c: no AF_INET6, or MBEDTLS_TEST_SW_INET_PTON)
-    ssl-srv          MBEDTLS_SSL_SRV_C"""
+    ssl-srv          MBEDTLS_SSL_SRV_C
+    x448             PSA_WANT_ECC_MONTGOMERY_448 (the X448 group)"""
     probe = os.path.join(out, "conditions.c")
     with open(probe, "w") as f:
         f.write(
@@ -1096,19 +1103,10 @@ def build_conditions(out):
     flags = [
         f for f in os.environ.get("CRYPTO_CFLAGS", "").split() if f.startswith(("-D", "-U", "-I"))
     ]
+    # the include paths and configuration defines build_mbedtls.sh says a program needs
+    flags += read(os.path.join(out, "harness.flags")).splitlines()
     macros = subprocess.run(
-        [
-            "cc",
-            "-E",
-            "-dM",
-            *flags,
-            "-I",
-            os.path.join(out, "config"),
-            "-I",
-            os.path.join(out, "src", "include"),
-            '-DMBEDTLS_CONFIG_FILE="mbedtls_host.h"',
-            probe,
-        ],
+        ["cc", "-E", "-dM", *flags, probe],
         capture_output=True,
         text=True,
         check=True,
@@ -1122,6 +1120,8 @@ def build_conditions(out):
         found.add("sw-inet-pton")
     if "MBEDTLS_SSL_SRV_C" in have:
         found.add("ssl-srv")
+    if "PSA_WANT_ECC_MONTGOMERY_448" in have:
+        found.add("x448")
     return found
 
 
@@ -1338,7 +1338,7 @@ def main():
     conditions = build_conditions(args.out)
     vectors = os.path.join(args.out, "vectors")
     h = Harness(vectors)
-    suites = [wycheproof(h, src, exp, name) for name in WYCHEPROOF]
+    suites = [wycheproof(h, src, exp, name, conditions) for name in WYCHEPROOF]
     suites += [rfc_vectors(h, src, exp), cavp_sha(h, src, exp), regressions(h, exp, conditions)]
 
     lim = Limbo(os.path.join(args.out, "limbo"))

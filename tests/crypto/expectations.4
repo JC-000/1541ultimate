@@ -1,0 +1,298 @@
+# Expected outcomes where Wycheproof's own verdict does not decide: every "acceptable" vector,
+# and every known deviation from a "valid" or "invalid" verdict. Reviewed by hand; the reason is
+# part of the line. Format (see conformance.py):
+#
+#   <vector file> tc=<id>|flag=<name> accept|reject <reason>
+#
+# A tc= line wins over flag= lines; among flag= lines the first one in this file that names one
+# of the vector's flags wins, so the stricter rule comes first. "accept" means the call succeeded
+# and gave the vector's output. A line that no vector uses fails the run, so this file cannot go
+# stale: when a bump changes a behaviour, the line has to be looked at again.
+# This is the file for the ESP-IDF 6 pins (PINS.idf6, CRYPTO_EXPECTATIONS): each line below was
+# checked again against mbedTLS 4.1.1, not copied. Paths are mbedTLS's at MBEDTLS_COMMIT
+# (ce3f3485, mbedTLS 4.1.1): library/ for X.509 and TLS; the crypto has moved to TF-PSA-Crypto,
+# so "ecp.c", "rsa.c" and "psa_crypto_ecp.c" are tf-psa-crypto/drivers/builtin/src/,
+# "asn1parse.c" tf-psa-crypto/utilities/, "psa_util.c" tf-psa-crypto/core/ and "pk_wrap.c"
+# tf-psa-crypto/extras/. tls_engine.c is this tree's software/wifi/raw_u64/main/tls_engine.c.
+
+# ---- X25519 (RFC 7748) ---------------------------------------------------------------------
+# A low-order public key gives an all-zero shared secret. RFC 8446 7.4.2 says a TLS 1.3 client
+# MUST abort on it. mbedTLS 4.1.1 refuses it twice over: PSA's ECDH loads the peer's key through
+# mbedtls_ecp_check_pubkey() (psa_crypto_ecp.c:174-175), which refuses the known low-order u
+# values (ecp.c:2792-2842: 0, 1, p-1, and Curve25519's two others); and the ladder's result at
+# infinity has Z = 0, which has no inverse (ecp.c:2326). 3.6's third barrier, ecdh.c's check of
+# the result, is gone: PSA's ECDH writes the secret out as it is (psa_crypto_ecp.c:522-536).
+x25519_test.json flag=ZeroSharedSecret reject all-zero shared secret refused (ecp.c:2792-2842, ecp.c:2326), as RFC 8446 7.4.2 requires of TLS 1.3
+# RFC 7748 section 5 defines X25519 for every 32-byte u: points on the twist, u >= p (taken
+# mod p) and the special values are all inputs the function must compute on. mbedTLS does,
+# with the right result (an "accept" is checked against Wycheproof's shared secret).
+x25519_test.json flag=Twist accept RFC 7748 5: X25519 is defined on twist points; computed correctly
+x25519_test.json flag=NonCanonicalPublic accept RFC 7748 5: u >= 2^255-19 is reduced mod p; computed correctly
+x25519_test.json flag=SpecialPublicKey accept RFC 7748 5: special u values are ordinary inputs; computed correctly
+
+# ---- X448 (RFC 7748; offered by mbedTLS 4's defaults, group 001e) ---------------------------
+# The same two barriers as X25519 (ecp.c:2792-2842 refuses u = 0, 1 and p-1 for Curve448; the
+# ladder's Z = 0 has no inverse, ecp.c:2326), and the same RFC 7748 section 5 rules for the rest.
+# A public key longer than the curve's 56 bytes is not an X448 key; PSA refuses it by its size
+# (psa_crypto_ecp.c:124-128). Listed only because the SpecialPublicKey line would claim these.
+x448_test.json flag=PublicKeyTooLong reject a key of the wrong length is refused (psa_crypto_ecp.c:124-128), as Wycheproof wants
+x448_test.json flag=ZeroSharedSecret reject all-zero shared secret refused (ecp.c:2792-2842, ecp.c:2326), as RFC 8446 7.4.2 requires of TLS 1.3
+x448_test.json flag=Twist accept RFC 7748 5: X448 is defined on twist points; computed correctly
+x448_test.json flag=NonCanonicalPublic accept RFC 7748 5: u >= p is reduced mod p; computed correctly
+x448_test.json flag=SpecialPublicKey accept RFC 7748 5: special u values are ordinary inputs; computed correctly
+
+# ---- ECDH on the NIST curves (key_share) ---------------------------------------------------
+# TLS 1.3 only allows the uncompressed point format (RFC 8446 4.2.8.2), and PSA's raw key
+# agreement only takes that format: a Weierstrass public key must be 2m+1 bytes
+# (psa_crypto_ecp.c:104-115), so a compressed one has the wrong size for the curve (:124-128).
+ecdh_secp256r1_ecpoint_test.json flag=CompressedPublic reject compressed points are not allowed in a TLS 1.3 key_share (RFC 8446 4.2.8.2)
+ecdh_secp384r1_ecpoint_test.json flag=CompressedPublic reject compressed points are not allowed in a TLS 1.3 key_share (RFC 8446 4.2.8.2)
+ecdh_secp521r1_ecpoint_test.json flag=CompressedPublic reject compressed points are not allowed in a TLS 1.3 key_share (RFC 8446 4.2.8.2)
+
+# ---- RSA PKCS#1 v1.5 (certificate signatures) ----------------------------------------------
+# A DigestInfo without the NULL parameters: RFC 8017 9.2 note 2 lets a verifier accept it or
+# not. mbedTLS encodes the one form with NULL and compares (rsa.c:2358-2380,
+# mbedtls_rsa_rsassa_pkcs1_v15_verify()), so it refuses the other.
+rsa_signature_2048_sha256_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_2048_sha384_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_2048_sha512_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_3072_sha256_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_3072_sha384_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_3072_sha512_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_4096_sha256_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_4096_sha384_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+rsa_signature_4096_sha512_test.json flag=MissingNull reject only the DigestInfo with NULL parameters is accepted (RFC 8017 9.2 note 2 allows either)
+
+# ---- RSA-PSS (CertificateVerify): a deviation, any salt length --------------------------------
+# RFC 8446 4.2.3: with RSASSA-PSS "the length of the Salt MUST be equal to the length of the
+# output of the digest algorithm". mbedTLS 3.6 checked it (ssl_tls13_generic.c:310 at 72aa6873,
+# expected_salt_len = PSA_HASH_LENGTH). mbedTLS 4.1.1 does not: ssl_tls13_generic.c:344 verifies
+# with MBEDTLS_PK_SIGALG_RSA_PSS, which is PSA_ALG_RSA_PSS_ANY_SALT
+# (tf-psa-crypto/include/mbedtls/pk.h:52), and vectors.c does the same. Wycheproof's "s_len
+# changed" vectors are correct signatures with another salt length: accepted. The salt length is
+# not what makes PSS unforgeable (RFC 8017 9.1 allows any salt length, empty included), so this is a conformance
+# deviation, not a forgery; every other modified signature is refused, which the run checks.
+rsa_pss_2048_sha256_mgf1_32_test.json tc=67 accept deviation: salt length 0, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha256_mgf1_32_test.json tc=68 accept deviation: salt length 1, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha256_mgf1_32_test.json tc=69 accept deviation: salt length 20, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha256_mgf1_32_test.json tc=70 accept deviation: salt length 31, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha256_mgf1_32_test.json tc=71 accept deviation: salt length 33, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha256_mgf1_32_test.json tc=72 accept deviation: salt length 222, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=99 accept deviation: salt length 0, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=100 accept deviation: salt length 1, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=101 accept deviation: salt length 20, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=102 accept deviation: salt length 32, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=103 accept deviation: salt length 47, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=104 accept deviation: salt length 49, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_2048_sha384_mgf1_48_test.json tc=105 accept deviation: salt length 206, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=67 accept deviation: salt length 0, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=68 accept deviation: salt length 1, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=69 accept deviation: salt length 20, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=70 accept deviation: salt length 31, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=71 accept deviation: salt length 33, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_3072_sha256_mgf1_32_test.json tc=72 accept deviation: salt length 350, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=67 accept deviation: salt length 0, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=68 accept deviation: salt length 1, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=69 accept deviation: salt length 20, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=70 accept deviation: salt length 31, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=71 accept deviation: salt length 33, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha256_mgf1_32_test.json tc=72 accept deviation: salt length 478, not 32, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=99 accept deviation: salt length 0, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=100 accept deviation: salt length 1, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=101 accept deviation: salt length 20, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=102 accept deviation: salt length 32, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=103 accept deviation: salt length 47, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=104 accept deviation: salt length 49, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha384_mgf1_48_test.json tc=105 accept deviation: salt length 462, not 48, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=136 accept deviation: salt length 0, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=137 accept deviation: salt length 1, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=138 accept deviation: salt length 20, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=139 accept deviation: salt length 32, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=140 accept deviation: salt length 63, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=141 accept deviation: salt length 65, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+rsa_pss_4096_sha512_mgf1_64_test.json tc=142 accept deviation: salt length 446, not 64, accepted (PSA_ALG_RSA_PSS_ANY_SALT, pk.h:52); RFC 8446 4.2.3 wants it refused
+
+# ---- ECDSA: a known deviation, BER lengths instead of DER ----------------------------------
+# Wycheproof calls these "invalid"; mbedTLS accepts them. Each is a correct signature (r and s
+# have the right values) with long-form or zero-padded lengths: the pk layer turns the DER
+# signature into PSA's raw r||s with mbedtls_ecdsa_der_to_raw() (pk_wrap.c:187), which reads
+# the SEQUENCE and each INTEGER with mbedtls_asn1_get_tag() (psa_util.c:259, :199), and
+# mbedtls_asn1_get_len() takes any length of 1 to 4 bytes (asn1parse.c:36-52). The effect is
+# signature malleability: one signature has more than one byte string. It is not a forgery, and
+# TLS 1.3 does not rely on signatures being unique. Unlike 3.6 (which read each INTEGER as an
+# unsigned magnitude), 4.1.1 refuses an INTEGER that lacks its sign byte or has more than one
+# leading zero (psa_util.c:205-222), so those vectors now get Wycheproof's own verdict. Every
+# other encoding error Wycheproof tries (garbage, wrong tags, truncation, ...) is refused, which
+# the run checks.
+ecdsa_secp256r1_sha256_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_secp256r1_sha512_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_secp384r1_sha256_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_secp384r1_sha384_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_secp384r1_sha512_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_secp521r1_sha512_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+# The one BER form mbedTLS refuses: an indefinite length (asn1parse.c:40, a length byte of 0x80).
+# Listed only because the BerEncodedSignature lines above would otherwise claim it.
+ecdsa_secp256r1_sha256_test.json tc=48 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_secp256r1_sha512_test.json tc=48 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_secp384r1_sha256_test.json tc=48 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_secp384r1_sha384_test.json tc=48 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_secp384r1_sha512_test.json tc=49 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_secp521r1_sha512_test.json tc=46 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+
+# The brainpool curves the certificate profile also accepts (vectors profile), same deviation
+ecdsa_brainpoolP256r1_sha256_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_brainpoolP384r1_sha384_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_brainpoolP512r1_sha512_test.json flag=BerEncodedSignature accept deviation: BER lengths accepted (asn1parse.c:36-52); malleability, not forgery
+ecdsa_brainpoolP256r1_sha256_test.json tc=47 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_brainpoolP384r1_sha384_test.json tc=47 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+ecdsa_brainpoolP512r1_sha512_test.json tc=46 reject indefinite length refused (asn1parse.c:40), as Wycheproof wants
+
+# ---- X.509 path validation (x509-limbo, SERVER cases) --------------------------------------
+# Paths here are mbedTLS's library/ at MBEDTLS_COMMIT (4.1.1), and software/wifi/raw_u64/main/
+# for tls_engine.c. In 4.1.1 the TLS 1.3 client checks a server certificate in
+# mbedtls_ssl_verify_certificate() (ssl_tls.c), shared with TLS 1.2. "fail-closed" lines are valid chains mbedTLS refuses: an availability cost, not
+# a security one. "DEVIATION" lines are chains limbo wants refused that mbedTLS accepts.
+# limbo.c presents the intermediates in server order (on a path to a trusted certificate; every
+# such path is tried), so these lines describe what mbedTLS does with a chain a server sends.
+# What it does with a chain out of order is in the x509-misordered section below.
+#
+# Name constraints: mbedTLS 4.1.1, like 3.6, has no nameConstraints support, and a critical nameConstraints
+# is an unknown critical extension, so any case with one in its certificates is refused at parse
+# time, valid or not (781 valid BetterTLS cases, and the rfc5280::nc ones listed below).
+limbo.json flag=critical-nameConstraints reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=pathlen::validation-ignores-pathlen-in-leaf reject fail-closed (TLS 1.3): the leaf here has no digitalSignature keyUsage, which the TLS 1.3 client requires of a server certificate (ssl_tls.c:8848, mbedtls_ssl_check_cert_usage() at ssl_tls.c:8645-8713)
+limbo.json tc=pathlen::self-issued-certs-pathlen reject fail-closed: mbedTLS counts this chain against the pathLenConstraint more strictly than RFC 5280 6.1.4(l)-(m)
+limbo.json tc=pathlen::max-chain-depth-0-exhausted accept not a setting mbedTLS has: max_chain_depth is limbo's verifier parameter; mbedTLS has only the build-time MBEDTLS_X509_MAX_INTERMEDIATE_CA (8)
+limbo.json tc=pathlen::max-chain-depth-1-exhausted accept not a setting mbedTLS has: max_chain_depth is limbo's verifier parameter; mbedTLS has only the build-time MBEDTLS_X509_MAX_INTERMEDIATE_CA (8)
+limbo.json tc=rfc5280::aki::critical-aki accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::aki::leaf-missing-aki accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::aki::intermediate-missing-aki accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::aki::cross-signed-root-missing-aki accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::nc::permitted-dns-match reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=rfc5280::nc::permitted-dns-match-noncritical accept fail-open:noncritical-nameconstraints DEVIATION: a non-critical nameConstraints is skipped unread (x509_crt.c:949-950), so it constrains nothing
+limbo.json tc=rfc5280::nc::permitted-dns-match-more reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=rfc5280::nc::permitted-ipv4-match reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=rfc5280::nc::permitted-ipv6-match reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=rfc5280::nc::permitted-self-issued reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=rfc5280::nc::permitted-nonempty-excluded-nonempty reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=rfc5280::nc::permitted-different-constraint-type reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=rfc5280::nc::excluded-different-constraint-type reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=rfc5280::nc::not-allowed-in-ee-noncritical accept fail-open:noncritical-nameconstraints DEVIATION: a non-critical nameConstraints is skipped unread (x509_crt.c:949-950), so it constrains nothing
+limbo.json tc=rfc5280::nc::nc-forbids-alternate-chain-ica reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=rfc5280::nc::nc-forbids-same-chain-ica reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=rfc5280::nc::nc-forbids-othername-noop reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=rfc5280::pc::ica-noncritical-pc accept DEVIATION: certificate policies and policyConstraints are not processed
+limbo.json tc=rfc5280::san::noncritical-with-empty-subject accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::san::underscore-dns accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::san::ip-in-dns accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::serial::too-long accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::serial::zero accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::ski::critical-ski accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::ski::root-missing-ski accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::ski::intermediate-missing-ski accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::unknown-critical-extension-unrelated-root reject fail-closed: an unused certificate with an unknown critical extension does not parse (x509_crt.c:949-956), and the engine refuses a CA list with such a certificate (tls_engine.c:264-266) as TLS 1.3 refuses such a Certificate entry (ssl_tls13_generic.c:566-570)
+limbo.json tc=rfc5280::unknown-critical-extension-unrelated-intermediate reject fail-closed: an unused certificate with an unknown critical extension does not parse (x509_crt.c:949-956), and the engine refuses a CA list with such a certificate (tls_engine.c:264-266) as TLS 1.3 refuses such a Certificate entry (ssl_tls13_generic.c:566-570)
+limbo.json tc=rfc5280::root-non-critical-basic-constraints accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::leaf-ku-keycertsign accept DEVIATION (profile rule, not a path-validation step of RFC 5280 6.1): mbedTLS does not police how a CA encoded this certificate
+limbo.json tc=rfc5280::ca-as-leaf reject fail-closed (TLS 1.3): the leaf here has no digitalSignature keyUsage, which the TLS 1.3 client requires of a server certificate (ssl_tls.c:8848, mbedtls_ssl_check_cert_usage() at ssl_tls.c:8645-8713)
+limbo.json tc=rfc9881::ml-dsa-44 reject fail-closed: mbedTLS 4.1.1's X.509 has no ML-DSA (RFC 9881; library/ has no ML-DSA signature OID); the root does not parse (UNKNOWN_SIG_ALG), which fails the OPEN (tls_engine.c:264-266)
+limbo.json tc=rfc9881::ml-dsa-65 reject fail-closed: mbedTLS 4.1.1's X.509 has no ML-DSA (RFC 9881; library/ has no ML-DSA signature OID); the root does not parse (UNKNOWN_SIG_ALG), which fails the OPEN (tls_engine.c:264-266)
+limbo.json tc=rfc9881::ml-dsa-87 reject fail-closed: mbedTLS 4.1.1's X.509 has no ML-DSA (RFC 9881; library/ has no ML-DSA signature OID); the root does not parse (UNKNOWN_SIG_ALG), which fails the OPEN (tls_engine.c:264-266)
+limbo.json tc=webpki::aki::root-with-aki-all-fields accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::aki::root-with-aki-ski-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::ipv4-hex-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::ipv4-leading-zeros-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::ipv6-uppercase-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::ipv6-uncompressed-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::ipv6-non-rfc5952-mismatch accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::cn::punycode-not-in-san accept DEVIATION (CA/B Forum issuance rule): with a subjectAltName present the CN is never looked at (x509_crt.c:2970-2973), so a CN that disagrees with it is not an error
+limbo.json tc=webpki::cn::utf8-vs-punycode-mismatch accept DEVIATION (CA/B Forum issuance rule): with a subjectAltName present the CN is never looked at (x509_crt.c:2970-2973), so a CN that disagrees with it is not an error
+limbo.json tc=webpki::cn::not-in-san accept DEVIATION (CA/B Forum issuance rule): with a subjectAltName present the CN is never looked at (x509_crt.c:2970-2973), so a CN that disagrees with it is not an error
+limbo.json tc=webpki::cn::case-mismatch accept DEVIATION (CA/B Forum issuance rule): with a subjectAltName present the CN is never looked at (x509_crt.c:2970-2973), so a CN that disagrees with it is not an error
+limbo.json tc=webpki::eku::ee-anyeku accept fail-open:any-eku DEVIATION: anyExtendedKeyUsage satisfies serverAuth (x509_crt.c:1980-1981)
+limbo.json tc=webpki::eku::ee-critical-eku accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::eku::ee-without-eku accept DEVIATION: a certificate without extKeyUsage may be used for anything (x509_crt.c:1965-1966)
+limbo.json tc=webpki::eku::root-has-eku accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::nc::nc-permits-dns-san-pattern reject fail-closed: no nameConstraints support; a critical one is an unknown critical extension, so the certificate does not parse (x509_crt.c:949-956)
+limbo.json tc=webpki::san::public-suffix-wildcard-san accept fail-open:public-suffix-wildcard DEVIATION: no public suffix list; a wildcard over a public suffix matches like any other wildcard
+limbo.json tc=webpki::san::public-suffix-multi-label-wildcard-san accept fail-open:public-suffix-wildcard DEVIATION: no public suffix list; a wildcard over a public suffix matches like any other wildcard
+limbo.json tc=webpki::san::public-suffix-private-namespace-wildcard-san accept fail-open:public-suffix-wildcard DEVIATION: no public suffix list; a wildcard over a public suffix matches like any other wildcard
+limbo.json tc=webpki::san::no-san accept fail-open:cn-fallback DEVIATION: with no subjectAltName, the name is matched against the subject CN (x509_crt.c:2974-2980); web PKI clients no longer do
+limbo.json tc=webpki::san::san-critical-with-nonempty-subject accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::malformed-aia accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+# webpki::forbidden-rsa-*-not-divisible-by-8-*: 3.6 accepted them (a CA/B Forum rule); 4.1.1 refuses
+# an RSA key whose modulus is not a whole number of bytes when it loads it (psa_crypto_rsa.c:43-51),
+# so they get limbo's own verdict.
+limbo.json tc=webpki::v1-cert accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=webpki::ee-basicconstraints-ca accept DEVIATION (CA/B Forum issuance rule): mbedTLS validates RFC 5280 paths, not the Baseline Requirements
+limbo.json tc=bettertls::nameconstraints::tc736 accept fail-open:cn-fallback DEVIATION: with no subjectAltName, the name is matched against the subject CN (x509_crt.c:2974-2980); web PKI clients no longer do
+limbo.json tc=bettertls::nameconstraints::tc7297 accept fail-open:cn-fallback DEVIATION: with no subjectAltName, the name is matched against the subject CN (x509_crt.c:2974-2980); web PKI clients no longer do
+limbo.json tc=bettertls::pathbuilding::tc5 accept fail-open:intermediate-eku DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls.c:8848, mbedtls_ssl_check_cert_usage() at ssl_tls.c:8645-8713); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
+limbo.json tc=bettertls::pathbuilding::tc12 accept fail-open:intermediate-eku DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls.c:8848, mbedtls_ssl_check_cert_usage() at ssl_tls.c:8645-8713); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
+limbo.json tc=bettertls::pathbuilding::tc17 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:566-570), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc25 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:566-570), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc31 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:566-570), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc38 accept fail-open:intermediate-eku DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls.c:8848, mbedtls_ssl_check_cert_usage() at ssl_tls.c:8645-8713); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
+limbo.json tc=bettertls::pathbuilding::tc44 accept fail-open:intermediate-eku DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls.c:8848, mbedtls_ssl_check_cert_usage() at ssl_tls.c:8645-8713); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
+limbo.json tc=bettertls::pathbuilding::tc50 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:566-570), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc56 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:566-570), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc64 reject fail-closed: one presented certificate has an unknown critical extension, and TLS 1.3 fails the whole Certificate message on it (ssl_tls13_generic.c:566-570), although a path without it exists
+limbo.json tc=bettertls::pathbuilding::tc71 accept fail-open:intermediate-eku DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls.c:8848, mbedtls_ssl_check_cert_usage() at ssl_tls.c:8645-8713); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
+limbo.json tc=bettertls::pathbuilding::tc77 accept fail-open:intermediate-eku DEVIATION: only the leaf's extKeyUsage is checked (ssl_tls.c:8848, mbedtls_ssl_check_cert_usage() at ssl_tls.c:8645-8713); an intermediate's EKU does not constrain the chain, as in RFC 5280 (web PKI clients treat it as a constraint)
+
+# Security-relevant fail-open deviations are marked "fail-open:<tag>" at the head of their
+# reason: they print on the FAIL-OPEN DEVIATIONS line of every run, and are counted, with their
+# lines, as insecure outcomes, not as passed: intermediate-eku, noncritical-nameconstraints,
+# cn-fallback, any-eku, public-suffix-wildcard. The same behaviour in listed order (the
+# x509-misordered section) is marked too and shows as <id>@given.
+
+# A cross-signed pair in the order listed, the ICA that does not verify first: mbedTLS takes the
+# first same-named untrusted issuer and does not try the other (it skips a candidate that does
+# not verify only when it is trusted: x509_crt.c:2298). OpenSSL 3.6.2 refuses it the same way.
+x509 tc=signatures::cross-signed-one-good reject fail-closed, as listed: the first same-named untrusted issuer is used whether its signature verifies or not (x509_crt.c:2298)
+
+# ---- X.509 chains out of order (x509-misordered: limbo's own order) ------------------------
+# mbedTLS looks for each certificate's parent only among the certificates after it in the
+# Certificate message (x509_crt.c:2378, child->next) and does not go back. So a chain whose
+# intermediates are not in path order can be refused although a path exists, and a chain
+# with alternative issuers can be judged on whichever comes first. In server order (x509-limbo)
+# these cases get the outcome recorded there.
+limbo.json/given tc=pathlen::intermediate-pathlen-may-increase reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2378); in server order it is accepted
+limbo.json/given tc=pathlen::max-chain-depth-1-self-issued reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2378); in server order it is accepted
+limbo.json/given tc=bettertls::nameconstraints::tc736 accept fail-open:cn-fallback DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2378); the outcome in server order is in the x509-limbo section
+limbo.json/given tc=bettertls::nameconstraints::tc7297 accept fail-open:cn-fallback DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2378); the outcome in server order is in the x509-limbo section
+limbo.json/given tc=bettertls::pathbuilding::tc2 reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2378); in server order it is accepted
+limbo.json/given tc=bettertls::pathbuilding::tc23 reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2378); in server order it is accepted
+limbo.json/given tc=bettertls::pathbuilding::tc30 reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2378); in server order it is accepted
+limbo.json/given tc=bettertls::pathbuilding::tc32 reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2378); in server order it is accepted
+limbo.json/given tc=bettertls::pathbuilding::tc35 reject fail-closed, out of order: a parent that comes before its child in the list is never found (x509_crt.c:2378); in server order it is accepted
+limbo.json/given tc=bettertls::pathbuilding::tc38 accept fail-open:intermediate-eku DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2378); the outcome in server order is in the x509-limbo section
+limbo.json/given tc=bettertls::pathbuilding::tc71 accept fail-open:intermediate-eku DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2378); the outcome in server order is in the x509-limbo section
+limbo.json/given tc=bettertls::pathbuilding::tc77 accept fail-open:intermediate-eku DEVIATION, out of order: the first-listed issuer is the one used (x509_crt.c:2378); the outcome in server order is in the x509-limbo section
+
+
+# ---- Security deviations: ESP-IDF's certificate bundle (x509-bundle) ------------------------
+# security-deviation <tag>: accepted where it should be refused, by design of the code under
+# test, not a bug of this version. Printed on the SECURITY DEVIATIONS line of every run; the run
+# fails when one no longer shows, and CRYPTO_STRICT=1 counts them as failures.
+# tls_engine.c's TLS_OPEN_CA_BUNDLE mode verifies with esp_crt_bundle_attach() (tls_engine.c:274).
+# ESP-IDF 6's esp_crt_bundle.c (at ESP_IDF_COMMIT) installs esp_crt_verify_callback() and, with
+# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY (on by default in v6.0.3, and in
+# sdkconfig.v6.0.3), a CA callback (esp_crt_bundle.c:601): for each certificate, the bundle
+# entry named by its issuer comes back as a trusted CA made of that name and key alone
+# (esp_crt_bundle.c:498-577, ca_istrue at :522, no validity). mbedTLS then checks the chain
+# against it as against any trusted CA, the certificate profile included: a SHA-1 signature
+# below it (BAD_MD) and an RSA-1024 bundle key (BAD_KEY) are refused, which 3.6's callback let
+# through (bundle-sha1-below-root, bundle-root-key-size-unchecked: tests/crypto run with
+# sdkconfig.v6.0.3-nocross shows both again). The made-up CA has no validity, so mbedTLS marks
+# it EXPIRED, and the verify callback clears that for it (esp_crt_bundle.c:331-340): an
+# expired root still verifies what it signed. Each chain is also run with the root as the CA
+# chain (tc=...::ca), where it is refused.
+x509 tc=bundle::expired-root::bundle security-deviation bundle-root-validity-unchecked the bundle keeps no validity, and the verify callback clears EXPIRED on the CA it makes from a bundle entry (esp_crt_bundle.c:331-340): an expired root still verifies what it signed
+# ---- Known vulnerabilities of the pinned mbedTLS -------------------------------------------
+# known-vulnerable <CVE> <first fixed version>: the vector must still show the vulnerable outcome.
+# The run stays usable as a regression gate, prints the CVE on a line of its own before the
+# final one, and fails once mbedTLS behaves correctly, so the line is removed with the bump.
+# CRYPTO_STRICT=1 counts these vectors as failures, so the run is red on them.
+# None for mbedTLS 4.1.1: CVE-2026-49300 (3.6.0's line) no longer shows; 4.1.1's ChangeLog lists
+# its fix (ChangeLog:72-77), and x509/cve-2026-49300.json's cases now get their own verdict.

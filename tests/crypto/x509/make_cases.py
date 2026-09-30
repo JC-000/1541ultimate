@@ -26,14 +26,21 @@ the root in a bundle ("bundle"): a SHA-1 signature under the root, an expired ro
 root. The bundle keeps only a root's name and key, and its callback clears the flags once that
 key verifies the signature below it.
 
+cross-signed.json: a server that sends a cross-signed root as its top certificate (the new
+root's name and key, issued by an old root), with only the new root in the trust store; the
+case ESP-IDF 6's CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY is for. Controls: the
+old root trusted instead, and the new root's name with another key.
+
 The keys are made fresh and thrown away; only the certificates are written. Needs the
-"cryptography" package; conformance.py only reads the JSON.
+"cryptography" package; conformance.py only reads the JSON. With file names as arguments, only
+those files are written (the others would change with every run, their keys being new).
 """
 
 import ipaddress
 import datetime
 import json
 import os
+import sys
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -168,6 +175,8 @@ def case(case_id, description, root, intermediates, leaf, peer_name, result, **e
 
 
 def write(filename, cases):
+    if sys.argv[1:] and filename not in sys.argv[1:]:
+        return
     with open(os.path.join(HERE, filename), "w") as f:
         json.dump({"version": 1, "testcases": cases}, f, indent=1)
         f.write("\n")
@@ -684,6 +693,45 @@ def main():
                 )
             )
     write("bundle.json", cases)
+
+    # A cross-signed root sent as the top certificate: leaf <- ICA <- new root, and the new root
+    # (same name, same key) also issued by an old root, which the server sends instead
+    old_key, new_key, ica_key = p256(), p256(), p256()
+    old_root = cert("cross root old", old_key, "cross root old", old_key, CA)
+    new_root = cert("cross root new", new_key, "cross root new", new_key, CA)
+    new_by_old = cert("cross root new", new_key, "cross root old", old_key, CA)
+    impostor = cert("cross root new", p256(), "cross root new", p256(), CA)
+    ica = cert("cross ICA", ica_key, "cross root new", new_key, CA)
+    leaf = cert("victim.example", p256(), "cross ICA", ica_key, server("victim.example"))
+    chains = {
+        "top-cross-signed": (
+            "leaf, ICA, new root issued by the old root; the new root trusted",
+            new_root,
+            "SUCCESS",
+        ),
+        "top-cross-signed-old-root": ("the same chain; the old root trusted", old_root, "SUCCESS"),
+        "top-cross-signed-name-only": (
+            "the same chain; the new root's name with another key trusted",
+            impostor,
+            "FAILURE",
+        ),
+    }
+    cases = []
+    for tag, (description, root_cert, result) in chains.items():
+        for mode in ("ca", "bundle"):
+            cases.append(
+                case(
+                    "cross::%s::%s" % (tag, mode),
+                    description,
+                    root_cert,
+                    [ica, new_by_old],
+                    leaf,
+                    "victim.example",
+                    result,
+                    mode=mode,
+                )
+            )
+    write("cross-signed.json", cases)
 
 
 if __name__ == "__main__":

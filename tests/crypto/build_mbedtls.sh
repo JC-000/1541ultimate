@@ -18,11 +18,25 @@
 # Nothing in the fetched sources is changed.
 #
 # Leaves in <outdir>: config/mbedtls_host.h (includes the configuration used; the derived one is
-# config/mbedtls_esp32_host.h), build/ (a CMake build tree whose library/ holds libmbedcrypto.a,
-# libmbedx509.a and libmbedtls.a) and src -> the sources. The last line printed is
-# "MBEDTLS_BUILD_OK <outdir> <commit>".
+# config/mbedtls_esp32_host.h), build/ (a CMake build tree whose library/ holds libmbedx509.a,
+# libmbedtls.a and the crypto library: libmbedcrypto.a in 3.x, libtfpsacrypto.a in 4.x), src ->
+# the sources, and harness.flags / harness.libs (one compiler argument per line: what a program
+# using the build needs). The last line printed is "MBEDTLS_BUILD_OK <outdir> <commit>".
 #
-# The derived list of MBEDTLS_ macros, before any replacement, must equal esp32_macros.txt.
+# The derived list of MBEDTLS_ macros, before any replacement, must equal esp32_macros.txt (3.x)
+# or esp32_macros.<major>.txt: each major has its own baseline.
+#
+# mbedTLS 4 (ESP-IDF 6) splits the configuration: TF-PSA-Crypto's psa/crypto_config.h holds the
+# crypto defaults, and ESP-IDF names esp_config.h both as MBEDTLS_CONFIG_FILE and as
+# TF_PSA_CRYPTO_USER_CONFIG_FILE (components/mbedtls/CMakeLists.txt), so every translation unit
+# reads crypto_config.h, then esp_config.h. The derived list is what that leaves defined: the
+# MBEDTLS_, PSA_WANT_ and TF_PSA_CRYPTO_ macros. Espressif's mbedTLS 4 tree does not build on its
+# own: it leaves out the test framework submodule (TF-PSA-Crypto carries the same one) and the
+# generated test headers, and includes "mbedtls/bignum.h" and "mbedtls/ecp.h", which ESP-IDF's
+# port/include provides. src is then a directory of links to the fetched tree plus a copy of
+# tf-psa-crypto/framework at framework/ (where upstream has it), the two headers come from
+# ESP-IDF at ESP_IDF_COMMIT, and the test headers are generated with the framework's own scripts
+# (they need Jinja2, as mbedTLS's scripts/driver.requirements.txt says).
 #
 # CRYPTO_PINS names a different pin file, CRYPTO_SDKCONFIG a different sdkconfig (a candidate
 # release's, regenerated with its kconfgen), CRYPTO_MACROS a different macro list to match,
@@ -35,7 +49,6 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 SDKCONFIG=${CRYPTO_SDKCONFIG:-$REPO/software/wifi/raw_u64/sdkconfig}
 PINS=${CRYPTO_PINS:-$HERE/PINS}
-MACROS=${CRYPTO_MACROS:-$HERE/esp32_macros.txt}
 CACHE=${CRYPTO_CACHE:-$HOME/.cache/1541u-build/crypto}
 
 [ $# -eq 1 ] || [ $# -eq 2 ] || { echo "usage: $0 <outdir> [<mbedtls config header>]" >&2; exit 2; }
@@ -112,7 +125,25 @@ fi
 
 SRC=$CACHE/mbedtls-$MBEDTLS_COMMIT
 fetch "$MBEDTLS_REPO" "$MBEDTLS_COMMIT" "$SRC"
-ln -sfn "$SRC" "$OUT/src"
+MAJOR=$(sed -n 's/^#define MBEDTLS_VERSION_MAJOR *\([0-9]*\)$/\1/p' "$SRC/include/mbedtls/build_info.h")
+case $MAJOR in
+    3) MACROS=${CRYPTO_MACROS:-$HERE/esp32_macros.txt};;
+    4) MACROS=${CRYPTO_MACROS:-$HERE/esp32_macros.4.txt};;
+    *) echo "mbedTLS major version '$MAJOR' is not supported" >&2; exit 1;;
+esac
+rm -rf "$OUT/src"
+if [ "$MAJOR" = 3 ]; then
+    ln -s "$SRC" "$OUT/src"
+else
+    # The tree as upstream lays it out: framework/ at the top (the same tree as TF-PSA-Crypto's,
+    # which upstream pins to the same framework commit), everything else linked, nothing changed.
+    # A copy, not a link: the framework's scripts find the project from where they are.
+    mkdir "$OUT/src"
+    for e in "$SRC"/* "$SRC"/.[!.]*; do
+        ln -s "$e" "$OUT/src/"
+    done
+    cp -R "$SRC/tf-psa-crypto/framework" "$OUT/src/framework"
+fi
 
 # derive_esp32_config: writes $CFG/mbedtls_esp32_host.h from the sdkconfig, and sets HDR.
 derive_esp32_config() {
@@ -146,9 +177,19 @@ derive_esp32_config() {
     # macros are wanted here, and that allocator is replaced below.
     : > "$CFG/esp_mem.h"
 
-    # Every MBEDTLS_ macro esp_config.h defines for this sdkconfig, include guards aside.
-    cc -E -dM -I "$CFG" -I "$SRC/include" "$CFG/mbedtls/esp_config.h" |
-        awk '$1 == "#define" && $2 ~ /^MBEDTLS_/ && $2 !~ /_H$/' | sort > "$CFG/esp_macros.txt"
+    if [ "$MAJOR" = 3 ]; then
+        # Every MBEDTLS_ macro esp_config.h defines for this sdkconfig, include guards aside.
+        cc -E -dM -I "$CFG" -I "$SRC/include" "$CFG/mbedtls/esp_config.h" |
+            awk '$1 == "#define" && $2 ~ /^MBEDTLS_/ && $2 !~ /_H$/' | sort > "$CFG/esp_macros.txt"
+    else
+        # crypto_config.h, then esp_config.h, as tf-psa-crypto/build_info.h reads them; ESP-IDF
+        # defines MBEDTLS_MAJOR_VERSION=4 for every mbedTLS target, which esp_config.h tests
+        printf '#include "psa/crypto_config.h"\n#include "mbedtls/esp_config.h"\n' > "$CFG/raw_config.c"
+        cc -E -dM -DMBEDTLS_MAJOR_VERSION="$MAJOR" -I "$CFG" -I "$SRC/tf-psa-crypto/include" -I "$SRC/include" \
+            "$CFG/raw_config.c" |
+            awk '$1 == "#define" && $2 ~ /^(MBEDTLS_|PSA_WANT_|TF_PSA_CRYPTO_)/ && $2 != "MBEDTLS_MAJOR_VERSION" &&
+                 $2 !~ /_H$/' | sort > "$CFG/esp_macros.txt"
+    fi
     # The whole list must match the committed one, so an option that appears or disappears (a
     # new Kconfig default, a renamed macro) is seen and explained in the commit that updates it
     if ! diff -u "$MACROS" "$CFG/esp_macros.txt" > "$CFG/esp_macros.diff"; then
@@ -162,11 +203,17 @@ derive_esp32_config() {
     # implementation (ESP32 AES/SHA/MPI hardware, ROM MD5, the hardware RNG); its _FALLBACK
     # companions only exist with it. The allocator is ESP-IDF's heap_caps one. Without the hardware
     # RNG the host takes its entropy from the OS. AES-NI and VIA Padlock are x86 host instructions
-    # the ESP32 does not have: the host runs the same portable C code the fallback paths use.
+    # the ESP32 does not have: the host runs the same portable C code the fallback paths use. In
+    # 4.x the ESP32's hardware is reached through PSA drivers (MBEDTLS_PSA_ACCEL_), and its RNG as
+    # the PSA entropy driver; the host takes crypto_config.h's built-in code and OS entropy.
     replace() {
         case $1 in
             *_ALT|*_ALT_FALLBACK|*_ALT_SOFT_FALLBACK|MBEDTLS_GCM_NON_AES_CIPHER_SOFT_FALLBACK)
                 echo "ESP32 platform implementation -> mbedTLS software implementation";;
+            MBEDTLS_PSA_ACCEL_*)
+                echo "ESP32 PSA driver -> mbedTLS built-in implementation";;
+            MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG|MBEDTLS_PSA_DRIVER_GET_ENTROPY)
+                echo "ESP32 hardware RNG (PSA entropy driver) -> host OS entropy source (MBEDTLS_PSA_BUILTIN_GET_ENTROPY)";;
             MBEDTLS_PLATFORM_STD_CALLOC|MBEDTLS_PLATFORM_STD_FREE)
                 echo "ESP-IDF allocator ($2) -> libc calloc/free";;
             MBEDTLS_NO_PLATFORM_ENTROPY)
@@ -187,18 +234,26 @@ derive_esp32_config() {
     echo "target $TARGET, esp_config.h sha256 $(shasum -a 256 < "$CFG/mbedtls/esp_config.h" | cut -d' ' -f1)"
     kept=0
     replaced=0
+    entropy=0
     : > "$CFG/replaced.txt"
     while read -r _ name value; do
         if why=$(replace "$name" "$value"); then
             echo "REPLACED $name${value:+ $value}: $why"
             replaced=$((replaced + 1))
             # the device's own implementations, which no host run tests
-            case $name in *_ALT|*_ALT_FALLBACK|*_ALT_SOFT_FALLBACK) echo "${name#MBEDTLS_}" >> "$CFG/replaced.txt";; esac
+            case $name in
+                *_ALT|*_ALT_FALLBACK|*_ALT_SOFT_FALLBACK|MBEDTLS_PSA_ACCEL_*) echo "${name#MBEDTLS_}" >> "$CFG/replaced.txt";;
+                MBEDTLS_PSA_DRIVER_GET_ENTROPY) entropy=1;;
+            esac
         else
             echo "#define $name${value:+ $value}" >> "$HDR"
             kept=$((kept + 1))
         fi
     done < "$CFG/esp_macros.txt"
+    if [ "$entropy" = 1 ]; then
+        # crypto_config.h's default, which esp_config.h undefines for its entropy driver
+        echo "#define MBEDTLS_PSA_BUILTIN_GET_ENTROPY" >> "$HDR"
+    fi
     echo "config: $kept options kept, $replaced replaced -> $HDR"
     # Nothing ESP-IDF may be left for the host build to trip over
     if grep -Eq '^#define .*(esp_|ESP_)' "$HDR"; then
@@ -218,7 +273,17 @@ if [ -n "$GIVEN" ]; then
 else
     derive_esp32_config
 fi
-echo "#include \"$HDR\"" > "$CFG/mbedtls_host.h"
+if [ "$MAJOR" = 3 ]; then
+    echo "#include \"$HDR\"" > "$CFG/mbedtls_host.h"
+else
+    # Read twice in 4.x: as TF-PSA-Crypto's configuration and as mbedTLS's
+    printf '#ifndef MBEDTLS_HOST_H\n#define MBEDTLS_HOST_H\n#include "%s"\n#endif\n' "$HDR" > "$CFG/mbedtls_host.h"
+    # What ESP-IDF's port/include adds to Espressif's tree (see the top)
+    mkdir -p "$CFG/port/mbedtls"
+    for h in bignum.h ecp.h; do
+        idf_file "components/mbedtls/port/include/mbedtls/$h" > "$CFG/port/mbedtls/$h"
+    done
+fi
 
 # The engine's other way to verify: ESP-IDF's certificate bundle, with the certificates the
 # image's bundle is made from (CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL) and the bundle
@@ -233,15 +298,52 @@ done
 
 BUILD=$OUT/build
 # Later 3.6.x releases link framework/data_files into the build tree without creating its parent
-mkdir -p "$BUILD/framework"
-cmake -S "$SRC" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DMBEDTLS_CONFIG_FILE="$CFG/mbedtls_host.h" \
-      -DCMAKE_C_FLAGS="${CRYPTO_CFLAGS:-}" \
-      -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=ON -DGEN_FILES=OFF \
-      -DMBEDTLS_FATAL_WARNINGS=OFF -Wno-dev > "$OUT/cmake.log" 2>&1 ||
-    { cat "$OUT/cmake.log" >&2; exit 1; }
-cmake --build "$BUILD" --target mbedcrypto mbedx509 mbedtls -j "$(sysctl -n hw.ncpu 2>/dev/null || nproc)" \
+mkdir -p "$BUILD/framework" "$BUILD/tf-psa-crypto/framework"
+{
+    echo "-I$CFG"
+    echo "-I$OUT/src/include"
+    echo "-DMBEDTLS_CONFIG_FILE=\"mbedtls_host.h\""
+} > "$OUT/harness.flags"
+if [ "$MAJOR" = 3 ]; then
+    cmake -S "$SRC" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DMBEDTLS_CONFIG_FILE="$CFG/mbedtls_host.h" \
+          -DCMAKE_C_FLAGS="${CRYPTO_CFLAGS:-}" \
+          -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=ON -DGEN_FILES=OFF \
+          -DMBEDTLS_FATAL_WARNINGS=OFF -Wno-dev > "$OUT/cmake.log" 2>&1 ||
+        { cat "$OUT/cmake.log" >&2; exit 1; }
+    LIBS="mbedtls mbedx509 mbedcrypto"
+else
+    python3 -c 'import jinja2' 2> /dev/null ||
+        { echo "mbedTLS $MAJOR's test headers need python3 with Jinja2 (scripts/driver.requirements.txt)" >&2; exit 1; }
+    cmake -S "$OUT/src" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DMBEDTLS_FRAMEWORK_DIR="$OUT/src/framework" \
+          -DMBEDTLS_CONFIG_FILE="$CFG/mbedtls_host.h" -DTF_PSA_CRYPTO_CONFIG_FILE="$CFG/mbedtls_host.h" \
+          -DCMAKE_C_FLAGS="${CRYPTO_CFLAGS:-} -iquote $CFG/port -iquote $CFG" \
+          -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=ON -DGEN_FILES=OFF \
+          -DMBEDTLS_FATAL_WARNINGS=OFF -Wno-dev > "$OUT/cmake.log" 2>&1 ||
+        { cat "$OUT/cmake.log" >&2; exit 1; }
+    # The generated files a release archive carries and Espressif's tree does not, made by the
+    # framework's own scripts (tests/CMakeLists.txt runs the same ones with GEN_FILES=ON)
+    mkdir -p "$BUILD/tests/include/test" "$BUILD/tests/suites"
+    (cd "$OUT/src" &&
+        python3 framework/scripts/generate_test_keys.py --output "$BUILD/tests/include/test/test_keys.h" &&
+        python3 framework/scripts/generate_test_cert_macros.py --output "$BUILD/tests/include/test/test_certs.h" &&
+        python3 framework/scripts/generate_config_tests.py --directory "$BUILD/tests/suites") > "$OUT/gen.log" 2>&1 ||
+        { cat "$OUT/gen.log" >&2; exit 1; }
+    {
+        echo "-I$OUT/src/tf-psa-crypto/include"
+        echo "-I$OUT/src/tf-psa-crypto/drivers/builtin/include"
+        echo "-iquote"
+        echo "$CFG/port"
+        echo "-DTF_PSA_CRYPTO_CONFIG_FILE=\"mbedtls_host.h\""
+    } >> "$OUT/harness.flags"
+    LIBS="mbedtls mbedx509 tfpsacrypto"
+fi
+# shellcheck disable=SC2086
+cmake --build "$BUILD" $(for lib in $LIBS; do echo --target "$lib"; done) -j "$(sysctl -n hw.ncpu 2>/dev/null || nproc)" \
     > "$OUT/build.log" 2>&1 || { tail -40 "$OUT/build.log" >&2; exit 1; }
-for lib in mbedcrypto mbedx509 mbedtls; do
+: > "$OUT/harness.libs"
+for lib in $LIBS; do
     [ -f "$BUILD/library/lib$lib.a" ] || { echo "lib$lib.a was not built" >&2; exit 1; }
+    echo "$BUILD/library/lib$lib.a" >> "$OUT/harness.libs"
 done
+echo "mbedTLS major $MAJOR"
 echo "MBEDTLS_BUILD_OK $OUT $MBEDTLS_COMMIT"

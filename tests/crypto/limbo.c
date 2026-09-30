@@ -1,6 +1,7 @@
 /*
  * x509-limbo harness for mbedTLS: validates a server's chain with the calls the TLS 1.3 client
- * makes in ssl_tls13_validate_certificate() (library/ssl_tls13_generic.c):
+ * makes in ssl_tls13_validate_certificate() (library/ssl_tls13_generic.c; in 4.x
+ * mbedtls_ssl_verify_certificate(), library/ssl_tls.c):
  * mbedtls_x509_crt_verify_with_profile() on the chain from the Certificate message, with the
  * default certificate profile, the host name and the configured verify callback, and then the
  * leaf's keyUsage (digitalSignature) and extendedKeyUsage (serverAuth). That function is static,
@@ -12,7 +13,12 @@
  *   ca      the test CA as the CA chain, no verify callback, no CRL
  *   bundle  ESP-IDF's certificate bundle (esp_crt_bundle.c, built in from ESP_IDF_COMMIT): an
  *           empty CA chain and esp_crt_verify_callback(), with a bundle made from the case's
- *           trusted certificates the way gen_crt_bundle.py makes one
+ *           trusted certificates the way gen_crt_bundle.py makes one. With ESP-IDF 6 (mbedTLS 4)
+ *           the harness attaches the bundle to an SSL configuration with esp_crt_bundle_attach(),
+ *           as tls_engine.c does, and verifies with what that installed: with
+ *           CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY a CA callback that offers the
+ *           bundle entry named by each certificate's issuer as a trusted CA, else the dummy CA
+ *           chain; the verify callback in both cases.
  *
  * The order of the intermediates matters: mbedTLS only looks for a parent further down the
  * presented list (x509_crt.c:2400) and does not go back. limbo gives its intermediates as a set,
@@ -43,6 +49,10 @@
 #include "mbedtls/oid.h"
 #include "mbedtls/md.h"
 #include "esp_crt_bundle.h"
+#if MBEDTLS_VERSION_MAJOR >= 4
+#include "mbedtls/ssl.h"
+#include "psa/crypto.h"
+#endif
 
 // esp_crt_bundle.c defines it without declaring it in its header
 int esp_crt_verify_callback(void *buf, mbedtls_x509_crt *crt, int depth, uint32_t *flags);
@@ -91,7 +101,12 @@ static der_t unhex(const char *s)
 static int parse(mbedtls_x509_crt *chain, der_t d, int peer)
 {
     int ret = mbedtls_x509_crt_parse_der(chain, d.p, d.len);
-    if (peer && (ret == MBEDTLS_ERR_X509_UNKNOWN_SIG_ALG + MBEDTLS_ERR_OID_NOT_FOUND)) {
+#if MBEDTLS_VERSION_MAJOR >= 4
+    const int skipped = MBEDTLS_ERR_X509_UNKNOWN_OID; // the case ssl_tls13_parse_certificate() skips
+#else
+    const int skipped = MBEDTLS_ERR_X509_UNKNOWN_SIG_ALG + MBEDTLS_ERR_OID_NOT_FOUND;
+#endif
+    if (peer && (ret == skipped)) {
         ret = 0;
     }
     return ret;
@@ -129,9 +144,15 @@ static int issued(search_t *s, const mbedtls_x509_crt *parent, const mbedtls_x50
     if ((md == NULL) || (mbedtls_md(md, child->tbs.p, child->tbs.len, hash) != 0)) {
         return 0;
     }
+#if MBEDTLS_VERSION_MAJOR >= 4
+    return mbedtls_pk_verify_ext(child->MBEDTLS_PRIVATE(sig_pk), (mbedtls_pk_context *)&parent->pk, md_type, hash,
+                                 mbedtls_md_get_size(md), child->MBEDTLS_PRIVATE(sig).p,
+                                 child->MBEDTLS_PRIVATE(sig).len) == 0;
+#else
     return mbedtls_pk_verify_ext(child->MBEDTLS_PRIVATE(sig_pk), child->MBEDTLS_PRIVATE(sig_opts),
                                  (mbedtls_pk_context *)&parent->pk, md_type, hash, mbedtls_md_get_size(md),
                                  child->MBEDTLS_PRIVATE(sig).p, child->MBEDTLS_PRIVATE(sig).len) == 0;
+#endif
 }
 
 // Records every path from c[cur] through unused intermediates to a trusted certificate
@@ -220,7 +241,9 @@ static int server_orders(der_t leaf, der_t *inter, int n, const mbedtls_x509_crt
 
 // A bundle as gen_crt_bundle.py writes it: the number of certificates, then for each, sorted by
 // subject name DER: name length, key length (16 bits each, big-endian), the subject name DER and
-// the SubjectPublicKeyInfo DER
+// the SubjectPublicKeyInfo DER. ESP-IDF 6 (the only release with mbedTLS 4) writes the offset of
+// each certificate first (32 bits, little-endian, from the start of the bundle, in the same order)
+// instead of the number, and the lengths little-endian.
 static int cmp_name(const void *a, const void *b)
 {
     const mbedtls_x509_buf *x = &(*(mbedtls_x509_crt *const *)a)->subject_raw;
@@ -233,21 +256,37 @@ static unsigned char *make_bundle(mbedtls_x509_crt *list, size_t *size)
 {
     static mbedtls_x509_crt *sorted[MAX_CERTS];
     int n = 0;
-    *size = 2;
     for (mbedtls_x509_crt *c = list; c && c->raw.p && (n < MAX_CERTS); c = c->next) {
         sorted[n++] = c;
-        *size += 4 + c->subject_raw.len + c->pk_raw.len;
+    }
+#if MBEDTLS_VERSION_MAJOR >= 4
+    size_t head = 4 * (size_t)n;
+    int be = 0;
+#else
+    size_t head = 2;
+    int be = 1;
+#endif
+    *size = head;
+    for (int i = 0; i < n; i++) {
+        *size += 4 + sorted[i]->subject_raw.len + sorted[i]->pk_raw.len;
     }
     qsort(sorted, n, sizeof(sorted[0]), cmp_name);
-    unsigned char *b = malloc(*size), *p = b + 2;
-    b[0] = (unsigned char)(n >> 8);
-    b[1] = (unsigned char)n;
+    unsigned char *b = malloc(*size ? *size : 1), *p = b + head;
+    if (be) {
+        b[0] = (unsigned char)(n >> 8);
+        b[1] = (unsigned char)n;
+    }
     for (int i = 0; i < n; i++) {
-        size_t nl = sorted[i]->subject_raw.len, kl = sorted[i]->pk_raw.len;
-        p[0] = (unsigned char)(nl >> 8);
-        p[1] = (unsigned char)nl;
-        p[2] = (unsigned char)(kl >> 8);
-        p[3] = (unsigned char)kl;
+        size_t nl = sorted[i]->subject_raw.len, kl = sorted[i]->pk_raw.len, off = (size_t)(p - b);
+        if (!be) {
+            for (int j = 0; j < 4; j++) {
+                b[4 * i + j] = (unsigned char)(off >> (8 * j));
+            }
+        }
+        p[be ? 1 : 0] = (unsigned char)nl;
+        p[be ? 0 : 1] = (unsigned char)(nl >> 8);
+        p[be ? 3 : 2] = (unsigned char)kl;
+        p[be ? 2 : 3] = (unsigned char)(kl >> 8);
         memcpy(p + 4, sorted[i]->subject_raw.p, nl);
         memcpy(p + 4 + nl, sorted[i]->pk_raw.p, kl);
         p += 4 + nl + kl;
@@ -273,9 +312,36 @@ static int verify(der_t leaf, der_t *inter, const int *order, int n, mbedtls_x50
         ret = -2; // every entry skipped: the client has no peer certificate and aborts
     } else if (ret == 0) {
         char *name = strdup(host); // in a buffer of its own, as above
+#if MBEDTLS_VERSION_MAJOR >= 4
+        // What esp_crt_bundle_attach() installs on the engine's configuration, used the way
+        // mbedtls_ssl_verify_certificate() uses it
+        mbedtls_ssl_config conf;
+        mbedtls_ssl_config_init(&conf);
+        if (bundle) {
+            esp_crt_bundle_attach(&conf);
+        } else {
+            mbedtls_ssl_conf_ca_chain(&conf, trusted, NULL);
+        }
+#if defined(MBEDTLS_X509_TRUSTED_CERTIFICATE_CALLBACK)
+        if (conf.MBEDTLS_PRIVATE(f_ca_cb) != NULL) {
+            ret = mbedtls_x509_crt_verify_with_ca_cb(&chain, conf.MBEDTLS_PRIVATE(f_ca_cb),
+                                                     conf.MBEDTLS_PRIVATE(p_ca_cb), &mbedtls_x509_crt_profile_default,
+                                                     name, flags, conf.MBEDTLS_PRIVATE(f_vrfy),
+                                                     conf.MBEDTLS_PRIVATE(p_vrfy));
+        } else
+#endif
+        {
+            ret = mbedtls_x509_crt_verify_with_profile(&chain, conf.MBEDTLS_PRIVATE(ca_chain), NULL,
+                                                       &mbedtls_x509_crt_profile_default, name, flags,
+                                                       conf.MBEDTLS_PRIVATE(f_vrfy), conf.MBEDTLS_PRIVATE(p_vrfy));
+        }
+        mbedtls_ssl_config_free(&conf);
+        (void)empty;
+#else
         ret = mbedtls_x509_crt_verify_with_profile(&chain, bundle ? &empty : trusted, NULL,
                                                    &mbedtls_x509_crt_profile_default, name, flags,
                                                    bundle ? esp_crt_verify_callback : NULL, NULL);
+#endif
         free(name);
         if ((mbedtls_x509_crt_check_key_usage(&chain, MBEDTLS_X509_KU_DIGITAL_SIGNATURE) != 0) ||
             (mbedtls_x509_crt_check_extended_key_usage(&chain, MBEDTLS_OID_SERVER_AUTH,
@@ -426,6 +492,13 @@ static void run_line(char *line)
 
 int main(int argc, char **argv)
 {
+#if MBEDTLS_VERSION_MAJOR >= 4
+    // 4.x parses keys (and so certificates) with PSA; ESP-IDF initialises it at start-up
+    if (psa_crypto_init() != PSA_SUCCESS) {
+        fprintf(stderr, "psa_crypto_init failed\n");
+        return 1;
+    }
+#endif
     if ((argc > 2) && !strcmp(argv[1], "expired")) {
         validation_time = (time_t)strtoll(argv[2], NULL, 10);
         for (int i = 3; i < argc; i++) {
