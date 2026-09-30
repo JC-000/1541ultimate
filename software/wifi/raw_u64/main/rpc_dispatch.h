@@ -46,7 +46,8 @@ void send_keepalive();
 // 1.305 (dev): CROSS_SIGNED_VERIFY pinned (not default-tracked); the engine refuses to build with =n.
 // 1.306 (dev): M3 (M3-SPEC v1 section 5): sessions named by (slot, tag), trust modes BUNDLE/CUSTOM/PIN, TLS 1.2
 //              fallback, failure reasons, NO_READ, CLOSE_ALL and SET_CA; TLS runs on its own task.
-#define IDENT_MINOR   306
+// 1.308 (dev): M3 integration: 1.305 + 1.306, and mbedTLS accepts a HelloRetryRequest cookie.
+#define IDENT_MINOR   308
 #define MULTITHREADED 0
 #define DISPATCHER_STACK 3072 // upstream's value: TLS runs on its own task
 #define TLS_TASK_STACK   8192 // M3-SPEC 5.3: twice the dispatcher stack M2 measured in handshakes

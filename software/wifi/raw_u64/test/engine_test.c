@@ -1258,6 +1258,31 @@ static void alert_out_case(const char *ver)
 static void c_alert_out_12(void) { alert_out_case("ver=12"); }
 static void c_alert_out_13(void) { alert_out_case("ver=13"); }
 
+/* 1.7 a HelloRetryRequest with a cookie (RFC 8446 4.2.2), as OpenJDK's JSSE always sends: the second ClientHello
+   echoes it. Stock mbedTLS 4.1.1 refuses it (Mbed-TLS/mbedtls#9543) without patches/mbedtls-tls13-hrr-cookie.patch */
+static void c_hrr_cookie(void)
+{
+    uint8_t pin[32] = { 3 };
+    int fd = srv_start("raw:hrrcookie", NULL);
+    conn_t c;
+    memset(&c, 0, sizeof(c)); c.fd = fd; c.tag = 1;
+    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "m3.test").err == 0, "open");
+    for (int i = 0; i < 400 && c.state == HANDSHAKING && !log_has("RAW done"); i++) {
+        if (c.socklen == 0) gather(&c, 20, 5, sizeof(c.sock));
+        pump_step(&c, 0, NULL, 0);
+    }
+    close(fd);
+    srv_end(2000);
+    char sent[64] = "", echoed[64] = "none", share[64] = "none";
+    CHECK(c.state != FAILED, "the HelloRetryRequest with a cookie is accepted (state %d, reason %d, -0x%x, alert_out %d)",
+          c.state, c.r.fail_reason, -c.r.err, c.r.alert_out);
+    CHECK(log_line("HRR cookie ", sent, sizeof(sent)), "the server sent its cookie");
+    CHECK(log_line("CH2 cookie ", echoed, sizeof(echoed)) && !strcmp(echoed, sent),
+          "the second ClientHello echoes the cookie ('%s', sent '%s')", echoed, sent);
+    CHECK(log_line("CH2 key_share ", share, sizeof(share)) && !strcmp(share, "0017"), "the second key share is secp256r1 only ('%s')",
+          share);
+}
+
 /* 3.5 SNTP wins over the Nios's time, and SNTP alone is a clock (m3espadv, MEDIUM-1) */
 static void c_sntp_wins(void)
 {
@@ -1295,7 +1320,7 @@ static const tcase_t cases[] = {
     { "tag_rule", c_tag_rule, 1 }, { "step_flags", c_step_flags, 0 }, { "close_notify", c_close_notify, 1 },
     { "close_all", c_close_all, 0 }, { "fatal_alert", c_fatal_alert, 1 },
     { "heap_min", c_heap_min, 0 }, { "alert_out_12", c_alert_out_12, 1 }, { "alert_out_13", c_alert_out_13, 1 },
-    { "sntp_wins", c_sntp_wins, 0 },
+    { "sntp_wins", c_sntp_wins, 0 }, { "hrr_cookie", c_hrr_cookie, 1 },
 };
 
 int main(int argc, char **argv)

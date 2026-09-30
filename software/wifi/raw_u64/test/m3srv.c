@@ -30,6 +30,7 @@
  *   sh12suite  a TLS 1.2 ServerHello choosing a suite the client never offered (a CBC one mbedTLS still has)
  *   alert70    a plaintext fatal protocol_version alert
  *   cn         a plaintext close_notify warning alert
+ *   hrrcookie  a TLS 1.3 HelloRetryRequest for secp256r1 carrying a cookie, then the second ClientHello logged as CH2
  *
  * The test pattern: byte i of a direction's plaintext stream is (i * 31 + seed) & 0xFF, seed 7 from the
  * server and 11 from the client.
@@ -101,6 +102,96 @@ static void hexlist(const char *key, const uint8_t *p, int n, int width)
     printf("\n");
 }
 
+static uint8_t ch_session_id[32];
+static int ch_session_id_len;
+
+// Logs a ClientHello (the handshake message in rec) with lines that start with tag
+static int log_client_hello(const uint8_t *rec, const char *tag)
+{
+    const uint8_t *p = rec + 4, *end = rec + 4 + ((rec[1] << 16) | (rec[2] << 8) | rec[3]);
+    char key[32];
+    printf("%s legacy_version %02x%02x\n", tag, p[0], p[1]);
+    p += 2 + 32;
+    ch_session_id_len = p[0] <= 32 ? p[0] : 0;
+    memcpy(ch_session_id, p + 1, ch_session_id_len);
+    p += 1 + p[0];                                   // session id
+    int sl = (p[0] << 8) | p[1];
+    snprintf(key, sizeof(key), "%s suites", tag);
+    hexlist(key, p + 2, sl, 2);
+    p += 2 + sl;
+    p += 1 + p[0];                                   // compression methods
+    const uint8_t *ext = p + 2, *eend = p + 2 + ((p[0] << 8) | p[1]);
+    if (eend > end) {
+        return -1;
+    }
+    printf("%s ext", tag);
+    for (const uint8_t *e = ext; e + 4 <= eend; e += 4 + ((e[2] << 8) | e[3])) {
+        printf("%s%02x%02x", (e == ext) ? " " : ",", e[0], e[1]);
+    }
+    printf("\n");
+    for (const uint8_t *e = ext; e + 4 <= eend; e += 4 + ((e[2] << 8) | e[3])) {
+        int type = (e[0] << 8) | e[1], elen = (e[2] << 8) | e[3];
+        const uint8_t *d = e + 4;
+        if (type == 43) {
+            snprintf(key, sizeof(key), "%s versions", tag);
+            hexlist(key, d + 1, d[0], 2);
+        } else if (type == 10) {
+            snprintf(key, sizeof(key), "%s groups", tag);
+            hexlist(key, d + 2, (d[0] << 8) | d[1], 2);
+        } else if (type == 13) {
+            snprintf(key, sizeof(key), "%s sigalgs", tag);
+            hexlist(key, d + 2, (d[0] << 8) | d[1], 2);
+        } else if (type == 23) {
+            printf("%s ems len %d\n", tag, elen);
+        } else if (type == 35) {
+            printf("%s session_ticket len %d\n", tag, elen);
+        } else if (type == 0xff01) {
+            printf("%s renegotiation_info len %d\n", tag, elen);
+        } else if (type == 0) {
+            printf("%s sni %.*s\n", tag, elen - 5, (const char *)d + 5);
+        } else if (type == 44) {
+            printf("%s cookie ", tag);
+            for (int i = 0; i < ((d[0] << 8) | d[1]) && i + 2 < elen; i++) {
+                printf("%02x", d[2 + i]);
+            }
+            printf("\n");
+        } else if (type == 51) {
+            printf("%s key_share", tag);             // the groups of the client's shares
+            for (const uint8_t *k = d + 2; k + 4 <= d + 2 + ((d[0] << 8) | d[1]); k += 4 + ((k[2] << 8) | k[3])) {
+                printf("%s%02x%02x", (k == d + 2) ? " " : ",", k[0], k[1]);
+            }
+            printf("\n");
+        }
+    }
+    fflush(stdout);
+    return 0;
+}
+
+// Reads the next handshake record, skipping a middlebox-compatibility change_cipher_spec
+static int read_handshake_record(int fd, uint8_t *rec)
+{
+    uint8_t h[5];
+    for (;;) {
+        if (read_all(fd, h, 5) < 0) {
+            return -1;
+        }
+        int len = (h[3] << 8) | h[4];
+        if (read_all(fd, rec, len) < 0) {
+            return -1;
+        }
+        if (h[0] == 22) {
+            return len;
+        }
+        if (h[0] == 21 && len == 2) {
+            printf("RX alert %d %d\n", rec[0], rec[1]);
+            return -1;
+        }
+        if (h[0] != 20) {
+            return -1;
+        }
+    }
+}
+
 static int audit_client_hello(int fd)
 {
     static uint8_t rec[1 << 14];
@@ -112,44 +203,7 @@ static int audit_client_hello(int fd)
     if (h[0] != 22 || read_all(fd, rec, len) < 0) {
         return -1;
     }
-    const uint8_t *p = rec + 4, *end = rec + 4 + ((rec[1] << 16) | (rec[2] << 8) | rec[3]);
-    printf("CH legacy_version %02x%02x\n", p[0], p[1]);
-    p += 2 + 32;
-    p += 1 + p[0];                                   // session id
-    int sl = (p[0] << 8) | p[1];
-    hexlist("CH suites", p + 2, sl, 2);
-    p += 2 + sl;
-    p += 1 + p[0];                                   // compression methods
-    const uint8_t *ext = p + 2, *eend = p + 2 + ((p[0] << 8) | p[1]);
-    if (eend > end) {
-        return -1;
-    }
-    printf("CH ext");
-    for (const uint8_t *e = ext; e + 4 <= eend; e += 4 + ((e[2] << 8) | e[3])) {
-        printf("%s%02x%02x", (e == ext) ? " " : ",", e[0], e[1]);
-    }
-    printf("\n");
-    for (const uint8_t *e = ext; e + 4 <= eend; e += 4 + ((e[2] << 8) | e[3])) {
-        int type = (e[0] << 8) | e[1], elen = (e[2] << 8) | e[3];
-        const uint8_t *d = e + 4;
-        if (type == 43) {
-            hexlist("CH versions", d + 1, d[0], 2);
-        } else if (type == 10) {
-            hexlist("CH groups", d + 2, (d[0] << 8) | d[1], 2);
-        } else if (type == 13) {
-            hexlist("CH sigalgs", d + 2, (d[0] << 8) | d[1], 2);
-        } else if (type == 23) {
-            printf("CH ems len %d\n", elen);
-        } else if (type == 35) {
-            printf("CH session_ticket len %d\n", elen);
-        } else if (type == 0xff01) {
-            printf("CH renegotiation_info len %d\n", elen);
-        } else if (type == 0) {
-            printf("CH sni %.*s\n", elen - 5, (const char *)d + 5);
-        }
-    }
-    fflush(stdout);
-    return 0;
+    return log_client_hello(rec, "CH");
 }
 
 static void send_server_hello(int fd, uint16_t version, int sentinel, uint16_t suite)
@@ -176,11 +230,61 @@ static void send_server_hello(int fd, uint16_t version, int sentinel, uint16_t s
     send(fd, m, p - m, 0);
 }
 
+// A TLS 1.3 HelloRetryRequest for secp256r1 with a 16-byte cookie (RFC 8446 4.1.4, 4.2.2)
+static const uint8_t hrr_cookie[16] = { 0xC0, 0x0C, 0x1E, 0x01, 0x02, 0x03, 0x04, 0x05,
+                                        0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D };
+static void send_hello_retry_request(int fd)
+{
+    static const uint8_t hrr_random[32] = { 0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02,
+                                            0x1E, 0x65, 0xB8, 0x91, 0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E,
+                                            0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C };
+    uint8_t m[160], *p = m + 9, *ext;
+    *p++ = 0x03;
+    *p++ = 0x03;
+    memcpy(p, hrr_random, 32);
+    p += 32;
+    *p++ = (uint8_t)ch_session_id_len;
+    memcpy(p, ch_session_id, ch_session_id_len);
+    p += ch_session_id_len;
+    *p++ = 0x13;                                     // TLS_AES_128_GCM_SHA256
+    *p++ = 0x01;
+    *p++ = 0;                                        // compression
+    ext = p;
+    p += 2;
+    static const uint8_t fixed[] = { 0x00, 0x2B, 0x00, 0x02, 0x03, 0x04,   // supported_versions: TLS 1.3
+                                     0x00, 0x33, 0x00, 0x02, 0x00, 0x17,   // key_share: selected_group secp256r1
+                                     0x00, 0x2C, 0x00, 0x12, 0x00, 0x10 }; // cookie: 16 bytes
+    memcpy(p, fixed, sizeof(fixed));
+    p += sizeof(fixed);
+    memcpy(p, hrr_cookie, sizeof(hrr_cookie));
+    p += sizeof(hrr_cookie);
+    ext[0] = (uint8_t)((p - ext - 2) >> 8);
+    ext[1] = (uint8_t)(p - ext - 2);
+    int body = (int)(p - m) - 9;
+    m[0] = 22; m[1] = 3; m[2] = 3; m[3] = (body + 4) >> 8; m[4] = (body + 4) & 0xFF;
+    m[5] = 2; m[6] = 0; m[7] = body >> 8; m[8] = body & 0xFF;
+    send(fd, m, p - m, 0);
+    printf("HRR cookie ");
+    for (unsigned i = 0; i < sizeof(hrr_cookie); i++) {
+        printf("%02x", hrr_cookie[i]);
+    }
+    printf("\n");
+}
+
 static int raw_mode(int fd, const char *what)
 {
     if (audit_client_hello(fd) < 0) {
         printf("CH unreadable\n");
         return 1;
+    }
+    if (!strcmp(what, "hrrcookie")) {
+        static uint8_t rec[1 << 14];
+        send_hello_retry_request(fd);
+        if (read_handshake_record(fd, rec) < 0 || rec[0] != 1 || log_client_hello(rec, "CH2") < 0) {
+            printf("CH2 none\n");
+        }
+        printf("RAW done\n");
+        return 0;
     }
     if (!strcmp(what, "sh12")) {
         send_server_hello(fd, 0x0303, 0, 0xC02B);
