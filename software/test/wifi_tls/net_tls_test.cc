@@ -343,6 +343,7 @@ static void test_open(void)
     check(world_dns_calls == 1 && world_dns_unlocked_calls == 0, "open: dns_gethostbyname under the core lock (1.1 DNS)");
     if (h >= 0 && h < 16) {
         check(sock(h).nodelay, "open: TCP_NODELAY on the TLS socket (4.3)");
+        check(sock(h).sndtimeo_ms == 500, "open: SO_SNDTIMEO 500 ms caps lwIP's close (OI-3; %d)", sock(h).sndtimeo_ms);
         check(sock(h).nonblocking, "open: the TLS socket is non-blocking (4.3 SEND_MS)");
         check(sock(h).srv.hellos == 1, "open: the server saw one ClientHello");
     }
@@ -744,7 +745,7 @@ static bytes start_cmd(int h, uint8_t trust, uint8_t flags, const std::string &t
 static void expect_kept(int h, const bytes &cmd, const char *want, const char *what)
 {
     Res r = run(cmd);
-    bool untouched = sock(h).open && !sock(h).nodelay && !sock(h).nonblocking;
+    bool untouched = sock(h).open && !sock(h).nodelay && !sock(h).nonblocking && !sock(h).sndtimeo_ms;
     check(r.status == want && r.data.empty() && untouched, "start: %s -> %s, TCP handle unchanged (got %s)", what,
           want, r.status.c_str());
 }
@@ -757,6 +758,7 @@ static void test_start_tls(void)
     Res u = run(B({ 0x03, 0x08, 0x35, 0x00, 'n', 's' }));
     int udp = u.data.empty() ? -1 : u.data[0];
     check(t >= 0 && udp >= 0, "start: a TCP and a UDP handle to work with");
+    check(!sock(t).sndtimeo_ms && !sock(t).nodelay, "start: OPEN_TCP's socket gets neither (OI-3: TLS sockets only)");
     Res r = run(start_cmd(udp, 2, 0, "", PIN()));
     check(r.status == "81,INVALID PARAMS" && sock(udp).open, "start: on a UDP handle -> 81, UDP untouched");
     r = run(start_cmd(12, 2, 0, "", PIN()));
@@ -795,7 +797,8 @@ static void test_start_tls(void)
     r = run(start_cmd(t, 2, 0, std::string("\0", 1), PIN()));
     check(r.status == "00,OK" && r.data.size() == 8 && r.data[0] == t, "start: PIN, a lone $00 -> OK, the same handle");
     check(last_sni() == "", "start: no name -> no SNI (L-e)");
-    check(sock(t).nodelay && sock(t).nonblocking, "start: TCP_NODELAY once steps 1-5 passed");
+    check(sock(t).nodelay && sock(t).nonblocking && (sock(t).sndtimeo_ms == 500),
+          "start: TCP_NODELAY and SO_SNDTIMEO 500 ms once steps 1-5 passed");
     r = run(start_cmd(t, 2, 0, "", PIN()));
     check(r.status == "81,INVALID PARAMS" && sock(t).open, "start: on a TLS handle -> 81, session untouched");
     check(info(t).data.size() == 48, "start: the handle is a TLS handle now");

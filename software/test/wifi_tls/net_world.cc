@@ -339,6 +339,10 @@ int lwip_setsockopt(int s, int level, int optname, const void *optval, socklen_t
     if ((level == SOL_SOCKET) && (optname == SO_RCVTIMEO)) {
         world_socks[s].rcvtimeo_set = true;
     }
+    if ((level == SOL_SOCKET) && (optname == SO_SNDTIMEO)) {
+        const struct timeval *tv = (const struct timeval *)optval;
+        world_socks[s].sndtimeo_ms = tv->tv_sec * 1000 + tv->tv_usec / 1000;
+    }
     return 0;
 }
 

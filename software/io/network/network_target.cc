@@ -74,6 +74,8 @@ Message c_status_tls_no_notify     = TLS_MESSAGE("05,TLS CLOSED WITHOUT NOTIFY")
 #define TLS_UNSENT_RETRIES    10
 #define TLS_UNSENT_DELAY_MS   50
 #define TLS_SLICE_MS          100  // the longest any wait goes without looking at a reset
+#define TLS_SNDTIMEO_MS       500  // OI-3: caps lwIP's close when it cannot get memory for the FIN
+                                   // (api_msg.c:1034-1037, else 20 s); our sends are MSG_DONTWAIT
 #define TLS_EARLIEST_TIME     1735689600u // 2025-01-01: an SNTP time before this is not one
 
 #define CA_EMPTY     0
@@ -1194,6 +1196,22 @@ int NetworkTarget :: tls_connect(int sock, uint32_t address, uint16_t port, uint
     return 0;
 }
 
+// What every TLS socket gets (4.3): non-blocking, TCP_NODELAY, and a send
+// timeout, which lwIP's close also takes as its bound when it runs out of
+// memory for the FIN (OI-3). OPEN_TLS sets them on its new socket; START_TLS
+// only once steps 1-5 have passed, so that a kept code leaves the socket as
+// it was.
+static void tls_socket_options(int sock)
+{
+    int on = 1;
+    lwip_ioctl(sock, FIONBIO, &on);
+    lwip_setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = TLS_SNDTIMEO_MS * 1000;
+    lwip_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+}
+
 // Steps 2 to 5 of the refusal order (1.1): the module, the table, the CA, and
 // the OPEN RPC, which starts a session on the module under (slot, tag). keep
 // says whether START_TLS leaves the TCP socket as it was. NULL once the module
@@ -1531,9 +1549,7 @@ void NetworkTarget :: open_tls(Message *command, Message **reply, Message **stat
         tls_abandon(e);
         return;
     }
-    int on = 1;
-    lwip_ioctl(sock, FIONBIO, &on);
-    lwip_setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    tls_socket_options(sock);
     result = tls_connect(sock, address, port, earlier(tick_after(TLS_CONNECT_MS), total));
     if (result) {
         lwip_close(sock);
@@ -1624,9 +1640,7 @@ void NetworkTarget :: start_tls(Message *command, Message **reply, Message **sta
     }
     if (!failure) {
         // Only now, so that a kept code leaves the socket truly unchanged.
-        int on = 1;
-        lwip_ioctl(sock, FIONBIO, &on);
-        lwip_setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+        tls_socket_options(sock);
         e->socketnr = sock;
         failure = tls_handshake(e, total);
     }

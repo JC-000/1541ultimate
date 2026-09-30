@@ -72,6 +72,7 @@ struct FakeSock {
     bool nonblocking;
     bool nodelay;
     bool rcvtimeo_set;
+    int sndtimeo_ms;       // 0 when never set
     bool connected;
     uint32_t connect_at;   // a non-blocking connect completes at this tick; 0 before it started
     uint32_t connect_addr; // where to, network order
