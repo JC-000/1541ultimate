@@ -1,7 +1,8 @@
 set(EXTERNAL "../../../io/uart")
 # The bridge offers X25519MLKEM768 first (M4). Without esp-pqc (IDF_COMPONENT_MANAGER=0, or the dependency not
 # resolved) the option does not exist, and the image would silently be classical-only under the same IDENT.
-if(NOT CONFIG_MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768)
+# Not in IDF's early requirements pass, which runs this file before esp-pqc's Kconfig options are known.
+if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT CONFIG_MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768)
     message(FATAL_ERROR "X25519MLKEM768 is off, or esp-pqc (main/idf_component.yml) is missing: the bridge "
                         "offers it first. Build with the component manager on and restore the committed sdkconfig")
 endif()
