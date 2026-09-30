@@ -147,8 +147,8 @@ typedef struct {
 
 //----------------------------------
 // TLS sessions (M3-SPEC v1 section 5.2): the ESP32 runs the TLS engine, the Ultimate moves the ciphertext.
-// The Ultimate names every session by (slot, tag). Fixed fields first, variable data last. Layouts are
-// asserted in rpc_dispatch.c, and on the Ultimate's side against its own copy.
+// The Ultimate names every session by (slot, tag). Fixed fields first, variable data last. Both sides use
+// these definitions; the layouts are asserted against the spec's numbers in rpc_dispatch.c and wifi_tls.cc.
 #define TLS_MAX_SESSIONS   2
 #define TLS_SNI_MAX_LEN    253  // longest DNS name
 #define TLS_STEP_IN_MAX    1536 // ct_in_len + pt_in_len per step
