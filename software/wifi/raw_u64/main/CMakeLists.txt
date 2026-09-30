@@ -1,4 +1,10 @@
 set(EXTERNAL "../../../io/uart")
+# The bridge offers X25519MLKEM768 first (M4). Without esp-pqc (IDF_COMPONENT_MANAGER=0, or the dependency not
+# resolved) the option does not exist, and the image would silently be classical-only under the same IDENT.
+if(NOT CONFIG_MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768)
+    message(FATAL_ERROR "X25519MLKEM768 is off, or esp-pqc (main/idf_component.yml) is missing: the bridge "
+                        "offers it first. Build with the component manager on and restore the committed sdkconfig")
+endif()
 # esp-pqc builds its mbedTLS fork but leaves IDF's stock mbedTLS headers first on the include path. Code that
 # includes the stock library/ssl_misc.h then sees a handshake struct without the fork's 2,400-byte mlkem_sk
 # and reads members after it at the wrong offset. These two options compile such code in.

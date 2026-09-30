@@ -38,11 +38,10 @@
 // esp-pqc's fork defines MBEDTLS_SSL_IANA_TLS_GROUP_X25519MLKEM768, but app code compiles against IDF's stock
 // ssl.h (it comes first on the include path), so the IANA value is spelled out here
 #define TLS_GROUP_X25519MLKEM768 0x11EC
-// esp-pqc turns the group on with a compile definition it adds to the mbedTLS targets: without it here,
-// the image would silently offer no PQC although the option is set
-#if CONFIG_MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768 && \
-    !defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768)
-#error "X25519MLKEM768 is on in sdkconfig, but esp-pqc's define did not reach this file"
+// esp-pqc turns the group on with a compile definition it adds to the mbedTLS targets. Without it here (the
+// option off, esp-pqc missing, or the define lost) the image would silently offer no PQC
+#if !defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768)
+#error "esp-pqc's define MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768 did not reach this file"
 #endif
 #if MBEDTLS_VERSION_MAJOR < 4
 #error "This engine is written for mbedTLS 4 (ESP-IDF 6): randomness and allocation failures come from PSA"
@@ -254,10 +253,7 @@ static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const c
         // With esp-pqc, the hybrid X25519MLKEM768 goes first (M4 policy (a)). mbedTLS sends a key share
         // for the first group only, so a server without it answers with a HelloRetryRequest for one of
         // the classical groups after it.
-        static const uint16_t groups[] = {
-#if defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768)
-                                           TLS_GROUP_X25519MLKEM768,
-#endif
+        static const uint16_t groups[] = { TLS_GROUP_X25519MLKEM768,
                                            MBEDTLS_SSL_IANA_TLS_GROUP_X25519, MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
                                            MBEDTLS_SSL_IANA_TLS_GROUP_SECP384R1, MBEDTLS_SSL_IANA_TLS_GROUP_SECP521R1,
                                            MBEDTLS_SSL_IANA_TLS_GROUP_NONE };
