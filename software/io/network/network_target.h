@@ -89,7 +89,6 @@ struct TlsSocket {
     uint16_t tag;            // with slot, names the session on the module
     bool failed;             // sticky: every READ and WRITE answers `sticky` until CLOSE
     char sticky[NET_TLS_STICKY_MAX];
-    uint32_t generation;     // of the module at OPEN; a change means the session is gone
     bool claimed;            // any network command but $23 $FF and $25 claims every entry
     bool module_live;        // false once the module freed the session: CLOSE sends no RPC
     int rx_err;              // the first receive error, latched; 0 = none, no receive after it

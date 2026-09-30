@@ -1576,7 +1576,6 @@ void NetworkTarget :: open_tls(Message *command, Message **reply, Message **stat
     }
     e->used = true;
     e->claimed = false;
-    e->generation = wifi_tls_generation();
     tls_reply_open(e, reply);
     *status = &c_status_ok;
 }
@@ -1657,7 +1656,6 @@ void NetworkTarget :: start_tls(Message *command, Message **reply, Message **sta
     }
     e->used = true;
     e->claimed = false;
-    e->generation = wifi_tls_generation();
     tls_reply_open(e, reply);
     *status = &c_status_ok;
 }
