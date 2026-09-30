@@ -255,10 +255,10 @@ static void test_info(void)
     check(r.status == "00,OK" && r.data.size() == 16, "info: $FF answers 16 bytes, 00,OK (got %s, %d)",
           r.status.c_str(), (int)r.data.size());
     if (r.data.size() == 16) {
-        const uint8_t want[16] = { 1, 2, 0, 7, 0x07, 3, 1, 0x32, 0x01, 0, 0, 0, 12, 0, 0, 0 };
+        const uint8_t want[16] = { 1, 2, 0, 7, 0x07, 3, 1, 0x32, 0x01, 0xFF, 0xFF, 0xFF, 12, 0, 0, 0 };
         check(memcmp(r.data.data(), want, 16) == 0,
               "info: v1, 2 sessions, 0 in use, modes 7, ready 07 (image, entropy, time), versions 3, module 1.306, "
-              "block 12 ms, 0 unclaimed");
+              "CA date FF FF FF (Amendment 3), block 12 ms, 0 unclaimed");
     }
     check(world_count(0x33) == 1 && last_call().slot == 0xFF && last_call().tag == 0,
           "info: one global STATS (slot $FF, tag 0)");
@@ -280,6 +280,37 @@ static void test_info(void)
     check(run(B({ 0x03, 0x23 })).status == "81,INVALID PARAMS", "info: 2 bytes -> 81");
     check(run(B({ 0x03, 0x23, 0xFF, 0x00 })).status == "81,INVALID PARAMS", "info: 4 bytes -> 81");
     check(info(5).status == "81,INVALID PARAMS" && info(5).data.empty(), "info: not a TLS handle -> empty, 81");
+
+    // OI-1 (ruled): the last good STATS stands through a STATS that gets no
+    // answer, within one module generation.
+    fresh();
+    world_module.block_max_ms = 33;
+    r = info(0xFF);
+    world_module.block_max_ms = 44;
+    world_module.stats_result = WIFI_TLS_BUSY;
+    r = info(0xFF);
+    check(r.data.size() == 16 && (r.data[4] & 0x03) == 0x03 && r.data[12] == 33 && r.data[9] == 0xFF,
+          "info (OI-1): a STATS timeout keeps b0/b1, block_max 33 and the CA date from the last good STATS");
+    world_module.stats_result = WIFI_TLS_UNSENT;
+    check((info_byte(4) & 0x01) == 0x01, "info (OI-1): an unsent STATS keeps b0 too");
+    world_module.stats_result = WIFI_TLS_BUSY;
+    world_module.generation++;
+    r = info(0xFF);
+    check(r.data.size() == 16 && !(r.data[4] & 0x03) && r.data[12] == 0 && r.data[9] == 0,
+          "info (OI-1): after a module restart a STATS timeout clears b0/b1, block_max and the CA date");
+    world_module.stats_result = -1;
+    check((info_byte(4) & 0x01) == 0x01 && info_byte(12) == 44, "info (OI-1): the next good STATS sets them again");
+    world_module.stats_result = WIFI_TLS_REFUSED; // a module without TLS (NOT_SUPPORTED)
+    check(!(info_byte(4) & 0x01), "info (OI-1): a refused STATS clears b0");
+    world_module.stats_result = -1;
+    info(0xFF);
+    world_module.available = false;
+    r = info(0xFF);
+    world_module.available = true;
+    world_module.stats_result = WIFI_TLS_BUSY;
+    check(r.data.size() == 16 && !(r.data[4] & 0x01) && r.data[9] == 0 && r.data[10] == 0 && r.data[11] == 0 &&
+          !(info_byte(4) & 0x01), "info (OI-1): no module clears b0 and the cache; the CA date is 0,0,0");
+    world_module.stats_result = -1;
 }
 
 // --- OPEN_TLS: the happy path --------------------------------------------------

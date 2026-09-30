@@ -110,6 +110,10 @@ NetworkTarget::NetworkTarget(int id)
     tls_new_ca_tag();
     ca_len = 0;
     ca_total = 0;
+    info_valid = false;
+    info_generation = 0;
+    info_ready = 0;
+    info_block_max_ms = 0;
 #endif
 }
 
@@ -1769,24 +1773,37 @@ void NetworkTarget :: tls_info(Message *command, Message **reply, Message **stat
             m[6] = (uint8_t)major;
             m[7] = (uint8_t)minor;
             m[8] = (uint8_t)(minor >> 8);
+            uint32_t generation = wifi_tls_generation();
+            if (info_valid && (info_generation != generation)) {
+                info_valid = false; // the module restarted
+            }
             tls_cancel_context_t context = { false, 0 };
             wifi_tls_cancel_t cancel = { tls_cancelled, &context };
             wifi_tls_stats_t stats;
             int esp_err;
-            if (wifi_tls_stats(WIFI_TLS_SLOT_GLOBAL, 0, &stats, &esp_err, TLS_STATS_RPC_MS, &cancel) == 0) {
-                ready |= 0x01;
-                if (stats.entropy_source) {
-                    ready |= 0x02;
-                }
-                if (stats.time_source) {
-                    ready |= 0x04;
-                }
-                m[12] = (uint8_t)stats.block_max_ms;
-                m[13] = (uint8_t)(stats.block_max_ms >> 8);
+            int result = wifi_tls_stats(WIFI_TLS_SLOT_GLOBAL, 0, &stats, &esp_err, TLS_STATS_RPC_MS, &cancel);
+            if (result == 0) {
+                info_valid = true;
+                info_generation = generation;
+                info_ready = 0x01 | (stats.entropy_source ? 0x02 : 0) | (stats.time_source ? 0x04 : 0);
+                info_block_max_ms = stats.block_max_ms;
+            } else if ((result != WIFI_TLS_BUSY) && (result != WIFI_TLS_UNSENT)) {
+                info_valid = false; // no module application, no TLS in it, or a bad answer
             }
+        } else {
+            info_valid = false;
+        }
+        if (info_valid) {
+            ready |= info_ready;
+            m[12] = (uint8_t)info_block_max_ms;
+            m[13] = (uint8_t)(info_block_max_ms >> 8);
+            // The CA store date: no reply carries it, so "a bundle, date
+            // unknown" (Amendment 3, errata v1.2 candidate).
+            m[9] = 0xFF;
+            m[10] = 0xFF;
+            m[11] = 0xFF;
         }
         m[4] = ready;
-        // [9..11], the CA store date: 0,0,0 (no field carries it; see the report).
         m[14] = (uint8_t)tls_in_use(true);
         data_message.length = 16;
         data_message.last_part = true;

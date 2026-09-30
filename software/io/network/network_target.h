@@ -142,6 +142,13 @@ class NetworkTarget : public CommandTarget {
     uint16_t ca_len;
     uint16_t ca_total;
     uint8_t ca_buf[NET_TLS_CA_MAX];
+    // The last global STATS that answered, for TLS_INFO $FF: kept through a
+    // STATS that gets no answer, so that one slow RPC does not flip the ready
+    // bits; dropped when the module is gone, answers otherwise, or restarts.
+    bool info_valid;
+    uint32_t info_generation;
+    uint8_t info_ready;      // ready bits 0-2 as that STATS gave them
+    uint16_t info_block_max_ms;
     uint8_t tls_ct_out[NET_TLS_CT_MAX];
     uint8_t tls_pt[NET_TLS_PT_MAX];
 
