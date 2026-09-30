@@ -1,0 +1,11 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 11:42:56
++++ b/main/tls_engine.c	2026-09-30 11:44:33
+@@ -327,7 +327,6 @@
+         // Offered here, and required after the ServerHello (tls_note_handshake): mbedTLS has no switch for that
+         mbedtls_ssl_conf_extended_master_secret(&s->conf, MBEDTLS_SSL_EXTENDED_MS_ENABLED);
+         // No session_ticket extension in TLS 1.2 (TLS 1.3 tickets are taken and dropped as before)
+-        mbedtls_ssl_conf_session_tickets(&s->conf, MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
+         mbedtls_ssl_conf_authmode(&s->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+         // One config per session: a CUSTOM or PIN config never has the bundle attached, since a config with the
+         // bundle's CA callback makes mbedTLS ignore conf->ca_chain (section 2)

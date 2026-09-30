@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 11:42:56
++++ b/main/tls_engine.c	2026-09-30 11:44:33
+@@ -379,7 +379,7 @@
+         ESP_LOGW(TAG, "OPEN into slot %d frees the session held there under tag %u", slot, sessions[slot]->tag);
+         tls_free(sessions[slot]);
+     }
+-    if (entropy_source() == ENTROPY_NONE) {
++    if (0) {
+         *reason = TLS_OPEN_REASON_NO_ENTROPY;
+         return ESP_ERR_INVALID_STATE;
+     }

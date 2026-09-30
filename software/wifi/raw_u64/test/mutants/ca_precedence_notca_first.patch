@@ -1,0 +1,13 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 11:42:56
++++ b/main/tls_engine.c	2026-09-30 11:44:33
+@@ -735,6 +735,9 @@
+ // 3.3: the upload-time refusals, in their order of precedence
+ static uint8_t tls_ca_reject(const mbedtls_x509_crt *crt)
+ {
++    if ((crt->version >= 3) && (mbedtls_x509_crt_get_ca_istrue(crt) != 1)) {
++        return TLS_CA_REJECT_NOT_CA;
++    }
+     psa_key_type_t type = mbedtls_pk_get_key_type(&crt->pk);
+     size_t bits = mbedtls_pk_get_bitlen(&crt->pk);
+     if (PSA_KEY_TYPE_IS_RSA(type) && (bits < mbedtls_x509_crt_profile_default.rsa_min_bitlen)) {

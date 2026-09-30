@@ -1,0 +1,13 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 11:42:56
++++ b/main/tls_engine.c	2026-09-30 11:44:33
+@@ -750,8 +750,7 @@
+     }
+     // mbedTLS refuses such a certificate as an issuer. A v1 root has no extensions and is an anchor as it is;
+     // a keyUsage extension that is absent passes check_key_usage.
+-    if (((crt->version >= 3) && (mbedtls_x509_crt_get_ca_istrue(crt) != 1)) ||
+-        (mbedtls_x509_crt_check_key_usage(crt, MBEDTLS_X509_KU_KEY_CERT_SIGN) != 0)) {
++    if ((crt->version >= 3) && (mbedtls_x509_crt_get_ca_istrue(crt) != 1)) {
+         return TLS_CA_REJECT_NOT_CA;
+     }
+     return TLS_CA_REJECT_NONE;

@@ -1258,6 +1258,7 @@ int main(int argc, char **argv)
             fake_now = real_now();
             g_unix_time = (uint32_t)fake_now;
             start_dispatch(NULL);
+            alarm(120); // a case that hangs fails (SIGALRM) instead of stopping the run
             printf("CASE %s\n", cur_case);
             cases[i].fn();
             if (srv_pid) srv_end(0);

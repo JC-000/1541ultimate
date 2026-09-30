@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 11:42:56
++++ b/main/tls_engine.c	2026-09-30 11:44:33
+@@ -225,7 +225,7 @@
+     if (sntp_has_time() && (time(NULL) > floor)) {
+         return TLS_TIME_SNTP;
+     }
+-    if ((time_source == TLS_TIME_NIOS) && ((time_t)unix_time > floor)) {
++    if (((time_t)unix_time > floor)) {
+         struct timeval tv = { .tv_sec = (time_t)unix_time, .tv_usec = 0 };
+         if (settimeofday(&tv, NULL) == 0) {
+             clock_set_by_nios = 1;

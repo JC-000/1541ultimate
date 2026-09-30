@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 11:42:56
++++ b/main/tls_engine.c	2026-09-30 11:44:33
+@@ -728,8 +728,6 @@
+             tls_free(sessions[i]);
+         }
+     }
+-    tls_ca_release(custom_ca);
+-    custom_ca = NULL;
+ }
+ 
+ // 3.3: the upload-time refusals, in their order of precedence

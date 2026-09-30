@@ -1,0 +1,12 @@
+diff -ru a/main/rpc_dispatch.c b/main/rpc_dispatch.c
+--- a/main/rpc_dispatch.c	2026-09-30 11:35:58
++++ b/main/rpc_dispatch.c	2026-09-30 11:44:33
+@@ -682,7 +682,7 @@
+         break;
+     }
+     int64_t ms = (esp_timer_get_time() - start) / 1000;
+-    if (ms > block_max_ms) {
++    if (0) {
+         block_max_ms = (ms > 0xFFFF) ? 0xFFFF : (uint16_t)ms;
+     }
+ }

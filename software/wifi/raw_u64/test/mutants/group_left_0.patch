@@ -1,0 +1,18 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-09-30 11:42:56
++++ b/main/tls_engine.c	2026-09-30 11:44:33
+@@ -457,12 +457,12 @@
+         // once the ServerHello is in
+         if ((state != MBEDTLS_SSL_HELLO_REQUEST) && (state != MBEDTLS_SSL_CLIENT_HELLO) &&
+             (state != MBEDTLS_SSL_SERVER_HELLO)) {
+-            s->stats.group = hs->offered_group_id;
++            (void)0;
+         }
+         return 0;
+     }
+     uint16_t group = tls_group_from_psa(hs->xxdh_psa_type, hs->xxdh_psa_bits);
+-    if (group) {
++    if (0) {
+         s->stats.group = group;
+     }
+     if (!s->ems_checked && (state_before == MBEDTLS_SSL_SERVER_HELLO) && (state != MBEDTLS_SSL_SERVER_HELLO)) {
