@@ -390,7 +390,7 @@ static int offer(void)
 #if MBEDTLS_VERSION_MAJOR < 4
         mbedtls_ssl_conf_rng(&conf, mbedtls_ctr_drbg_random, &drbg);
 #else
-        // engine4's list (tls_engine.c at f0ae8ed2, run_idf6.sh's ENGINE4_COMMIT)
+        // the image's list (tls_engine.c at run_idf6.sh's IMAGE_COMMIT; engine4's, unchanged since f0ae8ed2)
         static const uint16_t groups[] = { MBEDTLS_SSL_IANA_TLS_GROUP_X25519, MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
                                            MBEDTLS_SSL_IANA_TLS_GROUP_SECP384R1, MBEDTLS_SSL_IANA_TLS_GROUP_SECP521R1,
                                            MBEDTLS_SSL_IANA_TLS_GROUP_NONE };
