@@ -1161,6 +1161,13 @@ static void test_latch(void)
     check(got == expected(21, 1500) && last == rst,
           "latch: a quiet step while the module still holds plaintext does not end the drain (%d)", (int)got.size());
 
+    // Quiet and plaintext steps alternating: plaintext breaks the run of quiet steps, so the drain goes on.
+    h = latch_setup(3000, 0);
+    world_module.quiet_alternate = true;
+    got = read_all(h, 1472, &last, NULL, 50);
+    check(got == expected(21, 3000) && last == rst,
+          "latch: quiet steps between plaintext steps never add up to the end of the drain (%d)", (int)got.size());
+
     h = latch_setup(0, 0);
     r = read_cmd(h, 10);
     check(header(r) == 0 && r.status == rst, "latch: nothing held -> 12 at once");

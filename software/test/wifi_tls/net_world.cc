@@ -785,6 +785,13 @@ int wifi_tls_step(uint8_t slot, uint16_t tag, wifi_tls_step_t *st, uint32_t time
         st->state = s.state;
         return 0;
     }
+    if (m.quiet_alternate && (st->ct_in_len == 0) && (s.state == WIFI_TLS_ESTABLISHED) && !s.pt.empty()) {
+        m.quiet_last = !m.quiet_last;
+        if (m.quiet_last) {
+            st->state = s.state;
+            return 0;
+        }
+    }
     bool again = false;
     if (m.again_next > 0) {
         m.again_next--;
