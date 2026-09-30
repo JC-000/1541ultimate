@@ -222,15 +222,6 @@ SRCS_CC +=  iec_drive.cc \
 
 #			usb_em1010.cc \
 
-# The esp-tls M2 spike, not for release: make TLS_SPIKE=1 adds the driver and
-# PUT /v1/machine:tlsspike. The define is spelled through addprefix because
-# tools/openapi reads every -D in this file as unconditional, and would then
-# document a route that release builds do not have.
-ifeq ($(TLS_SPIKE),1)
-SRCS_CC +=  wifi_tls_spike.cc wifi_tls_json.cc
-SPIKE_DEFINES = TLS_SPIKE
-endif
-
 VPATH +=	$(PATH_SW)/FreeRTOS/Source/portable/nios
 VPATH +=	$(PATH_SW)/portable/nios
 VPATH +=	$(PATH_SW)/u64
@@ -261,7 +252,6 @@ SRCS_NANO = nano_minimal.nan
 
 PATH_INC =  $(addprefix -I, $(VPATH))
 OPTIONS  = -g -ffunction-sections -Os -DOS -DDEVELOPER=0 -DNIOS=1 -DCLOCK_FREQ=66666667 -DU64=1 -Wno-write-strings -mno-hw-div -mno-hw-mul -mno-hw-mulx
-OPTIONS += $(addprefix -D,$(SPIKE_DEFINES))
 COPTIONS = $(OPTIONS) -std=gnu99
 CPPOPT   = $(OPTIONS) -std=gnu++11 -fno-exceptions -fno-rtti -fno-threadsafe-statics -fpermissive
 LINK 	 = $(BSP)/linker.x

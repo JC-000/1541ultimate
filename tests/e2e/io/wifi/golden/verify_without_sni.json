@@ -1,9 +1,0 @@
-{
-  "stem": "verify_without_sni",
-  "exit_path": "parse (HTTP 400: verify=1 without sni)",
-  "request": { "host": "10.0.0.2", "port": 4433, "sni": null, "verify": null, "ca": null, "echo": 1024, "seed": 1 },
-  "http_status": 400,
-  "response": { 
-  "errors" : [ "Invalid sni (verify=1 needs a server name; give sni, or verify=0)" ]
-}
-}

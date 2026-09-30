@@ -1,6 +1,6 @@
 /*
- * Host stand-in for lwIP's sockets.h: u16_t for rpc_calls.h, and the calls and
- * constants wifi_tls_spike.cc uses, which spike_test.cc fakes.
+ * Host stand-in for lwIP's sockets.h: u16_t and the socket types that
+ * rpc_calls.h needs.
  */
 #ifndef LWIP_SOCKETS_H_STUB
 #define LWIP_SOCKETS_H_STUB
