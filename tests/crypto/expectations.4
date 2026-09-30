@@ -298,16 +298,22 @@ limbo.json/given tc=bettertls::pathbuilding::tc77 accept fail-open:intermediate-
 # expired root still verifies what it signed. Each chain is also run with the root as the CA
 # chain (tc=...::ca), where it is refused.
 # The verify callback's own signature check picks the algorithm from the bundle key's type
-# alone: RSA is always PKCS#1 v1.5 (esp_crt_bundle.c:196-199), and 3.6's check that the key can
-# do the certificate's signature algorithm (pk_can_do, esp_crt_bundle.c:52 at c8fc5f64) is gone.
-# A certificate that names ECDSA or RSASSA-PSS but carries a PKCS#1 v1.5 signature by a bundled
-# RSA root is refused by mbedTLS as a child of the bundle's CA (the key cannot do the algorithm,
+# alone, whatever the certificate names: an RSA key is always PKCS#1 v1.5 with the certificate's
+# hash (esp_crt_bundle.c:196-199), an EC key is ECDSA with any hash (PSA_ALG_ECDSA_ANY, :200-204),
+# and 3.6's check that the key can do the certificate's signature algorithm (pk_can_do,
+# esp_crt_bundle.c:52 at c8fc5f64, for both key types) is gone. A certificate that names one
+# algorithm but carries another's signature by a bundled key (PKCS#1 v1.5 by an RSA root under
+# a name of ECDSA or RSASSA-PSS; ECDSA by an EC root under a name of sha256/sha1WithRSAEncryption)
+# is refused by mbedTLS as a child of the bundle's CA (the key cannot do the algorithm,
 # x509_crt.c:2298), and then accepted by the callback, which clears every flag (:373). mbedTLS
 # never took the bundle's CA as the parent, so its certificate profile never applies at that
-# link: an RSA-1024 bundle root (BAD_KEY) and a SHA-1 signature (BAD_MD, which the callback
-# masks, :348) are accepted this way (V1, V2), in both modes. So =y refuses an RSA-1024 root and
-# SHA-1 below the root only for certificates that name the right algorithm. Anyone who can sign
-# with a bundled RSA key (a weak or leaked one) needs no CA's help to use this.
+# link: an RSA-1024 bundle root (BAD_KEY), a curve outside the profile (secp256k1, BAD_KEY; K0
+# is its control) and a SHA-1 signature (BAD_MD, which the callback masks, :348) are accepted
+# this way (V1, V2, E2, K1), in both modes. The callback runs for whichever certificate mbedTLS
+# stops at, so the same holds one level down: an intermediate signed this way by the root, above
+# an honest leaf (I1, I2). So =y refuses an RSA-1024 root, a curve outside the profile and SHA-1
+# below the root only for certificates that name the algorithm they are signed with. Anyone who
+# can sign with any bundled key (RSA or EC; a weak or leaked one) needs no CA's help to use this.
 x509 tc=bundle-rsa::alg-says-ecdsa::bundle security-deviation bundle-sig-alg-unchecked a leaf naming ecdsa-with-SHA256 with a PKCS#1 v1.5 signature by the RSA bundle root is accepted: the callback checks any bundled RSA key as PKCS#1 v1.5 (esp_crt_bundle.c:196-199), outside mbedTLS's profile
 x509 tc=bundle-rsa::alg-says-pss::bundle security-deviation bundle-sig-alg-unchecked a leaf naming RSASSA-PSS with a PKCS#1 v1.5 signature by the RSA bundle root is accepted: the callback checks any bundled RSA key as PKCS#1 v1.5 (esp_crt_bundle.c:196-199), outside mbedTLS's profile
 x509 tc=pss-salt::salt-not-as-declared::ca security-deviation rsa-pss-any-salt a certificate whose RSASSA-PSS salt differs from its declared saltLength is accepted (x509.c:748-753, x509_crt.c:2145)
@@ -320,6 +326,11 @@ x509 tc=bundle-idf6::T2b-issuer-printable::bundle reject fail-closed: the issuer
 x509 tc=bundle-sha1-confused::U4-confused-sha1::bundle security-deviation bundle-sig-alg-unchecked the same with SHA-1: BAD_MD is masked off (esp_crt_bundle.c:348) and the callback verifies the PKCS#1 v1.5 SHA-1 signature (esp_crt_bundle.c:172, :196-199)
 x509 tc=bundle-confused-weak::V1-confused-rsa1024-root::bundle security-deviation bundle-sig-alg-unchecked the same under an RSA-1024 bundle root: accepted, the profile's key size never applied (esp_crt_bundle.c:196-199, :373)
 x509 tc=bundle-confused-weak::V2-confused-rsa1024-root-sha1::bundle security-deviation bundle-sig-alg-unchecked the same with SHA-1 as well: accepted, BAD_MD masked (esp_crt_bundle.c:348) and the key size never checked
+x509 tc=bundle-confused-wide::E1-confused-p256-root::bundle security-deviation bundle-sig-alg-unchecked a leaf naming sha256WithRSAEncryption with an ECDSA signature by a P-256 bundle root is accepted: the callback checks any bundled EC key as ECDSA with any hash (esp_crt_bundle.c:200-204)
+x509 tc=bundle-confused-wide::E2-confused-p256-root-sha1::bundle security-deviation bundle-sig-alg-unchecked the same naming sha1WithRSAEncryption over ECDSA SHA-1: accepted, BAD_MD masked (esp_crt_bundle.c:348), where bundle::sha1-leaf is refused
+x509 tc=bundle-confused-wide::K1-confused-secp256k1-root::bundle security-deviation bundle-sig-alg-unchecked the same under a secp256k1 bundle root: accepted, the profile's curve list never applied (K0, the honest leaf, is refused)
+x509 tc=bundle-confused-wide::I1-confused-intermediate::bundle security-deviation bundle-sig-alg-unchecked an intermediate naming ecdsa-with-SHA256 with a PKCS#1 v1.5 signature by an RSA-2048 bundle root, above an honest leaf, is accepted: the callback clears the flags at that depth (esp_crt_bundle.c:373)
+x509 tc=bundle-confused-wide::I2-confused-intermediate-rsa1024-sha1::bundle security-deviation bundle-sig-alg-unchecked the same with an RSA-1024 root and SHA-1: accepted, neither the key size nor the hash checked
 x509 tc=bundle::expired-root::bundle security-deviation bundle-root-validity-unchecked the bundle keeps no validity, and the verify callback clears EXPIRED on the CA it makes from a bundle entry (esp_crt_bundle.c:331-340): an expired root still verifies what it signed
 # ---- Known vulnerabilities of the pinned mbedTLS -------------------------------------------
 # known-vulnerable <CVE> <first fixed version>: the vector must still show the vulnerable outcome.
