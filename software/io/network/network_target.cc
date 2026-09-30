@@ -1401,7 +1401,10 @@ Message *NetworkTarget :: tls_handshake(TlsSocket *e, uint32_t total)
                 if ((error == ETIMEDOUT) && reached(deadline)) {
                     return &c_status_tls_hs_timeout;
                 }
-                put_dec(put_text(text, "12,SEND ERROR: "), error);
+                // Section 2 gives 12 to READ/WRITE only; a send that fails
+                // mid-handshake is the peer's end of the transport, as a
+                // receive error there is (D3, ruled).
+                put_dec(put_text(text, "13,TLS HANDSHAKE FAILED: PEER RESET: "), error);
                 return set_status(text);
             }
         }
