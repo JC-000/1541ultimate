@@ -276,9 +276,10 @@ class Expectations:
     fails until the line is removed. A tc= line wins over flag= lines; among flag= lines the first
     in the file that names one of the vector's flags wins. With strict set, a vector under either
     of the last two fails.
-    An overlay file starts with "base <file>" (relative to the overlay) and then has lines that
-    replace the base's line for the same key, add one, or remove it ("remove <file> <key>"): the
-    same build under another setting (expectations.4-nocross)."""
+    An overlay file starts with "base <file>" (relative to the overlay; not an overlay itself) and
+    then has tc= lines that replace the base's line for the same key, add one, or remove it
+    ("remove <file> <key>"), each key once: the same build under another setting
+    (expectations.4-nocross)."""
 
     def __init__(self, path, strict=False):
         self.strict = strict
@@ -288,14 +289,18 @@ class Expectations:
         self.where = {}
         self._load(path, 0)
 
-    def _load(self, path, offset):
+    def _load(self, path, offset, base_of=None):
         overlay = False
+        # the keys this overlay has set or removed: each once, as in a base file
+        touched = set()
         for n, line in enumerate(read(path).split("\n"), 1):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             if line.startswith("base ") and not overlay and not self.rules:
-                self._load(os.path.join(os.path.dirname(path), line.split(None, 1)[1]), 0)
+                if base_of:
+                    sys.exit("%s:%d: %s's base is an overlay itself" % (path, n, base_of))
+                self._load(os.path.join(os.path.dirname(path), line.split(None, 1)[1]), 0, path)
                 overlay, offset = True, 1000000
                 continue
             fields = line.split(None, 3)
@@ -307,8 +312,16 @@ class Expectations:
                     )
                 for d in (self.rules, self.notes, self.where):
                     d.pop((fields[1], fields[2]), None)
+                touched.add((fields[1], fields[2]))
                 continue
             if overlay:
+                if (fields[0], fields[1]) in touched:
+                    sys.exit("%s:%d: %s %s is there twice" % (path, n, fields[0], fields[1]))
+                touched.add((fields[0], fields[1]))
+                # a flag= line's rank is its place in the file, so an overlay's could never
+                # outrank the base's for a vector with both flags
+                if len(fields) > 1 and fields[1].startswith("flag="):
+                    sys.exit("%s:%d: a flag= line belongs in the base file, not an overlay" % (path, n))
                 for d in (self.rules, self.notes, self.where):
                     d.pop((fields[0], fields[1]), None)
             if len(fields) == 4 and fields[2] == "known-vulnerable":
