@@ -44,6 +44,11 @@
 #if !defined(MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768)
 #error "esp-pqc's define MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_GROUP_X25519MLKEM768 did not reach this file"
 #endif
+// ML-DSA is off by design (it grows every mbedtls_pk_context, about 56 KB of heap per verify). If the option or
+// esp-pqc's define is on here, refuse; a define that reaches only the library is caught at OPEN (tls_abi_matches)
+#if defined(CONFIG_MBEDTLS_SSL_TLS1_3_SIG_MLDSA65) || defined(MBEDTLS_SSL_TLS1_3_SIG_MLDSA65)
+#error "ML-DSA (MBEDTLS_SSL_TLS1_3_SIG_MLDSA65) is not supported by the bridge: turn it off in sdkconfig"
+#endif
 #if MBEDTLS_VERSION_MAJOR < 4
 #error "This engine is written for mbedTLS 4 (ESP-IDF 6): randomness and allocation failures come from PSA"
 #endif
