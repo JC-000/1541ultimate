@@ -26,7 +26,7 @@ void start_dispatch(QueueHandle_t queue);
 void send_button_event(uint8_t button);
 void send_keepalive();
 
-#define IDENT_STRING "ESP32 WiFi Bridge V1.203"
+#define IDENT_STRING "ESP32 WiFi Bridge V1.301"
 #define IDENT_MAJOR   1
 // 1.6: the connector retries after a dropped link instead of idling in
 // Disconnected forever. The Ultimate's updater only reflashes the module
@@ -37,7 +37,8 @@ void send_keepalive();
 // 1.201 (dev): a TLS 1.3 NewSessionTicket never fails the session.
 // 1.202 (dev): any number of tickets ahead of a reply; tickets signalled on every mbedTLS.
 // 1.203 (dev): an empty application data record no longer closes the session.
-#define IDENT_MINOR   203
+// 1.301 (dev builds on ESP-IDF 6.0.3 / mbedTLS 4.1.1): the bridge ported to ESP-IDF 6.
+#define IDENT_MINOR   301
 #define MULTITHREADED 0
 #define DISPATCHER_STACK 8192 // was 3072: the TLS handshake runs on this task
 
