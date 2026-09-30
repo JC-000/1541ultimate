@@ -237,6 +237,12 @@ static int tls_setup(tls_session_t **out, int slot, int verify, int cas, const c
         // ESP-IDF 6 always builds TLS 1.2 in (MBEDTLS_TLS_ENABLED selects it): only these two keep it out
         mbedtls_ssl_conf_min_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
         mbedtls_ssl_conf_max_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
+        // mbedTLS 4's default list adds x448 and FFDHE 2048-8192 (an 8192-bit modexp on the ESP32):
+        // offer what mbedTLS 3.6.0 offered here, in its order. mbedTLS keeps the pointer, so static.
+        static const uint16_t groups[] = { MBEDTLS_SSL_IANA_TLS_GROUP_X25519, MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
+                                           MBEDTLS_SSL_IANA_TLS_GROUP_SECP384R1, MBEDTLS_SSL_IANA_TLS_GROUP_SECP521R1,
+                                           MBEDTLS_SSL_IANA_TLS_GROUP_NONE };
+        mbedtls_ssl_conf_groups(&s->conf, groups);
         mbedtls_ssl_conf_authmode(&s->conf, verify ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
 #if CONFIG_TLS_SPIKE
         if (!verify) {
