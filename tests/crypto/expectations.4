@@ -288,6 +288,14 @@ limbo.json/given tc=bettertls::pathbuilding::tc77 accept fail-open:intermediate-
 # it EXPIRED, and the verify callback clears that for it (esp_crt_bundle.c:331-340): an
 # expired root still verifies what it signed. Each chain is also run with the root as the CA
 # chain (tc=...::ca), where it is refused.
+# The verify callback's own signature check picks the algorithm from the bundle key's type
+# alone: RSA is always PKCS#1 v1.5 (esp_crt_bundle.c:196-199), and 3.6's check that the key can
+# do the certificate's signature algorithm (pk_can_do, esp_crt_bundle.c:52 at c8fc5f64) is gone.
+# So a certificate that names ECDSA or RSASSA-PSS but carries a PKCS#1 v1.5 signature by a
+# bundled RSA root is accepted (mbedTLS's own check refuses it; the callback then clears the
+# flags). Algorithm confusion, not a forgery: the root's key must have signed those bytes.
+x509 tc=bundle-rsa::alg-says-ecdsa::bundle security-deviation bundle-sig-alg-unchecked a leaf naming ecdsa-with-SHA256 with a PKCS#1 v1.5 signature by the RSA bundle root is accepted (esp_crt_bundle.c:196-199)
+x509 tc=bundle-rsa::alg-says-pss::bundle security-deviation bundle-sig-alg-unchecked a leaf naming RSASSA-PSS with a PKCS#1 v1.5 signature by the RSA bundle root is accepted (esp_crt_bundle.c:196-199)
 x509 tc=bundle::expired-root::bundle security-deviation bundle-root-validity-unchecked the bundle keeps no validity, and the verify callback clears EXPIRED on the CA it makes from a bundle entry (esp_crt_bundle.c:331-340): an expired root still verifies what it signed
 # ---- Known vulnerabilities of the pinned mbedTLS -------------------------------------------
 # known-vulnerable <CVE> <first fixed version>: the vector must still show the vulnerable outcome.

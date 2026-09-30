@@ -31,6 +31,10 @@ root's name and key, issued by an old root), with only the new root in the trust
 case ESP-IDF 6's CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY is for. Controls: the
 old root trusted instead, and the new root's name with another key.
 
+bundle-rsa.json: RSA signatures ESP-IDF 6's bundle callback checks by key type alone: a root
+that signs with RSASSA-PSS (valid, must pass), and PKCS#1 v1.5 signatures by the RSA root under
+a certificate that names another algorithm, ECDSA or RSASSA-PSS (must fail).
+
 The keys are made fresh and thrown away; only the certificates are written. Needs the
 "cryptography" package; conformance.py only reads the JSON. With file names as arguments, only
 those files are written (the others would change with every run, their keys being new).
@@ -44,7 +48,7 @@ import sys
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -104,6 +108,33 @@ def resign_sha1(c, issuer_key):
     tbs = der(0x30, b"".join(fields))
     sig = issuer_key.sign(tbs, ec.ECDSA(hashes.SHA1()))
     return x509.load_der_x509_certificate(der(0x30, tbs + sha1 + der(0x03, b"\0" + sig)))
+
+
+SHA256_RSA = der(0x30, der(0x06, bytes.fromhex("2a864886f70d01010b")) + b"\x05\x00")
+ECDSA_SHA256 = der(0x30, der(0x06, bytes.fromhex("2a8648ce3d040302")))
+_SHA256_ID = der(0x30, der(0x06, bytes.fromhex("608648016503040201")) + b"\x05\x00")
+RSA_PSS_SHA256 = der(  # RSASSA-PSS, SHA-256, MGF1 with SHA-256, salt 32 (RFC 4055)
+    0x30,
+    der(0x06, bytes.fromhex("2a864886f70d01010a"))
+    + der(
+        0x30,
+        der(0xA0, _SHA256_ID)
+        + der(0xA1, der(0x30, der(0x06, bytes.fromhex("2a864886f70d010108")) + _SHA256_ID))
+        + der(0xA2, der(0x02, b"\x20")),
+    ),
+)
+
+
+def resign_rsa(c, issuer_key, alg, pss):
+    """The certificate signed again by an RSA key: `alg` as its signature algorithm (in the TBS
+    and outside it), the signature made with PSS (SHA-256, salt 32) or PKCS#1 v1.5 (SHA-256)."""
+    tbs = children(c.public_bytes(serialization.Encoding.DER))[0]
+    fields = children(tbs)
+    fields[2] = alg
+    tbs = der(0x30, b"".join(fields))
+    pad = padding.PSS(padding.MGF1(hashes.SHA256()), 32) if pss else padding.PKCS1v15()
+    sig = issuer_key.sign(tbs, pad, hashes.SHA256())
+    return x509.load_der_x509_certificate(der(0x30, tbs + alg + der(0x03, b"\0" + sig)))
 
 
 def cert(
@@ -732,6 +763,72 @@ def main():
                 )
             )
     write("cross-signed.json", cases)
+
+    # RSA signatures under an RSA bundle root (engine4-adversarial1 F6)
+    r_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    r_root = cert("rsa root", r_key, "rsa root", r_key, CA)
+    r_ica_key = p256()
+    r_ica = resign_rsa(
+        cert("rsa ICA pss", r_ica_key, "rsa root", p256(), CA), r_key, RSA_PSS_SHA256, True
+    )
+    r_leaf = cert("victim.example", p256(), "rsa ICA pss", r_ica_key, server("victim.example"))
+
+    def leaf_by_root(alg, pss):
+        return resign_rsa(
+            cert("victim.example", p256(), "rsa root", p256(), server("victim.example")),
+            r_key,
+            alg,
+            pss,
+        )
+
+    chains = {
+        "pss-intermediate": (
+            "RSA root -> ICA signed with RSASSA-PSS -> leaf",
+            [r_ica],
+            r_leaf,
+            "SUCCESS",
+        ),
+        "pss-leaf": (
+            "RSA root -> leaf signed with RSASSA-PSS",
+            [],
+            leaf_by_root(RSA_PSS_SHA256, True),
+            "SUCCESS",
+        ),
+        "control-pkcs1-leaf": (
+            "RSA root -> leaf signed with PKCS#1 v1.5",
+            [],
+            leaf_by_root(SHA256_RSA, False),
+            "SUCCESS",
+        ),
+        "alg-says-ecdsa": (
+            "leaf naming ecdsa-with-SHA256, signed PKCS#1 v1.5 by the RSA root",
+            [],
+            leaf_by_root(ECDSA_SHA256, False),
+            "FAILURE",
+        ),
+        "alg-says-pss": (
+            "leaf naming RSASSA-PSS, signed PKCS#1 v1.5 by the RSA root",
+            [],
+            leaf_by_root(RSA_PSS_SHA256, False),
+            "FAILURE",
+        ),
+    }
+    cases = []
+    for tag, (description, inter, leaf_cert, result) in chains.items():
+        for mode in ("ca", "bundle"):
+            cases.append(
+                case(
+                    "bundle-rsa::%s::%s" % (tag, mode),
+                    description,
+                    r_root,
+                    inter,
+                    leaf_cert,
+                    "victim.example",
+                    result,
+                    mode=mode,
+                )
+            )
+    write("bundle-rsa.json", cases)
 
 
 if __name__ == "__main__":
