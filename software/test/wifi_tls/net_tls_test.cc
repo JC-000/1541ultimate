@@ -44,6 +44,9 @@ struct Res {
 };
 
 // One command as the C64 sends it, and every block of its reply as it reads them.
+// The longest status any command of the run answered (errata ER-8: at most 40 bytes).
+static std::string longest_status;
+
 static Res run(const bytes &command)
 {
     static uint8_t buf[1024];
@@ -54,6 +57,9 @@ static Res run(const bytes &command)
     Res r;
     r.data.assign(reply->message, reply->message + reply->length);
     r.status.assign((const char *)status->message, status->length);
+    if (status->length > longest_status.size()) {
+        longest_status = r.status;
+    }
     int guard = 0;
     while (!reply->last_part && (guard++ < 10)) {
         net.get_more_data(&reply, &status);
@@ -1383,6 +1389,78 @@ static void test_cleanup(void)
           "restart: CLOSE sends no RPC and closes the socket");
 }
 
+// Errata ER-8: every M3 status line is at most 40 bytes. The longest
+// templates, with the widest values each field can take (a 3-digit newlib
+// errno, 4 hex digits of mbedTLS code, 8 of flags).
+static void test_status_lengths(void)
+{
+    printf("Status lines: at most 40 bytes (errata ER-8)\n");
+    const int E = 999;
+    const uint8_t N = WIFI_TLS_ALERT_NONE;
+    fresh();
+    world_socks[0].srv.on_hello = SRV_RST;
+    world_socks[0].srv.rst_err = E;
+    Res r = run(open_cmd(0, 0, "example.com"));
+    check(r.status == "13,TLS HANDSHAKE FAILED: PEER RESET: 999" && r.status.size() == 40,
+          "ER-8: '%s' is %d bytes", r.status.c_str(), (int)r.status.size());
+    expect_fail(0, 4, 0xFFFFFFFE, N, -0x2700, "94,CERTIFICATE NAME MISMATCH: 0xFFFFFFFE", "ER-8 worst 94");
+    expect_fail(0, 4, 0xFFFFFFFF, N, -0x2700, "93,CERTIFICATE NOT TRUSTED: 0xFFFFFFFF", "ER-8 worst 93");
+    expect_fail(0, 4, 0xFFFFFFFB, N, -0x2700, "95,CERTIFICATE EXPIRED: 0xFFFFFFFB", "ER-8 worst 95");
+    expect_fail(0, 0, 0, N, -0xFFFF, "13,TLS HANDSHAKE FAILED: -0xFFFF", "ER-8 worst 13");
+    expect_fail(0, 0, 0, 254, -0x7780, "14,TLS ALERT RECEIVED: 254", "ER-8 worst 14 (255 means none)");
+    expect_fail(0, 1, 0xFFFF, N, -0x7700, "18,TLS VERSION REFUSED: 0xFFFF", "ER-8 worst 18");
+    fresh();
+    world_socks[0].srv.connect_err = E;
+    r = run(open_cmd(0, 0, "example.com"));
+    check(r.status == "11,ERROR ON CONNECT: 999", "ER-8: %s", r.status.c_str());
+    fresh();
+    int h = open_ok();
+    server_push(h, EV_ERR, bytes(), E);
+    r = read_cmd(h, 10);
+    check(r.status == "12,RECEIVE ERROR: 999", "ER-8: %s", r.status.c_str());
+    fresh();
+    h = open_ok();
+    sock(h).send_err = E;
+    r = write_cmd(h, S("x"));
+    check(r.status == "12,SEND ERROR: 999", "ER-8: %s", r.status.c_str());
+    fresh();
+    world_module.set_ca_result = WIFI_TLS_REFUSED;
+    world_module.set_ca_esp_err = -0xFFFF;
+    r = chunk(0, 5, bytes(5, 1));
+    check(r.status == "97,CUSTOM CA INVALID: -0xFFFF", "ER-8: %s", r.status.c_str());
+    world_module.set_ca_esp_err = WIFI_TLS_ESP_INVALID_ARG;
+    world_module.set_ca_reject = 1;
+    r = chunk(0, 5, bytes(5, 1));
+    check(r.status == "97,CUSTOM CA REJECTED: RSA KEY < 2048", "ER-8: %s", r.status.c_str());
+    fresh();
+    h = open_ok();
+    server_push(h, EV_DATA, record('B', 10));
+    r = read_cmd(h, 10);
+    check(r.status.compare(0, 23, "16,TLS SESSION FAILED: ") == 0, "ER-8: %s", r.status.c_str());
+}
+
+// Errata ER-12: a READ on a TLS handle refused before any data (81 wrong
+// length, 82 maxlen) has an EMPTY reply, which reads as $00 $00, and changes
+// nothing.
+static void test_empty_read_reply(void)
+{
+    printf("READ refusals on a TLS handle: an empty reply, the handle unchanged (errata ER-12)\n");
+    fresh();
+    int h = open_ok();
+    server_push(h, EV_DATA, record('D', 30, 13));
+    Res r = run(B({ 0x03, 0x10, h, 10 }));
+    check(r.status == "81,INVALID PARAMS" && r.data.empty(), "ER-12: a 4-byte READ -> 81, empty reply");
+    r = run(B({ 0x03, 0x10, h, 10, 0, 0 }));
+    check(r.status == "81,INVALID PARAMS" && r.data.empty(), "ER-12: a 6-byte READ -> 81, empty reply");
+    r = read_cmd(h, 0);
+    check(r.status == "82,PARAMETER(S) OUT OF RANGE" && r.data.empty(), "ER-12: maxlen 0 -> 82, empty reply");
+    r = read_cmd(h, 1473);
+    check(r.status == "82,PARAMETER(S) OUT OF RANGE" && r.data.empty(), "ER-12: maxlen 1473 -> 82, empty reply");
+    std::string last;
+    bytes got = read_all(h, 1472, &last, NULL, 5);
+    check(got == expected(13, 30) && sock(h).open, "ER-12: the handle is unchanged; its data still arrives");
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -1401,6 +1479,10 @@ int main(int argc, char **argv)
     test_claims();
     test_ca();
     test_cleanup();
+    test_status_lengths();
+    test_empty_read_reply();
+    check(longest_status.size() <= 40, "ER-8: the longest status of the whole run is %d bytes: '%s'",
+          (int)longest_status.size(), longest_status.c_str());
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

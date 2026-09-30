@@ -63,6 +63,7 @@ struct FakeServer {
     uint32_t connect_delay_ms; // a non-blocking connect takes this long
     int connect_err;       // ... and then fails with this errno
     bool connect_never;
+    int rst_err;           // the errno of SRV_RST; 0 for ECONNRESET
 };
 
 struct FakeSock {

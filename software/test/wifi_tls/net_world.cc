@@ -387,7 +387,7 @@ static void server_hears(int s)
                     server_push(s, EV_DATA, bytes(flight.begin() + off, flight.begin() + off + n), 0, v.delay_ms);
                 }
             } else if (v.on_hello == SRV_RST) {
-                server_push(s, EV_ERR, bytes(), ECONNRESET, v.delay_ms);
+                server_push(s, EV_ERR, bytes(), v.rst_err ? v.rst_err : ECONNRESET, v.delay_ms);
             } else if (v.on_hello == SRV_FIN) {
                 server_push(s, EV_FIN, bytes(), 0, v.delay_ms);
             }
