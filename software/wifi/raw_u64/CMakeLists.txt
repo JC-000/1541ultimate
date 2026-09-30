@@ -22,3 +22,6 @@ if(CMAKE_C_FLAGS_${BUILD_TYPE_UPPER} MATCHES "NDEBUG")
                         "to every file and compiles out assert() and ESP_ERROR_CHECK(). "
                         "Run: idf.py -DCMAKE_BUILD_TYPE=None reconfigure")
 endif()
+
+# Patched mbedTLS sources (HelloRetryRequest cookie): see mbedtls_patches.cmake
+include(${CMAKE_CURRENT_LIST_DIR}/mbedtls_patches.cmake)
