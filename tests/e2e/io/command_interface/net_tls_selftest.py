@@ -365,7 +365,7 @@ def part4(world: "World") -> bool:
                     detail(str(sigs))
                     if len(run["scenarios"]) != len(tier1) + 1:
                         raise Failure(f"{len(run['scenarios'])} scenario records")
-                    resets = [r for r in double.calls("PUT", "/v1/machine:reset")]
+                    resets = double.calls(path="/v1/machine:reset")
                     if not resets:
                         raise Failure("the C64 was never reset")
             except Failure:

@@ -322,9 +322,11 @@ class NativeLink(Link):
     """The registers from 6502 code on the C64 (uci_native.NativeUci)."""
 
     name = "native"
-    # About 0.8 s per wrap at 1 MHz, so 64 wraps is about 50 s: past the 45 s
-    # bound, which the host's own deadline below enforces first.
-    WAIT_WRAPS = 64
+    # The agent's wait loop is 25 cycles a pass, so one wrap of its 16-bit
+    # counter is 1.64 M cycles: about 1.7 s at 1 MHz (INFERRED from the cycle
+    # count, not measured). 32 wraps is about 55 s, past the 45 s bound, which
+    # the host's own deadline below enforces first.
+    WAIT_WRAPS = 32
 
     def __init__(self, agent) -> None:
         super().__init__()
