@@ -16,6 +16,8 @@ the self-test can show that scenario turning red:
   "release-noop"        $25 never closes anything (S19e must catch it)
   "group-zero"          the OPEN reply's group is 0 (S2 must catch it)
   "info-ff-claims"      `03 23 FF` claims every session (S19e2b must catch it)
+  "abort-shortens"      an ABORT ends PROCESSING early: bit 2 clears at the ABORT,
+                        while the open still completes behind it (S19e must catch it)
 
 It is a model of the contract, not of the firmware: timings are not
 simulated, a READ takes what the socket has, and the group is reported as
@@ -43,7 +45,8 @@ try:
 except ImportError:  # pragma: no cover
     x509 = None
 
-MUTANTS = ("bundle-accepts-all", "release-noop", "group-zero", "info-ff-claims")
+MUTANTS = ("bundle-accepts-all", "release-noop", "group-zero", "info-ff-claims",
+           "abort-shortens")
 FLAVOURS = ("m3", "stock", *MUTANTS)
 MAX_TLS = 2
 
@@ -121,6 +124,8 @@ class MockDevice(Link):
         started = time.monotonic()
         self._dispatch(command)
         elapsed = time.monotonic() - started
+        if self.flavour == "abort-shortens":
+            elapsed = abort_after
         self.log.append({"t": round(time.time(), 3), "link": self.name,
                          "command": command.hex(" "), "abort_after": abort_after,
                          "busy_at_abort": True, "bit2_cleared_after": round(elapsed, 3)})
