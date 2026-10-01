@@ -49,7 +49,13 @@ except ImportError:  # pragma: no cover - reported as a SKIP by the suite
 FIXTURE_NAME = "m3-fixture.test"
 WRONG_NAME = "wrong-host.test"
 ACCEPT_TIMEOUT = 60.0
-CONN_TIMEOUT = 60.0
+# How long a connection may sit idle before the server gives up on it. It has to
+# outlast the slowest route: over REST every byte is one REST call, and the bench
+# measured about 250 s for the device to read S13's 16 KB record before it wrote
+# (green-20261001T023036Z: at 60 s the server closed and the WRITE met a reset).
+# 600 s covers that with room and still bounds every wait; TlsServer.close() ends
+# whatever is still open, so a finished scenario does not leave threads waiting.
+CONN_TIMEOUT = 600.0
 
 
 def payload(seed: int, length: int) -> bytes:
@@ -264,6 +270,8 @@ class TlsServer:
         self.ip, self.port = self.listener.getsockname()[:2]
         self.context = self._context() if chain is not None else None
         self._threads: list[threading.Thread] = []
+        # Every accepted socket, so close() can end the ones still waiting.
+        self._open: set = set()
         self._acceptor = threading.Thread(target=self._accept_loop, daemon=True)
         self._acceptor.start()
 
@@ -307,6 +315,8 @@ class TlsServer:
         # wrap_socket detaches `raw`, so whichever object owns the descriptor
         # is the one to read from and to close.
         conn = raw
+        with self._lock:
+            self._open.add(raw)
         try:
             raw.settimeout(CONN_TIMEOUT)
             if b.stall:
@@ -324,6 +334,9 @@ class TlsServer:
                                            do_handshake_on_connect=False,
                                            suppress_ragged_eofs=False)
             conn = tls
+            with self._lock:
+                self._open.discard(raw)
+                self._open.add(tls)
             tls._net_tls_log = log  # read by the SNI callback
             try:
                 tls.do_handshake()
@@ -360,6 +373,9 @@ class TlsServer:
         except Exception as exc:  # the log is the report; the thread must not die silently
             log.error = f"{type(exc).__name__}: {exc}"
         finally:
+            with self._lock:
+                self._open.discard(conn)
+                self._open.discard(raw)
             try:
                 conn.close()
             except OSError:
@@ -426,7 +442,9 @@ class TlsServer:
     @staticmethod
     def _drain_after_close(raw: socket.socket) -> str:
         """How the client ended a connection the server has already closed for writing."""
-        raw.settimeout(15.0)
+        # The same idle bound: after the server's own close, a REST-route client
+        # can take minutes to read what is left (S6/S7: about 45 s for 3000 B).
+        raw.settimeout(CONN_TIMEOUT)
         try:
             while raw.recv(4096):
                 pass
@@ -456,6 +474,17 @@ class TlsServer:
             self.listener.close()
         except OSError:
             pass
+        with self._lock:
+            still_open = list(self._open)
+        for sock in still_open:
+            # Wakes a thread blocked in recv or unwrap, so it ends now rather
+            # than at CONN_TIMEOUT.
+            try:
+                # The plain socket's shutdown, under any TLS wrapper the other
+                # thread is still reading through.
+                socket.socket.shutdown(sock, socket.SHUT_RDWR)
+            except OSError:
+                pass
         self._acceptor.join(timeout=2)
 
 
