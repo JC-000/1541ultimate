@@ -1266,11 +1266,17 @@ static void alert_out_case(const char *ver)
 static void c_alert_out_12(void) { alert_out_case("ver=12"); }
 static void c_alert_out_13(void) { alert_out_case("ver=13"); }
 
-/* 1.7 a HelloRetryRequest with a cookie (RFC 8446 4.2.2), as OpenJDK's JSSE always sends: the second ClientHello
-   echoes it. Stock mbedTLS 4.1.1 refuses it (Mbed-TLS/mbedtls#9543) without patches/mbedtls-tls13-hrr-cookie.patch */
-static void c_hrr_cookie(void)
+/* 1.7 KNOWN ISSUE, Mbed-TLS/mbedtls#9543: a HelloRetryRequest with a cookie (RFC 8446 4.2.2), as OpenJDK's JSSE
+   always sends. The bridge ships stock mbedTLS as ESP-IDF imports it, and stock 4.1.1 refuses the cookie with an
+   unsupported_extension alert, so a TLS 1.3 server that needs a HelloRetryRequest and sends a cookie fails. This case
+   asserts that stock behaviour on purpose: it goes RED the day the stock library accepts the cookie. Then turn it back
+   into the acceptance test (the second ClientHello echoes the cookie byte for byte and offers secp256r1 only; history:
+   esp-tls/m3 8056e128, removed at the user's decision U-E) and drop KNOWN ISSUE from its name. */
+static void c_known_issue_hrr_cookie(void)
 {
     uint8_t pin[32] = { 3 };
+    printf("KNOWN-ISSUE Mbed-TLS/mbedtls#9543: stock mbedTLS refuses a cookie in a HelloRetryRequest. This case FAILS "
+           "once it accepts one: re-check and restore the acceptance test\n");
     int fd = srv_start("raw:hrrcookie", NULL);
     conn_t c;
     memset(&c, 0, sizeof(c)); c.fd = fd; c.tag = 1;
@@ -1281,14 +1287,12 @@ static void c_hrr_cookie(void)
     }
     close(fd);
     srv_end(2000);
-    char sent[64] = "", echoed[64] = "none", share[64] = "none";
-    CHECK(c.state != FAILED, "the HelloRetryRequest with a cookie is accepted (state %d, reason %d, -0x%x, alert_out %d)",
-          c.state, c.r.fail_reason, -c.r.err, c.r.alert_out);
+    char sent[64] = "", echoed[64] = "none";
     CHECK(log_line("HRR cookie ", sent, sizeof(sent)), "the server sent its cookie");
-    CHECK(log_line("CH2 cookie ", echoed, sizeof(echoed)) && !strcmp(echoed, sent),
-          "the second ClientHello echoes the cookie ('%s', sent '%s')", echoed, sent);
-    CHECK(log_line("CH2 key_share ", share, sizeof(share)) && !strcmp(share, "0017"), "the second key share is secp256r1 only ('%s')",
-          share);
+    CHECK(c.state == FAILED && c.r.err == -0x7500 && c.r.alert_out == 110,
+          "#9543: stock mbedTLS refuses the cookie with unsupported_extension (state %d, -0x%x, alert_out %d; "
+          "want FAILED, -0x7500, 110)", c.state, -c.r.err, c.r.alert_out);
+    CHECK(!log_line("CH2 cookie ", echoed, sizeof(echoed)), "#9543: no second ClientHello ('%s')", echoed);
 }
 
 /* 3.5 SNTP wins over the Nios's time, and SNTP alone is a clock (m3espadv, MEDIUM-1) */
@@ -1330,7 +1334,7 @@ static const tcase_t cases[] = {
     { "tag_rule", c_tag_rule, 1 }, { "step_flags", c_step_flags, 0 }, { "close_notify", c_close_notify, 1 },
     { "close_all", c_close_all, 0 }, { "fatal_alert", c_fatal_alert, 1 },
     { "heap_min", c_heap_min, 0 }, { "alert_out_12", c_alert_out_12, 1 }, { "alert_out_13", c_alert_out_13, 1 },
-    { "sntp_wins", c_sntp_wins, 0 }, { "hrr_cookie", c_hrr_cookie, 1 },
+    { "sntp_wins", c_sntp_wins, 0 }, { "known_issue_hrr_cookie", c_known_issue_hrr_cookie, 1 },
 };
 
 int main(int argc, char **argv)
