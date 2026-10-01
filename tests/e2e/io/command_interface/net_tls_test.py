@@ -995,6 +995,59 @@ def s18_block_max(ctx: Ctx) -> None:
             raise Failure(f"block_max {cap.block_max_ms} ms")
 
 
+def s32_write_stall(ctx: Ctx) -> None:
+    """S32 (M12), and the ER-17 close cap measured on the stalled socket."""
+    if ctx.link.name == "rest":
+        raise Skipped("hundreds of 892-B WRITEs cost a REST call per byte; run it native")
+    server = ctx.server("ecdsa", fx.Behaviour(then="stall", rcvbuf=4096))
+    reply = ctx.expect_open(server.port, ctx.bind_ip, pin=pin_of(ctx))
+    chunk = fx.payload(32, WRITE_MAX)
+    with check("WRITE until TCP is full: FFFF + 12 or 17, sticky; never a partial count"):
+        for count in range(1, 1001):
+            r = ctx.cmd(write_command(reply.handle, chunk))
+            if r.ok:
+                if r.data[:2] != WRITE_MAX.to_bytes(2, "little"):
+                    raise Failure(f"WRITE {count}: partial count {r.data[:2].hex(' ')}")
+                continue
+            ctx.note("stall", {"writes_ok": count - 1, "status": r.status.decode("latin-1"),
+                               "elapsed": round(r.elapsed, 2)})
+            if r.data[:2] != b"\xff\xff" or status_code(r.status) not in (12, 17):
+                raise Failure(f"WRITE {count}: {r.describe()}")
+            again = ctx.cmd(write_command(reply.handle, b"x"))
+            if again.status != r.status:
+                raise Failure(f"not sticky: then {again.describe()}")
+            break
+        else:
+            raise Failure("1000 WRITEs never stalled")
+    with check("ER-17: CLOSE on the stalled TLS socket answers 00,OK within 12 s (measured)"):
+        r = ctx.close(reply.handle)
+        ctx.note("close_elapsed", round(r.elapsed, 3))
+        ctx.expect(r, STATUS_OK, "CLOSE")
+        detail(f"CLOSE took {r.elapsed:.2f}s (ER-17 predicts about 1 s at most, then RST)")
+
+
+def s34_big_curves(ctx: Ctx) -> None:
+    """Measurement: P-384 / P-521 under 1.3 and 1.2, CUSTOM (the TLS-task stack case)."""
+    ctx.expect(ctx.cmd(trust_ca_command(0, 0, b"")), STATUS_OK, "clear")
+    ctx.expect(ctx.upload_ca(ctx.pki.root_der), STATUS_OK, "upload")
+    for curve, group in (("secp384r1", 0x0018), ("secp521r1", 0x0019)):
+        for label, behaviour in (("1.3", fx.Behaviour(ecdh_curve=curve)),
+                                 ("1.2", tls12_server(ecdh_curve=curve))):
+            server = ctx.server("ecdsa", behaviour)
+            with check(f"CUSTOM, TLS {label}, {curve}: OPEN 00,OK, group 0x{group:04X}"):
+                reply = ctx.expect_open(server.port, ctx.bind_ip, TRUST_CUSTOM,
+                                        name=fx.FIXTURE_NAME)
+                info = ctx.info(reply.handle)
+                ctx.close(reply.handle)
+                cap = ctx.info_ff()
+                ctx.note("timing", {"curve": curve, "tls": label, "handshake_ms": info.handshake_ms,
+                                    "block_max_ms": cap.block_max_ms})
+                detail(f"handshake {info.handshake_ms} ms, block_max {cap.block_max_ms} ms")
+                if reply.group != group:
+                    raise Failure(f"group 0x{reply.group:04X}")
+    ctx.cmd(trust_ca_command(0, 0, b""))
+
+
 def s33_open_tcp_duration(ctx: Ctx) -> None:
     """Measurement (errata ER-3): how long a plain OPEN_TCP takes to give up."""
     for label, host in (("an address that drops SYNs", BLACKHOLE),
@@ -1055,6 +1108,10 @@ SCENARIOS = [
              s18_block_max, ("fixture",)),
     Scenario("S14", "reset-cleanup", 2, "tls", "reset closes both, b3 clear, then 97",
              s14_reset_cleanup, ("fixture",)),
+    Scenario("S32", "write-stall-close-cap", 2, "tls", "FFFF + 12/17 sticky; CLOSE time (ER-17)",
+             s32_write_stall, ("fixture",), default=False),
+    Scenario("S34", "p384-p521-custom", 2, "measurement", "handshake ms for P-384/P-521, 1.3/1.2",
+             s34_big_curves, ("fixture",), default=False),
     Scenario("S33", "open-tcp-duration", 2, "measurement", "seconds to 11 / 84 (ER-3)",
              s33_open_tcp_duration, (), default=False),
 ]
