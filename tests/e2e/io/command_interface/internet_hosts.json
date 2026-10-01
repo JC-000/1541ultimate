@@ -1,0 +1,20 @@
+{
+  "comment": "M3-SPEC 7.1 (S30): the default real hosts for BUNDLE mode, each VERIFIED in session-0928 castore-work/probe3/result.json (the 385-host probe under the IDF v5.3 top-only rule). The anchor column is a v5.3-rule fact, not a claim about the IDF 6 image. NET_TLS_INTERNET_HOSTS=h1,h2,... replaces this list for a run. A change to this file is a reviewed commit, like the castore anchors.",
+  "hosts": [
+    {"id": "H1", "host": "www.google.com", "required": true,
+     "recorded_top": "CN=GTS Root R4,O=Google Trust Services LLC,C=US",
+     "recorded_top_issuer": "CN=GlobalSign Root CA,OU=Root CA,O=GlobalSign nv-sa,C=BE",
+     "recorded_top_fp": "76b27b80a58027dc3cf1da68dac17010ed93997d0b603e2fadbe85012493b5a7",
+     "anchor_needed_v53": "GlobalSign Root CA"},
+    {"id": "H2", "host": "wikipedia.org", "required": true,
+     "recorded_top": "CN=ISRG Root X2,O=Internet Security Research Group,C=US",
+     "recorded_top_issuer": "CN=ISRG Root X1,O=Internet Security Research Group,C=US",
+     "recorded_top_fp": "ee5f7abd6981bb0255632cd8f49283451b4b18844d12040b44ee00f07b8fe2c6",
+     "anchor_needed_v53": null},
+    {"id": "H3", "host": "example.com", "required": false,
+     "recorded_top": "CN=SSL.com TLS ECC Root CA 2022,O=SSL Corporation,C=US",
+     "recorded_top_issuer": "CN=AAA Certificate Services,O=Comodo CA Limited,L=Salford,ST=Greater Manchester,C=GB",
+     "recorded_top_fp": "ba06d3d3e348fce7478cc84b422d0e638e9e221ef1a0b53adc14cc70e04b8ab8",
+     "anchor_needed_v53": "AAA Certificate Services"}
+  ]
+}

@@ -36,6 +36,7 @@ OPT_MAXB = 0xC005
 OPT_CAP = 0xC006
 READY = 0xC008
 OPT_ABRT = 0xC009
+OPT_WAIT = 0xC00A
 CMDBUF = 0xC010
 
 RESULT_BASE = 0xC400
@@ -83,6 +84,10 @@ class NativeUci:
         self.machine = machine
         self.runners = runners
         self.busy_timeout = busy_timeout
+        # How many wraps of its 16-bit counter the agent may wait for a reply,
+        # about 0.8 s each at 1 MHz. Zero keeps the agent's own six seconds; a
+        # caller with a longer command raises it together with busy_timeout.
+        self.wait_wraps = 0
         self._sequence = 0
 
     # -- lifecycle ----------------------------------------------------------
@@ -121,8 +126,10 @@ class NativeUci:
             min(overrun_reads, MAX_OVERRUN_READS), max_blocks,
             cap & 0xFF, (cap >> 8) & 0xFF]))
         # Outside the option block above, so it is written every time rather
-        # than left over from the previous transaction.
-        self.machine.writemem(OPT_ABRT, bytes([0x01 if abort_first else 0x00]))
+        # than left over from the previous transaction. OPT_WAIT follows
+        # OPT_ABRT, so one write carries both.
+        self.machine.writemem(OPT_ABRT, bytes([0x01 if abort_first else 0x00,
+                                               self.wait_wraps & 0xFF]))
         self.machine.writemem(GO, bytes([0x01]))
 
         deadline = time.monotonic() + self.busy_timeout
