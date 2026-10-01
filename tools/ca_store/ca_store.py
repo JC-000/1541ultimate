@@ -331,8 +331,10 @@ def max_certs(text):
     return int(match.group(1)) if match else None
 
 
-def bump_ident(project, date):
-    """IDENT_MINOR and IDENT_STRING up by one, with a line saying why, as the header keeps them.
+def bump_ident(project, date, new):
+    """IDENT_MINOR and IDENT_STRING moved to `new`, which must be above the current minor, with a
+    line saying why, as the header keeps them. The caller names the number: on a development line
+    the next one may already belong to another image.
 
     Returns (header, new text, new version) and writes nothing, so a caller can check every
     project before it changes any file."""
@@ -348,7 +350,8 @@ def bump_ident(project, date):
     if (string.group(2), string.group(3)) != (major.group(1), minor.group(1)):
         raise StoreError("%s: IDENT_STRING says %s.%s, IDENT_MAJOR/MINOR say %s.%s" % (
             header, string.group(2), string.group(3), major.group(1), minor.group(1)))
-    new = int(minor.group(1)) + 1
+    if new <= int(minor.group(1)):
+        raise StoreError("%s: IDENT_MINOR %d is not above %s" % (header, new, minor.group(1)))
     version = "%s.%d" % (major.group(1), new)
     text = (text[:minor.start()] + minor.group(0).replace(minor.group(1), str(new))
             + text[minor.end():])

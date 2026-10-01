@@ -448,7 +448,7 @@ class BundleSetTest(unittest.TestCase):
         header = self.tree.bridge / "main/rpc_dispatch.h"
         header.write_text(HEADER.replace("V1.%d", "V1.5") % (6, 6))
         with self.assertRaisesRegex(ca_store.StoreError, "IDENT_STRING says 1.5"):
-            ca_store.bump_ident(self.tree.bridge, "2026-09-29")
+            ca_store.bump_ident(self.tree.bridge, "2026-09-29", 7)
 
 
 class CommittedStoreTest(unittest.TestCase):
@@ -481,7 +481,7 @@ class CommittedStoreTest(unittest.TestCase):
 
     def test_every_project_that_uses_the_store_has_a_version_to_bump(self):
         for project, _ in ca_store.projects(REPO_ROOT):
-            _, text, version = ca_store.bump_ident(project, "2026-09-25")
+            _, text, version = ca_store.bump_ident(project, "2026-09-25", 999)
             self.assertIn('%s"' % version, text)
 
     def test_the_bridge_cmake_runs_the_check_at_configure_and_at_every_build(self):

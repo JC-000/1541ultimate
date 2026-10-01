@@ -70,6 +70,7 @@ class RefreshTest(unittest.TestCase):
         kwargs.setdefault("regenerate", agree)
         kwargs.setdefault("descends", lambda old, new: True)
         kwargs.setdefault("now", NOW)
+        kwargs.setdefault("ident_minor", 7)     # the bridge in Tree is 1.6
         return refresh.refresh(self.tree.root, Served(self.serve_dir, text, sha256).url, **kwargs)
 
     def test_a_new_date_writes_the_store_the_pins_and_bumps_the_bridge(self):
@@ -206,6 +207,42 @@ class RefreshTest(unittest.TestCase):
         self.assertIn("sha256 mismatch", stderr.getvalue())
 
 
+    def test_changed_certificates_without_an_allocated_version_write_nothing(self):
+        # m3fix-adversarial1 F4: the next minor is not necessarily free on the dev line.
+        before = self.tree.snapshot()
+        with self.assertRaisesRegex(ca_store.StoreError, "--ident-minor"):
+            self.refresh(pem(NEW_DATE, first=5, count=30), ident_minor=None)
+        self.assertEqual(self.tree.snapshot(), before)
+
+    def test_a_version_that_does_not_move_forward_is_refused(self):
+        for minor in (6, 5):
+            self.assertRefusedWith("IDENT_MINOR %d is not above 6" % minor, pem(NEW_DATE, first=5, count=30),
+                                   agree, ident_minor=minor)
+
+    def test_the_allocated_version_is_the_one_written(self):
+        self.refresh(pem(NEW_DATE, first=5, count=30), ident_minor=309)
+        header = (self.tree.bridge / "main/rpc_dispatch.h").read_text()
+        self.assertIn('#define IDENT_STRING "ESP32 WiFi Bridge V1.309"', header)
+        self.assertIn("#define IDENT_MINOR   309\n", header)
+        self.assertIn("// 1.309: the Mozilla root store as of 2026-09-25.", header)
+
+    def test_the_same_certificates_need_no_version(self):
+        self.assertEqual(len(self.refresh(pem(NEW_DATE), ident_minor=None)), 2)
+
+    def test_the_command_line_passes_the_version(self):
+        served = Served(self.serve_dir, pem(NEW_DATE, first=5, count=30))
+        real = refresh.refresh
+
+        def offline(*args, **kwargs):
+            return real(*args, regenerate=agree, descends=lambda old, new: True, now=NOW, **kwargs)
+        with mock.patch.object(refresh, "refresh", offline), \
+                contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(refresh.main(["--repo-root", str(self.tree.root), "--source", served.url]), 1)
+            self.assertIn("--ident-minor", err.getvalue())
+            self.assertEqual(refresh.main(["--repo-root", str(self.tree.root), "--source", served.url,
+                                           "--ident-minor", "8"]), 0)
+        self.assertIn("V1.8", (self.tree.bridge / "main/rpc_dispatch.h").read_text())
+
     def test_a_new_date_with_the_same_certificates_bumps_nothing(self):
         new = pem(NEW_DATE)
         summary = pathlib.Path(self.tmp) / "summary.md"
@@ -281,10 +318,10 @@ class RefreshTest(unittest.TestCase):
             raise ca_store.StoreError("cannot fetch certdata.txt")
         self.assertRefusedWith("cannot fetch certdata", pem(NEW_DATE), broken)
 
-    def assertRefusedWith(self, message, text, regenerate):
+    def assertRefusedWith(self, message, text, regenerate, **kwargs):
         before = self.tree.snapshot()
         with self.assertRaisesRegex(ca_store.StoreError, message):
-            self.refresh(text, regenerate=regenerate)
+            self.refresh(text, regenerate=regenerate, **kwargs)
         self.assertEqual(self.tree.snapshot(), before)
 
     def test_an_older_certdata_revision_is_refused(self):

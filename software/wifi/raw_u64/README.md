@@ -39,13 +39,23 @@ and then: v6.0.3 ships Mozilla's data of 2025-12-02, with roots Mozilla has sinc
   `CA_MAX_AGE_DAYS` is a warning, and an error when the build runs with `RELEASE=1` in its
   environment (`RELEASE=1 idf.py build`, `make RELEASE=1 esp32_raw_u64`). Run the check by hand
   with `python3 tools/ca_store/ca_store.py check`, and its tests with `make ca_store_test`.
-- **How to refresh it.** `python3 tools/ca_store/refresh.py` (needs the network and Perl) fetches
-  curl's file and its sum, and takes it only when curl's own `mk-ca-bundle.pl`, pinned by commit
-  and sha256, gives the same file from the newest `certdata.txt` on Firefox's release branch,
-  which must descend from `CA_CERTDATA_REF`. It writes `cacert.pem` and `CA_PINS`, and when the
-  certificates changed it bumps `IDENT_MINOR` here, so modules get the new bundle;
-  `--summary FILE` lists what changed by fingerprint, for review. Commit the result. Never edit
-  `cacert.pem` by hand: the build refuses it.
+- **How to refresh it.** `python3 tools/ca_store/refresh.py --ident-minor N` (needs the network
+  and Perl) fetches curl's file and its sum, and takes it only when curl's own `mk-ca-bundle.pl`,
+  pinned by commit and sha256, gives the same file from the newest `certdata.txt` on Firefox's
+  release branch, which must descend from `CA_CERTDATA_REF`. It writes `cacert.pem` and `CA_PINS`.
+  When the certificates changed it also sets `IDENT_MINOR` (and `IDENT_STRING`) in
+  `main/rpc_dispatch.h` to N, since the updater reflashes a module only for a new version. N must
+  be allocated for this image and above the current minor: the tool refuses a certificate change
+  without `--ident-minor`, because on a development line the next number may already belong to
+  another image. `--summary FILE` lists what changed by fingerprint, for review. Commit the
+  result. Never edit `cacert.pem` by hand: the build refuses it. Moving the pins by hand without
+  a new `IDENT_MINOR` is not caught by the check, so review that the two move together.
+- **Roots with serial number zero.** Six roots in Mozilla's set as of 2026-09-25 (Go Daddy Root
+  CA - G2, Starfield Root CA - G2, Starfield Services Root CA - G2, Security Communication
+  RootCA2 and the two HARICA 2015 roots) have serial number 0, which the `cryptography` package
+  (48.0) warns is not positive. ESP-IDF's `gen_crt_bundle.py` silences that warning
+  today; if a future `cryptography` refuses such certificates, the bundle step fails and the build
+  stops (it fails closed, as it would with ESP-IDF's own bundle, which holds the same roots).
 - **No anchors.** The ESP-IDF 5.3 line needed four roots Mozilla dropped, kept by hand, for
   cross-signed chains. ESP-IDF 6 verifies cross-signed chains itself
   (`CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY`), so they are retired: `sdkconfig` sets

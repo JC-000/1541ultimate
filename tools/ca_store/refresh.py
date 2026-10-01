@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Refreshes the Mozilla root store the ESP32 bridge trusts (software/wifi/ca_store).
 
-    refresh.py [--source URL] [--summary FILE]
+    refresh.py [--source URL] [--summary FILE] [--ident-minor N]
 
 Fetches curl's cacert.pem and its published sum, and checks the file against a copy made again
 from Mozilla's own certdata.txt on GitHub. If Mozilla's data changed, it writes cacert.pem and
-CA_PINS and, when the bundle's certificates changed, bumps IDENT_MINOR of every project that
-attaches the bundle (ca_store.PROJECTS).
+CA_PINS and, when the bundle's certificates changed, moves IDENT_MINOR of every project that
+attaches the bundle (ca_store.PROJECTS) to --ident-minor N. Without it such a change is refused:
+the updater reflashes a module only for a new version, and on a development line the next number
+may already belong to another image, so the number is allocated by a person, not taken.
 
 curl.se publishes the file and its sum from the same server, so the sum proves only that the
 download is whole. The second copy is made from certdata.txt on Firefox's release branch (the
@@ -231,7 +233,7 @@ def published_sha256(data, url):
 
 
 def refresh(repo_root, source=None, summary=None, now=None, regenerate=regenerate,
-            descends=descends):
+            descends=descends, ident_minor=None):
     """Returns the paths written, empty when Mozilla's data has not changed."""
     pem_path, pins_path = store_paths(repo_root)
     pins = read_pins(pins_path)
@@ -283,8 +285,13 @@ def refresh(repo_root, source=None, summary=None, now=None, regenerate=regenerat
     # modules that carry it reflashed. Every header is checked before anything is written.
     new_set = bundle_set_sha256(ders)
     day = when.date().isoformat()
-    bumps = ([bump_ident(project, day) for project, _ in using if attaching(project)]
-             if new_set != pins["CA_BUNDLE_SET_SHA256"] else [])
+    carrying = ([project for project, _ in using if attaching(project)]
+                if new_set != pins["CA_BUNDLE_SET_SHA256"] else [])
+    if carrying and ident_minor is None:
+        raise StoreError("the bundle's certificates changed, so %s needs a new IDENT_MINOR: pass "
+                         "--ident-minor N with a number allocated for this image"
+                         % ", ".join(os.path.relpath(p, repo_root) for p in carrying))
+    bumps = [bump_ident(project, day, ident_minor) for project in carrying]
 
     write_atomically(pem_path, data)
     write_pins(pins_path, {"CA_MOZILLA_DATE": iso(date),
@@ -351,10 +358,14 @@ def main(argv=None):
     parser.add_argument("--source", help="fetch from this URL instead of CA_SOURCE_URL "
                                          "(its sum from the same URL + .sha256)")
     parser.add_argument("--summary", help="write what changed to this file")
+    parser.add_argument("--ident-minor", type=int,
+                        help="the IDENT_MINOR allocated for the image, needed when the "
+                             "certificates change")
     arguments = parser.parse_args(argv)
     repo_root = pathlib.Path(arguments.repo_root)
     try:
-        written = refresh(repo_root, arguments.source, arguments.summary)
+        written = refresh(repo_root, arguments.source, arguments.summary,
+                          ident_minor=arguments.ident_minor)
     except (StoreError, OSError) as error:
         print("refresh: %s" % error, file=sys.stderr)
         return 1
