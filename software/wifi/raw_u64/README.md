@@ -1,4 +1,55 @@
-# Wifi SCAN Example
+# ESP32 WiFi bridge (raw_u64)
+
+## Building
+
+The bridge builds with ESP-IDF v6.0.3 (for example in the `espressif/idf:v6.0.3` image):
+`idf.py build` here, or `make esp32_raw_u64` from the top of the repository. The image is
+`build/bridge.bin`; its version is `IDENT_MINOR` in `main/rpc_dispatch.h`, and the Ultimate's
+updater reflashes a module only when that differs from what the module reports.
+
+mbedTLS is ESP-IDF's own, as ESP-IDF imports it: the build carries no patch to it. Known issue:
+stock mbedTLS refuses a cookie in a TLS 1.3 HelloRetryRequest (Mbed-TLS/mbedtls#9543), so a
+server that sends one, as OpenJDK's JSSE does, fails the handshake. The host test case
+`known_issue_hrr_cookie` (`test/`) asserts that behaviour and fails once the library changes.
+
+## The certificate bundle: the Mozilla root store, vendored
+
+The roots the bridge trusts in BUNDLE mode come from `software/wifi/ca_store/cacert.pem`, not
+from ESP-IDF's copy. ESP-IDF refreshes its own `cacrt_all.pem` on its release branches only now
+and then: v6.0.3 ships Mozilla's data of 2025-12-02, with roots Mozilla has since dropped.
+
+- **Where it comes from.** `cacert.pem` is curl's extract of Mozilla's `certdata.txt`
+  (<https://curl.se/ca/cacert.pem>), byte for byte. `CA_PINS` beside it records the source URL,
+  the Mozilla date, the file's sha256 (`CA_SHA256`), the `certdata.txt` commit on GitHub it was
+  regenerated from as a cross-check (`CA_CERTDATA_REF`), the sha256 of its set of certificates
+  (`CA_BUNDLE_SET_SHA256`) and the age limit (`CA_MAX_AGE_DAYS`).
+- **How the build uses it.** `sdkconfig` selects `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_NONE`,
+  so none of ESP-IDF's roots are merged in, and points `CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH`
+  at `../ca_store/cacert.pem`; ESP-IDF's `gen_crt_bundle.py` builds the bundle from that file and
+  builds it again whenever the file changes.
+- **How the build verifies it.** `CMakeLists.txt` runs `python3 tools/ca_store/ca_store.py check`
+  at every configure, and an edit to `cacert.pem`, `CA_PINS` or the checker configures again. The
+  build fails when `cacert.pem` does not match `CA_SHA256`, when its date disagrees with the pins,
+  when its certificates changed without `CA_BUNDLE_SET_SHA256`, when another certificate file
+  (such as an `anchors.pem`) is in the store, or when `sdkconfig` no longer builds the bundle from
+  the store alone with `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`. A store older
+  than `CA_MAX_AGE_DAYS` is a warning, and an error when the configure runs with `RELEASE=1` in
+  its environment. Run the check by hand with `python3 tools/ca_store/ca_store.py check`, and its
+  tests with `make ca_store_test`.
+- **How to refresh it.** `python3 tools/ca_store/refresh.py` (needs the network and Perl) fetches
+  curl's file and its sum, and takes it only when curl's own `mk-ca-bundle.pl`, pinned by commit
+  and sha256, gives the same file from the newest `certdata.txt` on Firefox's release branch,
+  which must descend from `CA_CERTDATA_REF`. It writes `cacert.pem` and `CA_PINS`, and when the
+  certificates changed it bumps `IDENT_MINOR` here, so modules get the new bundle;
+  `--summary FILE` lists what changed by fingerprint, for review. Commit the result. Never edit
+  `cacert.pem` by hand: the build refuses it.
+- **No anchors.** The ESP-IDF 5.3 line needed four roots Mozilla dropped, kept by hand, for
+  cross-signed chains. ESP-IDF 6 verifies cross-signed chains itself
+  (`CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY`), so they are retired: `sdkconfig` sets
+  it explicitly, `main/tls_engine.c` refuses to build without it, and the check refuses an anchor
+  file. Only raw_u64 uses the store; raw_c3 and u64ctrl keep ESP-IDF's bundle.
+
+## The Wi-Fi scan (from the ESP-IDF example this project started as)
 
 This example shows how to use the scan functionality of the Wi-Fi driver of ESP32.
 
