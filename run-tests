@@ -404,14 +404,12 @@ SUITES: Sequence[Suite] = (
     # able to reach it; the scenarios that need that skip where it cannot.
     Suite("e2e", "uci-net-target", "tests/e2e/io/command_interface/net_target_test.py",
           "-H @HOST@ -p @PASS@ -t @TIMEOUT@ --test all", profile=profiles.DEEP),
-    # M3: TLS sockets on the network target ($21-$25), M3-SPEC section 7. RED on
-    # firmware without M3 (every TLS scenario answers 21,UNKNOWN COMMAND), GREEN on
-    # M3. This host serves the local TLS fixture and S30 reaches real hosts, so it
-    # needs the device to reach this machine and the Internet. Deep, like
-    # uci-net-target: name it with -s and grep the log for it.
-    Suite("e2e", "uci-net-tls", "tests/e2e/io/command_interface/net_tls_test.py",
-          "-H @HOST@ -p @PASS@ -t @TIMEOUT@", profile=profiles.DEEP),
-    # The same suite against a simulated device: GREEN, RED and each mutant caught.
+    # The M3 TLS suite against a simulated device (GREEN, RED, each mutant caught,
+    # and no verdict without evidence). Needs no device. The rig suite itself,
+    # net_tls_test.py, is deliberately NOT registered: it is opt-in by name only
+    # (it may switch WiFi on with --set-wifi, needs this host as a TLS peer and the
+    # Internet, and is RED by design on every image without M3). See
+    # tests/lib/registry_test.py NOT_SUITES.
     Suite("e2e", "uci-net-tls-selftest", "tests/e2e/io/command_interface/net_tls_selftest.py",
           "", profile=profiles.DEEP),
     # Two checks that are genuinely about the Telnet transport itself (a

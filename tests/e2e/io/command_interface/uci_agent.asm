@@ -98,8 +98,8 @@ zstat   = $0B                   ; CTRL as the current block arrived
 zwrap   = $0C                   ; wraps this transaction's waits may take
 
 ; The wait gives up after this many wraps of a 16 bit counter. Each pass is
-; about a dozen cycles, so $08 is roughly six seconds on a 1 MHz 6510: longer
-; than any command takes, shorter than the host's own timeout. A host that
+; 25 cycles, so a wrap is about 1.7 s and $08 about 14 s on a 1 MHz 6510
+; (counted, not measured): longer than any plain command takes. A host that
 ; sends a longer command (a TLS open) raises it through OPT_WAIT.
 WAIT_WRAPS = $08
 

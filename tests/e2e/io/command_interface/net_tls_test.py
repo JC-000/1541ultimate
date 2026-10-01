@@ -69,7 +69,7 @@ import cli  # noqa: E402
 import targets  # noqa: E402
 from api import UltimateApi  # noqa: E402
 from report import (  # noqa: E402
-    FAIL, OK, SKIP, Failure, check, check_ok, check_skip, check_start, check_warn, detail,
+    FAIL, OK, SKIP, Failure, check, check_fail, check_ok, check_skip, check_start, check_warn, detail,
     format_exception, section, suite_fail, suite_ok, warn)
 from uci import Uci, interface_present  # noqa: E402
 from uci_native import NativeUci  # noqa: E402
@@ -104,6 +104,7 @@ SETTINGS = (
     ("U64 Specific Settings", "Turbo Control", "Off", True),
 )
 REQUIRED_SETTING = "Command Interface"
+WIFI_SETTING = "WiFi Enabled"
 # INFO $FF [4]: module, entropy, trusted time. How long the module and SNTP may
 # take to come up after the settings above.
 READY_BITS = 0x07
@@ -123,6 +124,9 @@ MAC_SAMPLES = 3
 # A name no resolver answers (RFC 6761), and an address nothing answers SYNs on
 # (RFC 5737 TEST-NET-1, dropped rather than refused on most networks).
 UNRESOLVABLE = "m3-e2e-unresolvable.invalid"
+# S32 stops here: with a 4 KB receive buffer the stall comes within tens of
+# WRITEs, and each native WRITE is a body-carrying writemem (adversarial1 L-4).
+S32_MAX_WRITES = 100
 BLACKHOLE = "192.0.2.1"
 
 
@@ -144,7 +148,7 @@ class Scenario:
 class Outcome:
     scenario: Scenario
     route: str
-    verdict: str = "not run"          # PASS, FAIL, SKIP
+    verdict: str = "not run"          # PASS, FAIL, SKIP, N/A (not on this route), ERROR
     signature: str = ""               # GREEN, RED, FAIL, CONTROL-PASS, ...
     reason: str = ""
     first_tls_status: str | None = None
@@ -228,7 +232,12 @@ class Ctx:
 
     def read_until(self, handle: int, count: int, maxlens=(READ_CHUNK,),
                    budget: float = READ_BUDGET_SECONDS) -> tuple[bytes, ReadReply | None]:
-        """READ until `count` bytes or the stream ends; (bytes, the ending reply or None)."""
+        """READ until `count` bytes or the stream ends; (bytes, the ending reply or None).
+
+        `budget` is IDLE time: the clock restarts on every READ that brings data.
+        On the REST route every byte costs one REST call, so a total-time
+        budget would fail a healthy but slow transfer for the wrong reason.
+        """
         got = bytearray()
         deadline = time.monotonic() + budget
         index = 0
@@ -239,10 +248,11 @@ class Ctx:
                 if reply.header != len(reply.payload):
                     raise Failure(f"READ header {reply.header} but {len(reply.payload)} bytes")
                 got += reply.payload
+                deadline = time.monotonic() + budget
                 continue
             if reply.header == 0xFFFF and reply.status == STATUS_NO_DATA_IDLE:
                 if time.monotonic() > deadline:
-                    raise Failure(f"only {len(got)} of {count} bytes within {budget:.0f}s")
+                    raise Failure(f"only {len(got)} of {count} bytes: no data for {budget:.0f}s")
                 time.sleep(0.05)
                 continue
             return bytes(got), reply
@@ -319,7 +329,14 @@ class Ctx:
 
 
 class Skipped(Failure):
-    """The scenario cannot run here (no fixture, no internet, wrong route)."""
+    """The scenario could not run here. Counts AGAINST every verdict (adversarial1 H-1)."""
+
+
+class NotOnRoute(Skipped):
+    """By design the scenario does not apply to this route (S19e/S19e2b native, S32 REST).
+
+    The only skip a verdict may ignore; the run still needs TLS evidence elsewhere.
+    """
 
 
 def tls13_server() -> fx.Behaviour:
@@ -546,7 +563,7 @@ def s5_refused_cert(ctx: Ctx) -> None:
 
 def s19e_abort_release(ctx: Ctx) -> None:
     if not ctx.link.can_abort_in_flight:
-        raise Skipped(f"the {ctx.link.name} route cannot ABORT a command in flight (REST only)")
+        raise NotOnRoute(f"the {ctx.link.name} route cannot ABORT a command in flight (REST only)")
     with check("TLS_INFO $FF answers before the OPEN (and does not claim; 1.1 Rule 2)"):
         ctx.entries(0, "before the OPEN")
     server = ctx.server("ecdsa", fx.Behaviour(delay_handshake=SLOW_HANDSHAKE_SECONDS))
@@ -561,6 +578,11 @@ def s19e_abort_release(ctx: Ctx) -> None:
                           "run did not test an ABORT in PROCESSING")
         if aborted.bit2_cleared_after > BOUND_OPEN + 12:
             raise Failure(f"bit 2 cleared {aborted.bit2_cleared_after:.1f}s after the PUSH")
+        # The server holds its answer SLOW_HANDSHAKE_SECONDS, so an OPEN that
+        # ran to its end cannot clear bit 2 sooner (adversarial1 M-6).
+        if aborted.bit2_cleared_after < SLOW_HANDSHAKE_SECONDS - 0.5:
+            raise Failure(f"bit 2 cleared {aborted.bit2_cleared_after:.1f}s after the PUSH, before "
+                          f"the server's {SLOW_HANDSHAKE_SECONDS:.0f}s delay: the ABORT shortened it")
     with check("`03 23 FF` (allowed in between): [2] = 1 and [14] = 1, the session is unclaimed"):
         cap = ctx.info_ff()
         if (cap.entries, cap.unclaimed) != (1, 1):
@@ -943,7 +965,7 @@ def s19e2_release_spares_claimed(ctx: Ctx) -> None:
 
 def s19e2b_info_does_not_claim(ctx: Ctx) -> None:
     if not ctx.link.can_abort_in_flight:
-        raise Skipped(f"the {ctx.link.name} route cannot ABORT a command in flight (REST only)")
+        raise NotOnRoute(f"the {ctx.link.name} route cannot ABORT a command in flight (REST only)")
     ctx.entries(0, "before the OPENs")
     fast = ctx.server("ecdsa", tls13_server())
     slow = ctx.server("ecdsa", fx.Behaviour(delay_handshake=SLOW_HANDSHAKE_SECONDS))
@@ -998,12 +1020,12 @@ def s18_block_max(ctx: Ctx) -> None:
 def s32_write_stall(ctx: Ctx) -> None:
     """S32 (M12), and the ER-17 close cap measured on the stalled socket."""
     if ctx.link.name == "rest":
-        raise Skipped("hundreds of 892-B WRITEs cost a REST call per byte; run it native")
+        raise NotOnRoute("hundreds of 892-B WRITEs cost a REST call per byte; run it native")
     server = ctx.server("ecdsa", fx.Behaviour(then="stall", rcvbuf=4096))
     reply = ctx.expect_open(server.port, ctx.bind_ip, pin=pin_of(ctx))
     chunk = fx.payload(32, WRITE_MAX)
     with check("WRITE until TCP is full: FFFF + 12 or 17, sticky; never a partial count"):
-        for count in range(1, 1001):
+        for count in range(1, S32_MAX_WRITES + 1):
             r = ctx.cmd(write_command(reply.handle, chunk))
             if r.ok:
                 if r.data[:2] != WRITE_MAX.to_bytes(2, "little"):
@@ -1018,7 +1040,7 @@ def s32_write_stall(ctx: Ctx) -> None:
                 raise Failure(f"not sticky: then {again.describe()}")
             break
         else:
-            raise Failure("1000 WRITEs never stalled")
+            raise Failure(f"{S32_MAX_WRITES} WRITEs never stalled")
     with check("ER-17: CLOSE on the stalled TLS socket answers 00,OK within 12 s (measured)"):
         r = ctx.close(reply.handle)
         ctx.note("close_elapsed", round(r.elapsed, 3))
@@ -1127,8 +1149,8 @@ def judge(outcome: Outcome) -> None:
     if outcome.verdict == "PASS":
         outcome.signature = {"tls": "GREEN", "control": "CONTROL-PASS",
                              "measurement": "MEASURED"}[s.kind]
-    elif outcome.verdict == "SKIP":
-        outcome.signature = "SKIP"
+    elif outcome.verdict in ("SKIP", "N/A", "ERROR"):
+        outcome.signature = outcome.verdict
     elif unknown and outcome.first_tls_status == STATUS_UNKNOWN_COMMAND.decode():
         outcome.signature = "RED"
     else:
@@ -1143,6 +1165,10 @@ def run_scenario(ctx: Ctx, scenario: Scenario, route: str) -> Outcome:
     try:
         scenario.fn(ctx)
         outcome.verdict = "PASS"
+    except NotOnRoute as exc:
+        outcome.verdict, outcome.reason = "N/A", str(exc)
+        check_start(f"{scenario.sid} applies to this route")
+        check_skip(str(exc))
     except Skipped as exc:
         outcome.verdict, outcome.reason = "SKIP", str(exc)
         check_start(f"{scenario.sid} can run here")
@@ -1175,20 +1201,50 @@ def run_scenario(ctx: Ctx, scenario: Scenario, route: str) -> Outcome:
 
 
 def expectation_met(outcomes: list[Outcome], expect: str) -> tuple[bool, list[str]]:
+    """Whether the run shows what --expect asks, from evidence only (adversarial1 H-1).
+
+    A SKIP or ERROR of any selected scenario is a problem; only N/A (by design
+    not on this route) is set aside. green: every control passes, every TLS
+    scenario is GREEN, no measurement failed. red: every control passes and
+    every TLS scenario is RED. Either way each route must have produced at least
+    one TLS outcome of the expected signature, so zero evidence never passes.
+    """
     problems = []
+    evidence: dict[str, int] = {}
+    routes = []
     for o in outcomes:
         label = f"{o.scenario.sid} {o.scenario.name} [{o.route}]"
-        if o.verdict == "SKIP" or o.scenario.kind == "measurement":
+        if o.route not in routes:
+            routes.append(o.route)
+            evidence[o.route] = 0
+        if o.verdict == "N/A":
             continue
-        if o.scenario.kind == "control":
+        if o.verdict in ("SKIP", "ERROR"):
+            problems.append(f"{label}: {o.verdict}, so it says nothing: {o.reason}")
+            continue
+        kind = o.scenario.kind
+        if kind == "control":
             if o.verdict != "PASS":
                 problems.append(f"{label}: the control failed, so the bench is not sound: {o.reason}")
-            continue
-        if expect == "green" and o.signature != "GREEN":
-            problems.append(f"{label}: {o.signature}: {o.reason}")
-        if expect == "red" and o.signature != "RED":
+        elif kind == "measurement":
+            if expect == "green" and o.verdict != "PASS":
+                problems.append(f"{label}: the measurement failed: {o.reason}")
+        elif expect == "green":
+            if o.signature == "GREEN":
+                evidence[o.route] += 1
+            else:
+                problems.append(f"{label}: {o.signature}: {o.reason}")
+        elif o.signature == "RED":
+            evidence[o.route] += 1
+        else:
             problems.append(f"{label}: {o.signature} where RED (21 to its first TLS command) "
                             f"was expected: {o.reason or 'it passed'}")
+    if not outcomes:
+        problems.append("no scenario ran")
+    for route in routes:
+        if not evidence[route]:
+            problems.append(f"route {route}: no TLS scenario showed {expect.upper()}, so this run "
+                            f"is no evidence either way")
     return not problems, problems
 
 
@@ -1212,8 +1268,10 @@ def lock_check(host: str) -> dict:
     """The harness DeviceLock: refuse if another live process holds this device."""
     try:
         from c64_test_harness.backends.device_lock import DeviceLock  # noqa: PLC0415
-    except ImportError:
-        return {"lock": "harness not importable; not checked"}
+    except ImportError as exc:
+        # Fail closed, as run-tests-locked does (adversarial1 L-5).
+        raise Failure(f"the harness DeviceLock is not importable ({exc}); refusing to run "
+                      f"unlocked against {host}") from exc
     holder = DeviceLock.foreign_holder(host)
     if not holder:
         return {"lock": "free"}
@@ -1223,7 +1281,7 @@ def lock_check(host: str) -> dict:
                   f"the bench. Use run-tests-locked, or wait")
 
 
-def apply_settings(device) -> tuple[dict, dict]:
+def apply_settings(device, set_wifi: bool) -> tuple[dict, dict]:
     original, applied = {}, {}
     for category, item, value, restore in SETTINGS:
         with check(f"set {category} / {item} = {value}"):
@@ -1235,9 +1293,15 @@ def apply_settings(device) -> tuple[dict, dict]:
                 check_warn(f"not on this device ({exc}); recorded as absent")
                 applied[item] = "absent"
                 continue
+            if item == WIFI_SETTING and current.strip() != value and not set_wifi:
+                # One-way on the U64: switching it on cannot be undone by this
+                # suite, so only an explicit --set-wifi may do it (adversarial1 M-5).
+                raise Failure(f"{item} is {current!r}; this suite needs it {value!r} and does "
+                              f"not switch it on without --set-wifi (one-way on the U64)")
             if restore:
                 original[(category, item)] = current
-            device.configs.set(category, item, value)
+            if current.strip() != value:
+                device.configs.set(category, item, value)
             applied[item] = str(device.configs.current(category, item))
             if applied[item].strip() != value:
                 raise Failure(f"read back {applied[item]!r}")
@@ -1290,6 +1354,9 @@ def parse_args(argv=None):
                                              "of this machine's default store.")
     parser.add_argument("--strict-sni", action="store_true",
                         help="S5 also requires the BUNDLE ClientHello to carry the SNI.")
+    parser.add_argument("--set-wifi", action="store_true",
+                        help="Switch 'WiFi Enabled' on if it is off. One-way on the U64 (a "
+                             "reboot is the only way back), so without it the suite refuses.")
     parser.add_argument("--keep-config", action="store_true",
                         help="Don't restore the settings this suite changed.")
     parser.add_argument("--list", action="store_true", help="List the scenarios and exit.")
@@ -1338,14 +1405,27 @@ def run_routes(links: list[tuple[str, Callable[[], Link], Callable[[], Link] | N
     wire: list[dict] = []
     for route, make_link, reset in links:
         section(f"route: {route}")
-        ctx = Ctx(make_link(), args, pki, bind_ip, reset, wire)
+        try:
+            link = make_link()
+        except Failure as exc:
+            # adversarial1 M-1: the other routes' records stay; this one is an ERROR.
+            warn(f"the {route} route could not start: {exc}")
+            for scenario in scenarios:
+                failed = Outcome(scenario, route, "ERROR", reason=f"the {route} route could not "
+                                                                  f"start: {exc}")
+                judge(failed)
+                outcomes.append(failed)
+            continue
+        ctx = Ctx(link, args, pki, bind_ip, reset, wire)
         pending = list(scenarios)
         try:
             while pending:
                 scenario = pending.pop(0)
                 missing = [need for need in scenario.needs if need not in available]
                 if missing:
-                    outcome = Outcome(scenario, route, "SKIP",
+                    # The run was meant to have it (the fixture could not start,
+                    # say): an ERROR, never a quiet SKIP (adversarial1 H-1).
+                    outcome = Outcome(scenario, route, "ERROR",
                                       reason=f"this run has no {', '.join(missing)}")
                     judge(outcome)
                 else:
@@ -1355,7 +1435,7 @@ def run_routes(links: list[tuple[str, Callable[[], Link], Callable[[], Link] | N
             outcomes.append(ctx_lost := Outcome(scenario, route, "FAIL", reason=str(exc)))
             judge(ctx_lost)
             for rest in pending:
-                lost = Outcome(rest, route, "SKIP", reason=f"the {route} route was lost")
+                lost = Outcome(rest, route, "ERROR", reason=f"the {route} route was lost")
                 judge(lost)
                 outcomes.append(lost)
             warn(f"the {route} route is lost: {exc}; resetting the C64")
@@ -1370,7 +1450,7 @@ def run_routes(links: list[tuple[str, Callable[[], Link], Callable[[], Link] | N
 def summarise(outcomes: list[Outcome], expect: str) -> bool:
     section("summary")
     for o in outcomes:
-        state = {"PASS": OK, "FAIL": FAIL}.get(o.verdict, SKIP)
+        state = {"PASS": OK, "FAIL": FAIL, "ERROR": FAIL}.get(o.verdict, SKIP)
         detail(f"{o.scenario.sid:7} {o.scenario.name:24} tier {o.scenario.tier} "
                f"{o.scenario.kind:11} {o.route:7} {state:4} {o.signature}"
                + (f"  ({o.reason[:110]})" if o.reason and o.verdict != "PASS" else ""))
@@ -1425,7 +1505,7 @@ def main(argv=None) -> int:
         else:
             # Not built at esp-tls/m3 bf55063c, so not part of the RED/GREEN verdict.
             check_warn("absent (section 6 is not implemented on this image); not judged")
-        original, header["settings"] = apply_settings(device)
+        original, header["settings"] = apply_settings(device, args.set_wifi)
         with check("reset the C64 so nothing another lane left is still driving the UCI"):
             computer.machine.reset(force=True)
             rest_uci.release()
@@ -1444,7 +1524,8 @@ def main(argv=None) -> int:
             available |= {"fixture", "crypto"}
             check_ok(bind_ip)
         except (RuntimeError, OSError) as exc:
-            check_skip(str(exc))
+            # Every scenario that needs it then records ERROR (adversarial1 H-1).
+            check_fail(f"{exc}; the scenarios that need it will be ERROR")
         header["fixture"] = {"bind_ip": bind_ip, "cryptography": fx.HAVE_CRYPTOGRAPHY}
 
         def reset_rest() -> Link:
