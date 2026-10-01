@@ -28,7 +28,7 @@ void start_dispatch(QueueHandle_t queue);
 void send_button_event(uint8_t button);
 void send_keepalive();
 
-#define IDENT_STRING "ESP32 WiFi Bridge V1.308"
+#define IDENT_STRING "ESP32 WiFi Bridge V1.309"
 #define IDENT_MAJOR   1
 // 1.6: the connector retries after a dropped link instead of idling in
 // Disconnected forever. The Ultimate's updater only reflashes the module
@@ -46,8 +46,10 @@ void send_keepalive();
 // 1.305 (dev): CROSS_SIGNED_VERIFY pinned (not default-tracked); the engine refuses to build with =n.
 // 1.306 (dev): M3 (M3-SPEC v1 section 5): sessions named by (slot, tag), trust modes BUNDLE/CUSTOM/PIN, TLS 1.2
 //              fallback, failure reasons, NO_READ, CLOSE_ALL and SET_CA; TLS runs on its own task.
-// 1.308 (dev): M3 integration: 1.305 + 1.306, on stock mbedTLS as ESP-IDF imports it (no carried patch).
-#define IDENT_MINOR   308
+// 1.308 (dev): M3 integration: 1.305 + 1.306, and mbedTLS accepts a HelloRetryRequest cookie (a carried patch).
+// 1.309 (dev): stock mbedTLS as ESP-IDF imports it (the cookie patch removed), and the certificate bundle from
+//              the vendored Mozilla root store (software/wifi/ca_store) instead of ESP-IDF's.
+#define IDENT_MINOR   309
 #define MULTITHREADED 0
 #define DISPATCHER_STACK 3072 // upstream's value: TLS runs on its own task
 #define TLS_TASK_STACK   8192 // M3-SPEC 5.3: twice the dispatcher stack M2 measured in handshakes
