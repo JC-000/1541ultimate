@@ -56,10 +56,10 @@ NAME = "registry_test"
 # it. A token outside this set would reach the suite as a literal.
 TOKENS = {"@HOST@", "@PASS@", "@TIMEOUT@", "@MODE@", "@SOAKPROFILE@"}
 
-# Files ending in _test.py that no profile should select, each with its reason.
-# A file that is not a suite belongs here rather than in the registry, so that
-# "not registered" always means "nobody can run it". Everything else under
-# SEARCHED has to be in the registry.
+# Files ending in _test.py that no profile should select, each with its reason:
+# a file that is not a suite, or a suite that no profile may select because it
+# is opt-in by name (run directly). Everything else under SEARCHED has to be in
+# the registry.
 NOT_SUITES: dict[str, str] = {
     # The four tiers of the observability suite. Importing one registers its
     # cases in support.CASES; tests/lib/observability_test.py imports all four

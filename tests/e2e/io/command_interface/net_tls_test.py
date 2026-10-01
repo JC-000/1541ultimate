@@ -234,9 +234,11 @@ class Ctx:
                    budget: float = READ_BUDGET_SECONDS) -> tuple[bytes, ReadReply | None]:
         """READ until `count` bytes or the stream ends; (bytes, the ending reply or None).
 
-        `budget` is IDLE time: the clock restarts on every READ that brings data.
-        On the REST route every byte costs one REST call, so a total-time
-        budget would fail a healthy but slow transfer for the wrong reason.
+        `budget` is IDLE time: the clock restarts on every READ that brings at
+        least one byte. On the REST route every byte costs one REST call, so a
+        total-time budget would fail a healthy but slow transfer for the wrong
+        reason. A READ answering 00,OK with no bytes is not a 1.6 answer and
+        fails at once (adversarial2 M-4), so the loop is always bounded.
         """
         got = bytearray()
         deadline = time.monotonic() + budget
@@ -247,6 +249,9 @@ class Ctx:
             if reply.result.ok:
                 if reply.header != len(reply.payload):
                     raise Failure(f"READ header {reply.header} but {len(reply.payload)} bytes")
+                if not reply.payload:
+                    raise Failure("READ answered 00,OK with header $0000: section 1.6 has no "
+                                  "such answer (data is 1..maxlen; nothing yet is $FFFF + 02)")
                 got += reply.payload
                 deadline = time.monotonic() + budget
                 continue
@@ -1241,6 +1246,11 @@ def expectation_met(outcomes: list[Outcome], expect: str) -> tuple[bool, list[st
                             f"was expected: {o.reason or 'it passed'}")
     if not outcomes:
         problems.append("no scenario ran")
+    # A scenario selected for this run but N/A on every route of it ran nowhere
+    # (e.g. --route native with S19e): never evidence (adversarial2 M-3).
+    for sid in dict.fromkeys(o.scenario.sid for o in outcomes):
+        if all(o.verdict == "N/A" for o in outcomes if o.scenario.sid == sid):
+            problems.append(f"{sid}: selected, but N/A on every route of this run, so it ran nowhere")
     for route in routes:
         if not evidence[route]:
             problems.append(f"route {route}: no TLS scenario showed {expect.upper()}, so this run "
@@ -1264,14 +1274,38 @@ def ancestor_pids() -> set[int]:
     return pids
 
 
-def lock_check(host: str) -> dict:
-    """The harness DeviceLock: refuse if another live process holds this device."""
+LOCK_PID_ENV = "NET_TLS_LOCK_PID"
+
+
+def lock_check(host: str, require: bool = False) -> dict:
+    """The harness DeviceLock: refuse if another live process holds this device.
+
+    With `require` (or when the runbook's lockrun exported NET_TLS_LOCK_PID),
+    the lock must be HELD, by that very process, and that process must be this
+    one or an ancestor of it. A free lock is then a refusal: the user has left
+    the session's locked shell, or never entered it (adversarial2 M-5).
+    """
     try:
         from c64_test_harness.backends.device_lock import DeviceLock  # noqa: PLC0415
     except ImportError as exc:
         # Fail closed, as run-tests-locked does (adversarial1 L-5).
         raise Failure(f"the harness DeviceLock is not importable ({exc}); refusing to run "
                       f"unlocked against {host}") from exc
+    marker = os.environ.get(LOCK_PID_ENV, "")
+    require = require or bool(marker)
+    if require:
+        if not marker.isdigit():
+            raise Failure(f"--require-lock, but {LOCK_PID_ENV} is not set: this shell is not the "
+                          f"runbook's locked shell (lockrun). Nothing was run or changed")
+        if int(marker) == os.getpid() and DeviceLock.held_by_this_process(host):
+            return {"lock": f"held by this process ({marker})"}
+        holder = DeviceLock.foreign_holder(host)
+        if (not holder or holder.get("pid") != int(marker)
+                or int(marker) not in ancestor_pids()):
+            raise Failure(f"--require-lock: the session lock on {host} is not held by our "
+                          f"lockrun (pid {marker}); holder {holder or 'none'}. Nothing was run "
+                          f"or changed")
+        return {"lock": f"held by our lockrun, pid {marker}"}
     holder = DeviceLock.foreign_holder(host)
     if not holder:
         return {"lock": "free"}
@@ -1281,32 +1315,51 @@ def lock_check(host: str) -> dict:
                   f"the bench. Use run-tests-locked, or wait")
 
 
-def apply_settings(device, set_wifi: bool) -> tuple[dict, dict]:
-    original, applied = {}, {}
-    for category, item, value, restore in SETTINGS:
-        with check(f"set {category} / {item} = {value}"):
+def apply_settings(device, set_wifi: bool, original: dict, header: dict) -> dict:
+    """Read every setting first; refuse before writing anything; then set and read back.
+
+    `original` is the caller's, filled as each setting is written, so whatever
+    happens after a write the caller can restore it (adversarial2 M-2).
+    """
+    before: dict[str, str] = {}
+    header["settings_before"] = before
+    with check("read the settings this suite depends on, before changing any"):
+        for category, item, _value, _restore in SETTINGS:
             try:
-                current = str(device.configs.current(category, item))
-            except Failure as exc:
+                before[item] = str(device.configs.current(category, item))
+            except Failure:
                 if item == REQUIRED_SETTING:
                     raise
-                check_warn(f"not on this device ({exc}); recorded as absent")
+                before[item] = "absent"
+        detail(json.dumps(before))
+    wifi = before.get(WIFI_SETTING, "absent")
+    if wifi != "absent" and wifi.strip() != "Enabled" and not set_wifi:
+        # One-way on the U64: switching it on cannot be undone by this suite, so
+        # only an explicit --set-wifi may do it (adversarial1 M-5).
+        raise SetupRefused(f"{WIFI_SETTING} is {wifi!r}; this suite needs it 'Enabled' and does "
+                           f"not switch it on without --set-wifi (one-way on the U64). Nothing "
+                           f"was changed")
+    applied = {}
+    for category, item, value, restore in SETTINGS:
+        with check(f"set {category} / {item} = {value}"):
+            current = before[item]
+            if current == "absent":
+                check_warn("not on this device; recorded as absent")
                 applied[item] = "absent"
                 continue
-            if item == WIFI_SETTING and current.strip() != value and not set_wifi:
-                # One-way on the U64: switching it on cannot be undone by this
-                # suite, so only an explicit --set-wifi may do it (adversarial1 M-5).
-                raise Failure(f"{item} is {current!r}; this suite needs it {value!r} and does "
-                              f"not switch it on without --set-wifi (one-way on the U64)")
-            if restore:
-                original[(category, item)] = current
             if current.strip() != value:
+                if restore:
+                    original[(category, item)] = current
                 device.configs.set(category, item, value)
             applied[item] = str(device.configs.current(category, item))
             if applied[item].strip() != value:
                 raise Failure(f"read back {applied[item]!r}")
             detail(f"{current!r} -> {applied[item]!r}" + ("" if restore else " (one-way: kept)"))
-    return original, applied
+    return applied
+
+
+class SetupRefused(Failure):
+    """Setup refused before changing anything on the device."""
 
 
 def wait_ready(link: Link) -> dict:
@@ -1354,6 +1407,9 @@ def parse_args(argv=None):
                                              "of this machine's default store.")
     parser.add_argument("--strict-sni", action="store_true",
                         help="S5 also requires the BUNDLE ClientHello to carry the SNI.")
+    parser.add_argument("--require-lock", action="store_true",
+                        help="Refuse unless the device's DeviceLock is held by the runbook's "
+                             "lockrun (NET_TLS_LOCK_PID), this process or an ancestor of it.")
     parser.add_argument("--set-wifi", action="store_true",
                         help="Switch 'WiFi Enabled' on if it is off. One-way on the U64 (a "
                              "reboot is the only way back), so without it the suite refuses.")
@@ -1481,7 +1537,7 @@ def main(argv=None) -> int:
     # and even the reset below would land in the middle of its work.
     try:
         with check("no other lane holds this device (harness DeviceLock)"):
-            header["lock"] = lock_check(target.device)
+            header["lock"] = lock_check(target.device, args.require_lock)
             detail(header["lock"]["lock"])
     except Failure as exc:
         suite_fail(SUITE, f"nothing was run or changed: {format_exception(exc)}")
@@ -1493,6 +1549,7 @@ def main(argv=None) -> int:
     rest_uci = Uci(computer.machine, BOUND_OPEN)
     ok = False
     setup_error = None
+    touched = False     # whether anything on the device was changed (adversarial2 M-2)
     try:
         with check("read /v1/info: product, firmware, core, fpga, git hash"):
             info = device.info()
@@ -1505,7 +1562,8 @@ def main(argv=None) -> int:
         else:
             # Not built at esp-tls/m3 bf55063c, so not part of the RED/GREEN verdict.
             check_warn("absent (section 6 is not implemented on this image); not judged")
-        original, header["settings"] = apply_settings(device, args.set_wifi)
+        header["settings"] = apply_settings(device, args.set_wifi, original, header)
+        touched = True
         with check("reset the C64 so nothing another lane left is still driving the UCI"):
             computer.machine.reset(force=True)
             rest_uci.release()
@@ -1555,11 +1613,12 @@ def main(argv=None) -> int:
     finally:
         if pki is not None:
             pki.close()
-        try:
-            rest_uci.release()
-            computer.machine.reset(force=True)
-        except Failure as exc:
-            warn(f"final reset: {exc}")
+        if touched or original:
+            try:
+                rest_uci.release()
+                computer.machine.reset(force=True)
+            except Failure as exc:
+                warn(f"final reset: {exc}")
         if not args.keep_config:
             for (category, item), value in original.items():
                 with check(f"restore {category} / {item} to {value!r}"):
