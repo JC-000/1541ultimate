@@ -587,6 +587,46 @@ def part6(world: "World") -> bool:
     return ok
 
 
+SLOW_READER_SECONDS = 65.0
+
+
+def part7(world: "World") -> bool:
+    """The bench's S13-over-REST failure, modelled: a client that reads after more than 60 s.
+
+    On the REST route the device needed about 250 s to read a 16 KB record before
+    it wrote (one REST call per byte). A fixture whose per-connection idle
+    timeout is shorter than the slowest route gives up and closes, and the
+    device's WRITE meets a reset: a fixture failure reported against the
+    firmware (green-20261001T023036Z S13 rest).
+    """
+    section("part 7: the fixture outlasts a slow reader (S13 over REST)")
+    ok = True
+    try:
+        with check(f"a client that waits {SLOW_READER_SECONDS:.0f}s before reading 16 KB and "
+                   f"writing 100 B still gets its echo"):
+            data = fx.payload(13, 16384)
+            server = fx.TlsServer("127.0.0.1", world.pki.chains["ecdsa"],
+                                  fx.Behaviour(send=data, then="echo"))
+            device = world.device("m3")
+            ctx = suite.Ctx(device, SimpleNamespace(), world.pki, "127.0.0.1", None, [])
+            try:
+                reply = ctx.expect_open(server.port, "127.0.0.1",
+                                        pin=world.pki.chains["ecdsa"].spki_sha256)
+                time.sleep(SLOW_READER_SECONDS)
+                got, end = ctx.read_until(reply.handle, len(data))
+                if got != data:
+                    raise Failure(f"{len(got)} of {len(data)} bytes ({end})")
+                suite.echo_round_trip(ctx, reply.handle, 100, seed=7)
+                ctx.close(reply.handle)
+            finally:
+                server.close()
+                device.reset()
+            detail(str([c.as_dict() for c in server.logs]))
+    except Failure:
+        ok = False
+    return ok
+
+
 def judge_flavour(label: str, outcomes: dict, wanted: dict[str, str]) -> bool:
     """`wanted` maps a sid to the signature it must show."""
     ok = True
@@ -648,6 +688,8 @@ def main() -> int:
             ok &= part4(world)
         ok &= part5(world)
         ok &= part6(world)
+        if not args.quick:
+            ok &= part7(world)
     finally:
         world.close()
     if ok:
