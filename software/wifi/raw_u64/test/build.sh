@@ -41,22 +41,6 @@ L=($MB4/build/library/libmbedtls.a $MB4/build/library/libmbedx509.a $MB4/build/l
    $MB4/build/tf-psa-crypto/drivers/p256-m/libp256-m.a $MB4/build/tf-psa-crypto/drivers/pqcp/libpqcp.a
    $MB4/build/tf-psa-crypto/extras/libextras.a $MB4/build/tf-psa-crypto/platform/libplatform.a
    $MB4/build/tf-psa-crypto/utilities/libutilities.a)
-# The mbedTLS patches the ESP32 build applies (../mbedtls_patches.cmake, --fuzz=0), compiled as MB4 compiled the
-# original and linked ahead of libmbedtls.a, which then leaves its own copy out. NOCOOKIE=1 links the unpatched
-# library (the RED run of case hrr_cookie).
-MP=$BD/mbedtls_patched
-if [ ! -f $MP/ssl_tls13_generic.o -o $RAW/patches/mbedtls-tls13-hrr-cookie.patch -nt $MP/ssl_tls13_generic.o ]; then
-  rm -rf $MP; mkdir -p $MP/library; cp $S4/library/ssl_tls13_generic.c $MP/library/
-  patch -s -d $MP -p1 --forward --batch --fuzz=0 -i $RAW/patches/mbedtls-tls13-hrr-cookie.patch
-  cc -g -O2 -DNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer -w -iquote $S4/library $MI \
-     -I$S4/tf-psa-crypto/dispatch -I$S4/tf-psa-crypto/platform -I$S4/tf-psa-crypto/utilities \
-     -I$S4/tf-psa-crypto/drivers/everest/include -I$S4/tf-psa-crypto/drivers/p256-m/p256-m -I$S4/tf-psa-crypto/drivers/pqcp/include \
-     -c $MP/library/ssl_tls13_generic.c -o $MP/ssl_tls13_generic.o
-fi
-MPO=($MP/ssl_tls13_generic.o); [ -n "${NOCOOKIE:-}" ] && MPO=()
-# ../mbedtls_patches.cmake defines it for the device build; here the patched object above stands for it (NOCOOKIE
-# keeps the define, so that the RED run builds)
-grep -q '^include(${CMAKE_CURRENT_LIST_DIR}/mbedtls_patches.cmake)' $RAW/CMakeLists.txt || { echo "CMakeLists.txt does not include mbedtls_patches.cmake"; exit 1; }
 HOSTOFF="CONFIG_MBEDTLS_HARDWARE_AES CONFIG_MBEDTLS_HARDWARE_SHA CONFIG_MBEDTLS_HARDWARE_MPI CONFIG_MBEDTLS_HARDWARE_ECC CONFIG_MBEDTLS_HARDWARE_ECDSA_SIGN CONFIG_MBEDTLS_HARDWARE_ECDSA_VERIFY CONFIG_MBEDTLS_ROM_MD5 CONFIG_MBEDTLS_USE_CRYPTO_ROM_IMPL CONFIG_MBEDTLS_HARDWARE_RSA_DS_PERIPHERAL"
 
 for v in ${@:-head}; do
@@ -75,12 +59,12 @@ for v in ${@:-head}; do
        /^CONFIG_[A-Za-z0-9_]+=/ { if ($1 in skip) next; v = substr($0, length($1) + 2); if (v == "y") v = 1; print "#define " $1 " " v }' \
       $SDK > $O/sdkconfig.h
   CF=(-std=gnu17 -g -O1 -Wall -Wextra -Wno-unused-parameter -D_FORTIFY_SOURCE=0 -fsanitize=address,undefined -fno-omit-frame-pointer
-      -Wno-macro-redefined -DBRIDGE_MBEDTLS_HRR_COOKIE=1 -I$O -I$T/stub -I$T/stub/x -I$M -I$SW/io/uart -I$IDF/components/mbedtls/esp_crt_bundle/include $MI $EXTRA)
+      -Wno-macro-redefined -I$O -I$T/stub -I$T/stub/x -I$M -I$SW/io/uart -I$IDF/components/mbedtls/esp_crt_bundle/include $MI $EXTRA)
   cc $CF -c $M/tls_engine.c -o $O/tls_engine.o 2> $O/warnings.txt || { cat $O/warnings.txt; exit 1; }
   cc $CF -Wno-unused-variable -Wno-unused-but-set-variable -Wno-sign-compare -Wno-missing-field-initializers -Wno-pointer-sign \
      -c $M/rpc_dispatch.c -o $O/rpc_dispatch.o 2>> $O/warnings.txt || { cat $O/warnings.txt; exit 1; }
   cc $CF -Wno-unused-function -c $T/engine_test.c -o $O/engine_test.o
   cc $CF -fno-sanitize=alignment -w -c $IDF/components/mbedtls/esp_crt_bundle/esp_crt_bundle.c -o $O/esp_crt_bundle.o
-  cc -fsanitize=address,undefined -Wl,-undefined,dynamic_lookup $O/{tls_engine,rpc_dispatch,engine_test,esp_crt_bundle}.o $BD/bundle.s $CA $MPO $L -o $O/engine_test
-  echo "built $v ($(grep -c warning: $O/warnings.txt || true) warnings in the bridge sources)${NOCOOKIE:+ WITHOUT the mbedTLS patches}"
+  cc -fsanitize=address,undefined -Wl,-undefined,dynamic_lookup $O/{tls_engine,rpc_dispatch,engine_test,esp_crt_bundle}.o $BD/bundle.s $CA $L -o $O/engine_test
+  echo "built $v ($(grep -c warning: $O/warnings.txt || true) warnings in the bridge sources)"
 done

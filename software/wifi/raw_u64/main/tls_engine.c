@@ -51,9 +51,6 @@
 #if defined(MBEDTLS_SSL_RENEGOTIATION)
 #error "Renegotiation must stay off (CONFIG_MBEDTLS_SSL_RENEGOTIATION)"
 #endif
-#if !BRIDGE_MBEDTLS_HRR_COOKIE
-#error "mbedTLS must be built with patches/mbedtls-tls13-hrr-cookie.patch: the top-level CMakeLists.txt includes mbedtls_patches.cmake"
-#endif
 
 #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
 // esp_crt_bundle.c's verify callback: external linkage but not in its header (as IDF's own unit test declares it)
