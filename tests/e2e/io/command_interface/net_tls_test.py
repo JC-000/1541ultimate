@@ -1276,7 +1276,7 @@ def lock_check(host: str) -> dict:
     if not holder:
         return {"lock": "free"}
     if holder.get("pid") in ancestor_pids():
-        return {"lock": f"held by our parent pid {holder.get('pid')} (run-tests-locked)"}
+        return {"lock": f"held by our ancestor pid {holder.get('pid')} (lockrun or run-tests-locked)"}
     raise Failure(f"{host} is held by pid {holder.get('pid')} ({holder}); another lane is on "
                   f"the bench. Use run-tests-locked, or wait")
 
