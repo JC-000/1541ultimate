@@ -27,6 +27,9 @@ Three parts, none of which touches any Ultimate:
    protocol (multi-block replies, an ABORT in PROCESSING) and the result files,
    for Tier 1 without S30 (whose hosts are real). --expect green on the m3
    flavour and --expect red on stock must both exit 0, and swapped, both 1.
+6. adversarial2: a WiFi refusal changes no setting; a scenario selected but run on
+   no route fails the run; a READ answering 00,OK with no data is bounded; and
+   --require-lock refuses outside the session's DeviceLock.
 5. Verdict and setup cases (m3e2e-adversarial1 H-1, M-1, M-5, M-7), through
    main() the same way: a run whose evidence is missing must FAIL, never pass on
    SKIPs (no fixture; S32 on REST; only a measurement on stock); a native route
@@ -494,6 +497,96 @@ def part5(world: "World") -> bool:
     return ok
 
 
+class EmptyOk(proto.Link):
+    """READs that answer 00,OK with header $0000: not a 1.6 answer."""
+    name = "empty-ok"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def _command(self, command: bytes, bound: float) -> proto.Result:
+        self.calls += 1
+        if self.calls > 5000:
+            raise Failure("read_until was still reading after 5000 empty 00,OK READs: unbounded")
+        return proto.Result(command, b"\x00\x00", b"00,OK", 0.0)
+
+
+def part6(world: "World") -> bool:
+    section("part 6: adversarial2 cases")
+    ok = True
+    try:
+        with check("M-2: WiFi off, no --set-wifi: refused before ANY setting is written"):
+            code, run, double = run_main(world, "m3", ["--expect", "green", "--test", "S1", "--route",
+                                                       "rest", "--module-minor", "308"],
+                                         wifi="Disabled")
+            ci = double.configs["C64 and Cartridge Settings"]["Command Interface"]
+            sntp = double.configs["Network Settings"]["SNTP Enable"]
+            if code != 1 or ci != "Disabled" or sntp != "Disabled":
+                raise Failure(f"exit {code}, Command Interface {ci!r}, SNTP {sntp!r}")
+            if not run.get("settings_before"):
+                raise Failure("run.json does not record the settings as found")
+            if double.calls(path="/v1/machine:reset"):
+                raise Failure("the C64 was reset although nothing was run")
+    except Failure:
+        ok = False
+    try:
+        with check("M-3: --route native with S19e selected: S19e ran on no route -> exit 1"):
+            outcomes = [suite.Outcome(suite.BY_NAME["S0"], "native", "PASS"),
+                        suite.Outcome(suite.BY_NAME["S1"], "native", "PASS"),
+                        suite.Outcome(suite.BY_NAME["S19e"], "native", "N/A")]
+            for o in outcomes:
+                suite.judge(o)
+            met, problems = suite.expectation_met(outcomes, "green")
+            detail(str(problems))
+            if met:
+                raise Failure("met")
+    except Failure:
+        ok = False
+    try:
+        with check("M-4: READ answering 00,OK with no data: read_until fails, bounded"):
+            link = EmptyOk()
+            ctx = suite.Ctx(link, SimpleNamespace(), None, None, None, [])
+            try:
+                ctx.read_until(0, 100, budget=0.5)
+                raise Failure("read_until returned")
+            except Failure as exc:
+                if "unbounded" in str(exc):
+                    raise
+                detail(f"failed as it should: {exc}")
+    except Failure:
+        ok = False
+    try:
+        with check("M-5: --require-lock with no session lock: refused, nothing changed"):
+            code, run, double = run_main(world, "m3", ["--expect", "green", "--test", "S1", "--route",
+                                                       "rest", "--module-minor", "308",
+                                                       "--require-lock"])
+            ci = double.configs["C64 and Cartridge Settings"]["Command Interface"]
+            if code != 1 or ci != "Disabled":
+                raise Failure(f"exit {code}, Command Interface {ci!r}")
+    except Failure:
+        ok = False
+    try:
+        with check("M-5: --require-lock inside this process's own lock (NET_TLS_LOCK_PID) runs -> exit 0"):
+            from c64_test_harness.backends.device_lock import DeviceLock  # noqa: PLC0415
+            lock = DeviceLock("127.0.0.1")
+            if not lock.acquire(timeout=10):
+                raise Failure("could not take the 127.0.0.1 test lock")
+            os.environ["NET_TLS_LOCK_PID"] = str(os.getpid())
+            try:
+                code, run, _ = run_main(world, "m3", ["--expect", "green", "--test", "S1", "--route",
+                                                      "rest", "--module-minor", "308",
+                                                      "--require-lock"])
+            finally:
+                os.environ.pop("NET_TLS_LOCK_PID", None)
+                lock.release()
+            if code != 0:
+                raise Failure(f"exit {code}: {run.get('setup_error')}")
+    except Failure:
+        ok = False
+    return ok
+
+
 def judge_flavour(label: str, outcomes: dict, wanted: dict[str, str]) -> bool:
     """`wanted` maps a sid to the signature it must show."""
     ok = True
@@ -554,6 +647,7 @@ def main() -> int:
         if not args.quick:
             ok &= part4(world)
         ok &= part5(world)
+        ok &= part6(world)
     finally:
         world.close()
     if ok:
