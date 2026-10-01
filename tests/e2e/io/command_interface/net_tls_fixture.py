@@ -211,11 +211,14 @@ class Behaviour:
     stall: bool = False
     # Read the ClientHello, then reset the connection (S7c).
     rst_after_client_hello: bool = False
+    # The listener's SO_RCVBUF, so a server that stops reading fills TCP soon.
+    rcvbuf: int | None = None
     # Sent once, as one write, right after the handshake.
     send: bytes = b""
     # After `send`: "echo" (keep echoing until the client ends), "close_notify",
     # "fin" (no close_notify), "hold" (read and discard until the client ends),
-    # or "http" (answer one request with a 200, then close_notify).
+    # "http" (answer one request with a 200, then close_notify), or "stall"
+    # (never read again, so the client's writes fill TCP; S32).
     then: str = "echo"
 
 
@@ -253,6 +256,8 @@ class TlsServer:
         self._stop = threading.Event()
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if behaviour.rcvbuf:
+            self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, behaviour.rcvbuf)
         self.listener.bind((bind_ip, port))
         self.listener.listen(8)
         self.listener.settimeout(0.2)
@@ -343,6 +348,10 @@ class TlsServer:
                 # "fin" this is a bare FIN with no close_notify ahead of it.
                 tls.shutdown(socket.SHUT_WR)
                 log.peer_end = self._drain_after_close(tls)
+                return
+            if b.then == "stall":
+                while not self._stop.wait(0.2):
+                    pass
                 return
             if b.then == "http":
                 self._http(tls, log)
