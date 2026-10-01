@@ -27,6 +27,11 @@ Three parts, none of which touches any Ultimate:
    protocol (multi-block replies, an ABORT in PROCESSING) and the result files,
    for Tier 1 without S30 (whose hosts are real). --expect green on the m3
    flavour and --expect red on stock must both exit 0, and swapped, both 1.
+5. Verdict and setup cases (m3e2e-adversarial1 H-1, M-1, M-5, M-7), through
+   main() the same way: a run whose evidence is missing must FAIL, never pass on
+   SKIPs (no fixture; S32 on REST; only a measurement on stock); a native route
+   that cannot start keeps the REST route's records; WiFi is never switched on
+   without --set-wifi; and a read budget measures idle time, not total time.
 
 Usage: net_tls_selftest.py [--quick]   (--quick skips the m3 flavour's 15 s
 handshake-timeout scenario and the 16 KB record)
@@ -375,6 +380,120 @@ def part4(world: "World") -> bool:
     return ok
 
 
+def run_main(world: "World", flavour: str, argv: list[str], fixture: bool = True,
+             native_fails: bool = False, wifi: str = "Enabled") -> tuple[int, dict, UciDouble]:
+    """suite.main() against a double; (exit code, run.json, the double)."""
+    double = UciDouble(world.device(flavour))
+    double.configs["WiFi settings"]["WiFi Enabled"] = wifi
+    saved_env = {k: os.environ.get(k) for k in double.environment()}
+    os.environ.update(double.environment())
+    saved_address, saved_start = fx.local_address_towards, suite.NativeUci.start
+
+    def no_route(*_args, **_kw):
+        raise OSError("self-test: no route to the device")
+
+    def no_agent(_self):
+        raise Failure("self-test: the agent did not start (64tass Exec format error)")
+    if not fixture:
+        fx.local_address_towards = no_route
+    if native_fails:
+        suite.NativeUci.start = no_agent
+    try:
+        with tempfile.TemporaryDirectory() as results:
+            try:
+                code = suite.main(["-H", "127.0.0.1", "-t", "10", "--results", results, *argv])
+            except SystemExit as exc:   # argparse refusing an option
+                code = exc.code
+            path = Path(results) / "run.json"
+            run = json.loads(path.read_text()) if path.exists() else {"scenarios": []}
+    finally:
+        fx.local_address_towards, suite.NativeUci.start = saved_address, saved_start
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        double.close()
+    return code, run, double
+
+
+class SlowReads(proto.Link):
+    """READs that each take 50 ms and alternate data with `02,NO DATA: 11`."""
+    name = "slow"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.turn = 0
+
+    def _command(self, command: bytes, bound: float) -> proto.Result:
+        time.sleep(0.05)
+        self.turn += 1
+        if self.turn % 2:
+            return proto.Result(command, (100).to_bytes(2, "little") + bytes(100), b"00,OK", 0.05)
+        return proto.Result(command, b"\xff\xff", proto.STATUS_NO_DATA_IDLE, 0.05)
+
+
+def part5(world: "World") -> bool:
+    section("part 5: no verdict without evidence; setup failures are errors")
+    ok = True
+    t1 = ["--test", "tier1", "--module-minor", "308", "--route", "rest"]
+    cases = [
+        ("P2: m3, --expect green, the fixture cannot start -> exit 1",
+         "m3", ["--expect", "green", *t1], {"fixture": False}, 1),
+        ("P3: stock, --expect red, the fixture cannot start -> exit 1",
+         "stock", ["--expect", "red", *t1], {"fixture": False}, 1),
+        ("P7: mutant bundle-accepts-all, --expect green, no fixture -> exit 1",
+         "bundle-accepts-all", ["--expect", "green", *t1], {"fixture": False}, 1),
+        ("P5: stock, --expect green, only S32 on REST (route n/a) -> exit 1",
+         "stock", ["--expect", "green", "--test", "S32", "--route", "rest"], {}, 1),
+        ("P6: stock, --expect red, only the S33 measurement -> exit 1",
+         "stock", ["--expect", "red", "--test", "S33", "--route", "rest"], {}, 1),
+        ("WiFi Disabled and no --set-wifi: setup refuses, WiFi untouched -> exit 1",
+         "m3", ["--expect", "green", "--test", "S1", "--route", "rest", "--module-minor", "308"],
+         {"wifi": "Disabled"}, 1),
+        ("WiFi Disabled with --set-wifi: set and kept -> exit 0",
+         "m3", ["--expect", "green", "--test", "S1", "--route", "rest", "--module-minor", "308",
+                "--set-wifi"], {"wifi": "Disabled"}, 0),
+    ]
+    for label, flavour, argv, options, wanted in cases:
+        try:
+            with check(label):
+                code, run, double = run_main(world, flavour, argv, **options)
+                detail(str([(o["sid"], o["verdict"], o["signature"]) for o in run["scenarios"]]))
+                if code != wanted:
+                    raise Failure(f"exit {code}")
+                wifi = double.configs["WiFi settings"]["WiFi Enabled"]
+                if options.get("wifi") == "Disabled" and "--set-wifi" not in argv and wifi != "Disabled":
+                    raise Failure(f"WiFi Enabled was written ({wifi!r}) without --set-wifi")
+                if "--set-wifi" in argv and wifi != "Enabled":
+                    raise Failure(f"--set-wifi left WiFi {wifi!r}")
+        except Failure:
+            ok = False
+    try:
+        with check("M-1: the native agent fails to start: REST records kept, native ERROR, exit 1"):
+            code, run, _ = run_main(world, "m3", ["--expect", "green", "--test", "S1",
+                                                  "--module-minor", "308"], native_fails=True)
+            records = [(o["route"], o["sid"], o["verdict"]) for o in run["scenarios"]]
+            detail(str(records))
+            rest = [r for r in records if r[0] == "rest"]
+            native = [r for r in records if r[0] == "native"]
+            if code != 1 or not rest or any(v != "PASS" for _, _, v in rest):
+                raise Failure(f"exit {code}, REST records {rest}")
+            if not native or any(v != "ERROR" for _, _, v in native):
+                raise Failure(f"native records {native}")
+    except Failure:
+        ok = False
+    try:
+        with check("M-7: read_until's budget is idle time: 2000 B over 50 ms READs, budget 0.5 s"):
+            ctx = suite.Ctx(SlowReads(), SimpleNamespace(), None, None, None, [])
+            got, end = ctx.read_until(0, 2000, budget=0.5)
+            if len(got) != 2000 or end is not None:
+                raise Failure(f"{len(got)} bytes, end {end}")
+    except Failure:
+        ok = False
+    return ok
+
+
 def judge_flavour(label: str, outcomes: dict, wanted: dict[str, str]) -> bool:
     """`wanted` maps a sid to the signature it must show."""
     ok = True
@@ -430,8 +549,11 @@ def main() -> int:
                               ("info-ff-claims", ["S0", "S19e", "S19e2b"])):
             outcomes = world.run(flavour, sids)
             ok &= judge_flavour(flavour, outcomes, {sid: "FAIL" for sid in sids[1:]})
+        outcomes = world.run("abort-shortens", ["S0", "S19e"])
+        ok &= judge_flavour("abort-shortens", outcomes, {"S19e": "FAIL"})
         if not args.quick:
             ok &= part4(world)
+        ok &= part5(world)
     finally:
         world.close()
     if ok:
