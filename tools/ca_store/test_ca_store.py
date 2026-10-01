@@ -247,6 +247,15 @@ class CheckTest(unittest.TestCase):
         self.tree.pem.write_text(text[:at] + ("A" if text[at] != "A" else "B") + text[at + 1:])
         self.assertIn("does not match CA_SHA256", self.errors()[0])
 
+    def test_a_flipped_byte_that_breaks_a_certificate_is_an_error_not_a_crash(self):
+        # The flip the ESP32 build's tamper case made: the base64 still decodes, the DER does not.
+        text = self.tree.pem.read_text()
+        at = text.index(ca_store.BEGIN) + 40
+        self.tree.pem.write_text(text[:at] + ("A" if text[at] != "A" else "B") + text[at + 1:])
+        errors = self.errors()
+        self.assertIn("does not match CA_SHA256", errors[0])
+        self.assertIn("cacert.pem: bad DER length", errors[1])
+
     def test_a_truncated_store_fails(self):
         text = self.tree.pem.read_text()
         self.tree.pem.write_text(text[:text.rindex(ca_store.END)])

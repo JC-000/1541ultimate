@@ -364,20 +364,20 @@ def check(repo_root, release=False, today=None, now=None):
             errors.append("%s is from %s, CA_MOZILLA_DATE says %s"
                           % (pem_path.name, iso(mozilla_date(text)), pins["CA_MOZILLA_DATE"]))
         store = certificates(text)
+        subjects = {}
+        for der in store:
+            subject = subject_and_key(der)[0]
+            if subject in subjects and subjects[subject] != der:
+                # ESP-IDF's lookup is a binary search that tries one root per subject, so which
+                # of two would be used depends on where they sort.
+                errors.append("two roots in the bundle have the same subject: %s and %s"
+                              % (hashlib.sha256(subjects[subject]).hexdigest()[:16],
+                                 hashlib.sha256(der).hexdigest()[:16]))
+            subjects[subject] = der
     except StoreError as error:
         errors.append("%s: %s" % (pem_path.name, error))
         store = []
     errors += check_store_dir(pem_path.parent)
-    subjects = {}
-    for der in store:
-        subject = subject_and_key(der)[0]
-        if subject in subjects and subjects[subject] != der:
-            # ESP-IDF's lookup is a binary search that tries one root per subject, so which of
-            # two would be used depends on where they sort.
-            errors.append("two roots in the bundle have the same subject: %s and %s"
-                          % (hashlib.sha256(subjects[subject]).hexdigest()[:16],
-                             hashlib.sha256(der).hexdigest()[:16]))
-        subjects[subject] = der
     if store and bundle_set_sha256(store) != pins["CA_BUNDLE_SET_SHA256"]:
         modules = [os.path.relpath(p, repo_root) for p, _ in projects(repo_root) if attaching(p)]
         errors.append("the bundle's certificates changed but CA_BUNDLE_SET_SHA256 did not: "
