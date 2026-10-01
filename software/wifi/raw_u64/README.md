@@ -28,14 +28,17 @@ and then: v6.0.3 ships Mozilla's data of 2025-12-02, with roots Mozilla has sinc
   at `../ca_store/cacert.pem`; ESP-IDF's `gen_crt_bundle.py` builds the bundle from that file and
   builds it again whenever the file changes.
 - **How the build verifies it.** `CMakeLists.txt` runs `python3 tools/ca_store/ca_store.py check`
-  at every configure, and an edit to `cacert.pem`, `CA_PINS` or the checker configures again. The
-  build fails when `cacert.pem` does not match `CA_SHA256`, when its date disagrees with the pins,
-  when its certificates changed without `CA_BUNDLE_SET_SHA256`, when another certificate file
-  (such as an `anchors.pem`) is in the store, or when `sdkconfig` no longer builds the bundle from
-  the store alone with `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`. A store older
-  than `CA_MAX_AGE_DAYS` is a warning, and an error when the configure runs with `RELEASE=1` in
-  its environment. Run the check by hand with `python3 tools/ca_store/ca_store.py check`, and its
-  tests with `make ca_store_test`.
+  at every configure (an edit to `cacert.pem`, `CA_PINS` or the checker configures again) and
+  again at every build, before the bundle is made, so an already-configured tree cannot skip it.
+  It checks the configuration the build really uses (its `config/sdkconfig.json`, which
+  `idf.py -D SDKCONFIG=...` can point away from this directory's `sdkconfig`). The build fails
+  when `cacert.pem` does not match `CA_SHA256`, when its date disagrees with the pins, when its
+  certificates changed without `CA_BUNDLE_SET_SHA256`, when another certificate file (such as an
+  `anchors.pem`) is in the store, or when the configuration no longer builds the bundle from the
+  store alone with `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`. A store older than
+  `CA_MAX_AGE_DAYS` is a warning, and an error when the build runs with `RELEASE=1` in its
+  environment (`RELEASE=1 idf.py build`, `make RELEASE=1 esp32_raw_u64`). Run the check by hand
+  with `python3 tools/ca_store/ca_store.py check`, and its tests with `make ca_store_test`.
 - **How to refresh it.** `python3 tools/ca_store/refresh.py` (needs the network and Perl) fetches
   curl's file and its sum, and takes it only when curl's own `mk-ca-bundle.pl`, pinned by commit
   and sha256, gives the same file from the newest `certdata.txt` on Firefox's release branch,

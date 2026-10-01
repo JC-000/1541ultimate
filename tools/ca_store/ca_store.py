@@ -3,7 +3,11 @@
 
     ca_store.py check      fail if the store, its pins and the sdkconfigs disagree; warn when
                            the store is older than CA_MAX_AGE_DAYS, and fail instead with
-                           --release
+                           --release or RELEASE (not 0) in the environment
+
+The bridge's build runs the check at its configure step and again at every build, with
+--project and --sdkconfig-json naming the configuration that build actually uses (which
+`idf.py -D SDKCONFIG=...` can point away from the project's own sdkconfig).
 
 The store is the directory software/wifi/ca_store: cacert.pem, the bundle curl extracts from
 Mozilla's certdata.txt (the same source ESP-IDF's own cacrt_all.pem comes from), and CA_PINS.
@@ -30,6 +34,7 @@ import argparse
 import base64
 import datetime
 import hashlib
+import json
 import os
 import pathlib
 import re
@@ -243,15 +248,43 @@ def has_line(text, line):
     return line in text.split("\n")
 
 
-def projects(repo_root):
-    """(project dir, sdkconfig text) of every project in PROJECTS."""
+def sdkconfig_from_json(path):
+    """A build's config/sdkconfig.json (what it really uses) in sdkconfig's own syntax."""
+    try:
+        config = json.loads(pathlib.Path(path).read_text())
+    except (OSError, ValueError) as error:
+        raise StoreError("cannot read the build's configuration %s: %s" % (path, error))
+    lines = []
+    for key, value in config.items():
+        if value is True:
+            lines.append("CONFIG_%s=y" % key)
+        elif value is False:
+            lines.append("# CONFIG_%s is not set" % key)
+        elif isinstance(value, str):
+            lines.append('CONFIG_%s="%s"' % (key, value))
+        else:
+            lines.append("CONFIG_%s=%s" % (key, value))
+    return "\n".join(lines) + "\n"
+
+
+def projects(repo_root, effective=None):
+    """(project dir, sdkconfig text) of every project in PROJECTS. effective maps a project dir
+    to the sdkconfig.json of the build at hand, which then stands for its sdkconfig."""
     repo_root = pathlib.Path(repo_root)
+    effective = {pathlib.Path(p).resolve(): j for p, j in (effective or {}).items()}
+    for project in effective:
+        if project not in [(repo_root / path).resolve() for path in PROJECTS]:
+            raise StoreError("%s is not one of the projects that use the store" % project)
     found = []
     for path in PROJECTS:
-        sdkconfig = repo_root / path / "sdkconfig"
+        project = repo_root / path
+        if project.resolve() in effective:
+            found.append((project, sdkconfig_from_json(effective[project.resolve()])))
+            continue
+        sdkconfig = project / "sdkconfig"
         if not sdkconfig.exists():
             raise StoreError("%s: no sdkconfig, but PROJECTS names it" % path)
-        found.append((sdkconfig.parent, sdkconfig.read_text()))
+        found.append((project, sdkconfig.read_text()))
     return found
 
 
@@ -264,13 +297,13 @@ def attaching(project):
     return False
 
 
-def bundle_misconfigured(repo_root):
+def bundle_misconfigured(repo_root, effective=None):
     """Each project builds its bundle from cacert.pem and nothing else, and verifies cross-signed
     chains, which is what lets the store go without anchors."""
     repo_root = pathlib.Path(repo_root)
     pem = (repo_root / STORE_DIR / PEM_NAME).resolve()
     problems = []
-    for project, text in projects(repo_root):
+    for project, text in projects(repo_root, effective):
         relative = (project / "sdkconfig").relative_to(repo_root)
         if not has_line(text, "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y"):
             problems.append("%s: CONFIG_MBEDTLS_CERTIFICATE_BUNDLE is off, so the store is not "
@@ -343,8 +376,8 @@ def check_store_dir(store_dir):
     return errors
 
 
-def check(repo_root, release=False, today=None, now=None):
-    """Returns (errors, warnings)."""
+def check(repo_root, release=False, today=None, now=None, effective=None):
+    """Returns (errors, warnings). effective: see projects()."""
     pem_path, pins_path = store_paths(repo_root)
     pins = read_pins(pins_path)
     now = now or utc_now()
@@ -383,8 +416,8 @@ def check(repo_root, release=False, today=None, now=None):
         errors.append("the bundle's certificates changed but CA_BUNDLE_SET_SHA256 did not: "
                       "update the store with tools/ca_store/refresh.py, which bumps IDENT_MINOR "
                       "of %s" % (", ".join(modules) or "no project (none attaches the bundle)"))
-    errors += bundle_misconfigured(repo_root)
-    for project, sdkconfig in projects(repo_root):
+    errors += bundle_misconfigured(repo_root, effective)
+    for project, sdkconfig in projects(repo_root, effective):
         limit = max_certs(sdkconfig)
         if limit is not None and len(store) > limit:
             errors.append("%s/sdkconfig: CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_MAX_CERTS=%d, "
@@ -408,13 +441,22 @@ def main(argv=None):
     parser.add_argument("command", choices=("check",))
     parser.add_argument("--repo-root", default=str(REPO_ROOT))
     parser.add_argument("--release", action="store_true",
-                        help="a stale store is an error, not a warning")
+                        help="a stale store is an error, not a warning (also RELEASE=1 in the "
+                             "environment)")
+    parser.add_argument("--project", help="with --sdkconfig-json: the project being built")
+    parser.add_argument("--sdkconfig-json",
+                        help="the build's config/sdkconfig.json, checked instead of the project's "
+                             "sdkconfig")
     parser.add_argument("--today", type=datetime.date.fromisoformat, help=argparse.SUPPRESS)
     arguments = parser.parse_args(argv)
     repo_root = pathlib.Path(arguments.repo_root)
+    if bool(arguments.project) != bool(arguments.sdkconfig_json):
+        parser.error("--project and --sdkconfig-json go together")
+    effective = {arguments.project: arguments.sdkconfig_json} if arguments.project else None
+    release = arguments.release or os.environ.get("RELEASE", "") not in ("", "0")
 
     try:
-        errors, warnings = check(repo_root, arguments.release, arguments.today)
+        errors, warnings = check(repo_root, release, arguments.today, effective=effective)
     except (StoreError, OSError) as error:
         print("ca_store: %s" % error, file=sys.stderr)
         return 1

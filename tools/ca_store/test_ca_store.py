@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
@@ -311,6 +312,65 @@ class CheckTest(unittest.TestCase):
             self.errors()
 
 
+class EffectiveConfigTest(unittest.TestCase):
+    """What the build actually uses: its sdkconfig.json (the build passes it), and RELEASE from the
+    environment of every build, not only of the configure step (m3fix-adversarial1 F2, F3)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.tree = Tree(self.tmp)
+        self.json = pathlib.Path(self.tmp) / "sdkconfig.json"
+
+    def write_json(self, **changes):
+        config = {"MBEDTLS_CERTIFICATE_BUNDLE": True, "MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL": False,
+                  "MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN": False,
+                  "MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_NONE": True,
+                  "MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE": True,
+                  "MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH": "../ca_store/cacert.pem",
+                  "MBEDTLS_CERTIFICATE_BUNDLE_MAX_CERTS": 200,
+                  "MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY": True}
+        config.update(changes)
+        self.json.write_text(__import__("json").dumps(config))
+
+    def errors(self, **kwargs):
+        return ca_store.check(self.tree.root, today=datetime.date(2026, 9, 29), now=NOW,
+                              effective={self.tree.bridge: self.json}, **kwargs)[0]
+
+    def test_the_effective_config_passes_when_it_agrees(self):
+        self.write_json()
+        self.assertEqual(self.errors(), [])
+
+    def test_an_effective_config_that_takes_the_default_bundle_fails(self):
+        # idf.py -D SDKCONFIG=alt with DEFAULT_CMN: the project's own sdkconfig still says NONE.
+        self.write_json(MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=True,
+                        MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_NONE=False)
+        self.assertIn("DEFAULT_NONE", self.errors()[0])
+
+    def test_the_effective_limit_and_cross_signed_setting_count(self):
+        self.write_json(MBEDTLS_CERTIFICATE_BUNDLE_MAX_CERTS=19,
+                        MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=False)
+        errors = self.errors()
+        self.assertTrue(any("CROSS_SIGNED_VERIFY=y" in e for e in errors), errors)
+        self.assertTrue(any("MAX_CERTS=19, the store has 20" in e for e in errors), errors)
+
+    def test_the_command_line_takes_the_effective_config(self):
+        self.write_json(MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_NONE=False,
+                        MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=True)
+        arguments = ["check", "--repo-root", str(self.tree.root), "--today", "2026-09-29"]
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(ca_store.main(arguments), 0)
+            self.assertEqual(ca_store.main([*arguments, "--project", str(self.tree.bridge),
+                                            "--sdkconfig-json", str(self.json)]), 1)
+
+    def test_release_in_the_environment_fails_a_stale_store(self):
+        arguments = ["check", "--repo-root", str(self.tree.root), "--today", "2027-06-01"]
+        for value, status in (("", 0), ("0", 0), ("1", 1), ("yes", 1)):
+            with mock.patch.dict(os.environ, {"RELEASE": value}), \
+                    contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(ca_store.main(arguments), status, value)
+
+
 class StoreDirTest(unittest.TestCase):
     """Only cacert.pem holds certificates in the store."""
 
@@ -424,10 +484,13 @@ class CommittedStoreTest(unittest.TestCase):
             _, text, version = ca_store.bump_ident(project, "2026-09-25")
             self.assertIn('%s"' % version, text)
 
-    def test_the_bridge_cmake_runs_the_check(self):
+    def test_the_bridge_cmake_runs_the_check_at_configure_and_at_every_build(self):
         cmake = (REPO_ROOT / BRIDGE / "CMakeLists.txt").read_text()
         self.assertIn("tools/ca_store/ca_store.py", cmake)
         self.assertIn("FATAL_ERROR", cmake)
+        self.assertIn("--sdkconfig-json", cmake)
+        self.assertIn("add_custom_target(ca_store_check ALL", cmake)
+        self.assertIn("add_dependencies(custom_bundle ca_store_check)", cmake)
 
 
 if __name__ == "__main__":
