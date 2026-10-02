@@ -1,9 +1,6 @@
-/*
- * Host stand-in for lwIP's socket API as network_target.cc sees it (through
- * compat/posix/sys/socket.h): the host's types and constants, and lwIP's
- * calls, which net_tls_test.cc fakes. The BSD names that network_target.cc
- * uses for the TCP and UDP commands go to the same fakes.
- */
+// Host stand-in for lwIP's socket API as network_target.cc sees it (through compat/posix/sys/socket.h): the host's
+// types and constants, and lwIP's calls, faked in net_tls_test.cc. The BSD names that the TCP and UDP commands use
+// go to the same fakes.
 #ifndef SOCKET_H_NETSTUB
 #define SOCKET_H_NETSTUB
 #include <stdint.h>

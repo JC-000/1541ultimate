@@ -1,8 +1,5 @@
-/*
- * Host stand-in for software/io/wifi/wifi_cmd.h: only what wifi_dedicated.cc
- * uses, backed by the scripted world in world.cc. The declarations mirror the
- * real header; keep them in step with it.
- */
+// Host stand-in for software/io/wifi/wifi_cmd.h: only what wifi_dedicated.cc uses, backed by the scripted world in
+// world.cc. The declarations mirror the real header; keep them in step with it.
 #ifndef WIFI_CMD_H_
 #define WIFI_CMD_H_
 

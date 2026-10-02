@@ -1,10 +1,6 @@
-#
-# Host build of the check that the Nios firmware applies to the WiFi module's
-# answer to GET_RANDOM, with lwIP's headers stubbed out.
-#
+# Host build of the check the Nios firmware applies to the WiFi module's answer to GET_RANDOM, lwIP's headers stubbed.
 #   make          build
 #   make test     build and run
-#
 PRJ     = wifirandom
 RESULT  = result
 OUTPUT  = output

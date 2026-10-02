@@ -1,12 +1,6 @@
-#
-# Host build of the checks on the TLS calls to the WiFi module, of the channel
-# they share with GET_RANDOM (against its earlier code), and of the TLS
-# commands of the network target. FreeRTOS, the UART, lwIP and, for the network
-# target, the module are stand-ins.
-#
-#   make          build
-#   make test     build and run
-#
+# Host build of the checks on the TLS calls to the WiFi module, on the channel they share with GET_RANDOM (against
+# its earlier code) and on the network target's TLS commands; FreeRTOS, the UART, lwIP and the module are stand-ins.
+#   make (build), make test (build and run)
 RESULT  = result
 OUTPUT  = output
 

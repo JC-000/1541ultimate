@@ -1,14 +1,6 @@
-/*
- * GET_RANDOM through wifi_dedicated_call against the earlier wifi_get_random.
- *
- * Both run in the same scripted world, seed by seed: replies that are right,
- * late, foreign, refused, short, stale from before a pool reset, bursts that
- * overflow the queue, failed buffer requests and transmits, preemption, a
- * tick counter about to wrap, a second caller holding the channel, and no
- * module. They must make the same calls in the same order, print the same
- * lines, and leave the same result, bytes, source, sequence number, flag and
- * queue behind.
- */
+// GET_RANDOM through wifi_dedicated_call against the earlier wifi_get_random, seed by seed in one scripted world (good,
+// late, foreign, refused, short and stale replies, overflow, failed transmits, preemption, tick wrap, no module...).
+// Both must make the same calls, print the same lines, and leave the same result, bytes and state behind.
 #include <string.h>
 #include "world.h"
 #include "wifi_random.h"

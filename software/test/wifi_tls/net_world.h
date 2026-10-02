@@ -1,15 +1,6 @@
-/*
- * The world that the host tests run network_target.cc in (the Nios side of
- * the TLS commands): a clock, lwIP's sockets and DNS, the C64 reset line, and a WiFi
- * module that runs a pretend TLS. All of it is single threaded and
- * deterministic: time moves only when the code under test waits.
- *
- * The pretend TLS frames every record as [type][length lo][length hi][payload].
- * The module sends 'H' (its ClientHello), 'F' (its Finished), 'D' (data), 'C'
- * (close_notify) and 'A' (an alert). The server sends 'H' (its whole flight),
- * 'D', 'C', 'A' (a fatal alert, payload the alert number), 'B' (a record that
- * fails its MAC), 'W' (a warning the module skips) and 'T' (a ticket).
- */
+// The world the host tests run network_target.cc in: a clock, lwIP's sockets and DNS, the C64 reset line, and a WiFi
+// module with a pretend TLS of [type][length lo][length hi][payload] records; deterministic, time moves only on waits.
+// Types: 'H' hello/flight, 'F' Finished, 'D' data, 'C' close_notify, 'A' alert, 'B' bad MAC, 'W' warning, 'T' ticket.
 #ifndef NET_WORLD_H_
 #define NET_WORLD_H_
 

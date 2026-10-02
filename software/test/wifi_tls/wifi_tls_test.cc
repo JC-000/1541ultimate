@@ -1,13 +1,6 @@
-/*
- * Host tests for the TLS calls to the WiFi module (software/io/wifi/wifi_tls.cc,
- * the wire layouts of the protocol spec) and for the channel they share with
- * GET_RANDOM (wifi_dedicated.cc), its cancel predicate included.
- *
- *   make -C target/pc/linux/wifitls test
- *
- * The real wifi_tls.cc, wifi_dedicated.cc and wifi_random.cc are compiled
- * here; only the UART, the queue, the tick and the module are the world's.
- */
+// Host tests (make -C target/pc/linux/wifitls test) for the TLS calls to the WiFi module in wifi_tls.cc and for the
+// channel they share with GET_RANDOM (wifi_dedicated.cc), its cancel predicate included. The real wifi_tls.cc,
+// wifi_dedicated.cc and wifi_random.cc are compiled; only the UART, queue, tick and module are the world's.
 #include <stdarg.h>
 #include <string.h>
 #include <limits.h>

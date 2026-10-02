@@ -1,13 +1,6 @@
-/*
- * Host side tests for the check the Nios applies to the WiFi module's answer
- * to GET_RANDOM.
- *
- *   make -C target/pc/linux/wifirandom test
- *
- * The real software/io/wifi/wifi_random.cc is compiled here, so what runs is
- * the code that ships. Each case is an answer that a broken or confused module
- * could send; none of them may hand out a single byte.
- */
+// Host tests (make -C target/pc/linux/wifirandom test) for the check the Nios applies to the WiFi module's answer to
+// GET_RANDOM, on the real software/io/wifi/wifi_random.cc. Each case is an answer that a broken or confused module
+// could send; none of them may hand out a single byte.
 #include <stdio.h>
 #include <stddef.h>
 #include <string.h>

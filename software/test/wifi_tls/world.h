@@ -1,10 +1,6 @@
-/*
- * The scripted world that the host tests run wifi_dedicated.cc in: the
- * module's replies, the receive interrupt, the tick, the buffer pool and its
- * resets. Every decision is drawn from one generator, so two implementations
- * that make the same calls in the same order see the same world, and the
- * trace of those calls is what they are compared on.
- */
+// The scripted world the host tests run wifi_dedicated.cc in: module replies, receive interrupt, tick, buffer pool and
+// resets. Every decision comes from one generator, so two implementations that make the same calls in the same
+// order see the same world; they are compared on the trace of those calls.
 #ifndef WORLD_H_
 #define WORLD_H_
 

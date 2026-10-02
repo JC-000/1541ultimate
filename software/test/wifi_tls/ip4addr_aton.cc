@@ -1,12 +1,6 @@
-/*
- * lwIP's ip4addr_aton, from software/lwip/src/core/ipv4/ip4_addr.c at
- * 26a22151, for the host tests: network_target.cc decides what an IPv4 literal
- * is with it, so the tests need the same predicate, forms like
- * 127.1, 0x7f.0.0.1 and "1.2.3.4 x" included.
- *
- * Copyright (c) 2001-2004 Swedish Institute of Computer Science.
- * All rights reserved. (lwIP's BSD licence; see software/lwip/COPYING.)
- */
+// lwIP's ip4addr_aton (software/lwip/src/core/ipv4/ip4_addr.c at 26a22151): network_target.cc decides what an IPv4
+// literal is with it, so the host tests need the same predicate (127.1, 0x7f.0.0.1 and "1.2.3.4 x" included).
+// Copyright (c) 2001-2004 Swedish Institute of Computer Science. All rights reserved. (BSD; see software/lwip/COPYING.)
 #include <ctype.h>
 #include <arpa/inet.h>
 #include "lwip/dns.h"
