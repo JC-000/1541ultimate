@@ -1,6 +1,6 @@
 /* engine_test.c: host test of the ESP32 TLS engine and its RPC handlers. It plays the Ultimate, building requests at the
  * protocol spec's offsets (never from rpc_calls.h), against the real rpc_dispatch.c and tls_engine.c and a local server
- * (m3srv.c). Usage, environment and the BASE_ENGINE build: README.md. */
+ * (tls_server.c). Usage, environment and the BASE_ENGINE build: README.md. */
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -384,13 +384,13 @@ static int log_line(const char *prefix, char *out, int cap)
     return found;
 }
 
-// Starts m3srv with the given arguments (NULL-terminated) and connects to it
+// Starts tls_server with the given arguments (NULL-terminated) and connects to it
 static int srv_start(const char *mode, ...)
 {
     int port = atoi(getenv("PORTBASE") ? getenv("PORTBASE") : "23000") + case_index;
     char ports[16];
     snprintf(ports, sizeof(ports), "%d", port);
-    const char *argv[24] = { getenv("M3SRV"), ports, mode };
+    const char *argv[24] = { getenv("TLS_SERVER"), ports, mode };
     int argc = 3;
     va_list ap;
     va_start(ap, mode);
@@ -597,32 +597,32 @@ static void c_sizes(void)
     uint8_t c[8] = { 10, 0, 5, 0 };                            // der_len 10, no der
     rpc(SET_CA, c, 4);
     CHECK(rd32(4) == E_INVALID_ARG && rd8(8) == 0, "SET_CA size != 8 + der_len -> INVALID_ARG");
-    CHECK(tls_open(0, 1, CUSTOM, 0, 5, NULL, "m3.test").reason == 3, "a malformed SET_CA leaves no CA held");
+    CHECK(tls_open(0, 1, CUSTOM, 0, 5, NULL, "server.test").reason == 3, "a malformed SET_CA leaves no CA held");
 }
 
 /* OPEN argument checks (nothing opened, no state touched) */
 static void c_open_args(void)
 {
     uint8_t pin[32] = { 1 };
-    CHECK(tls_open(0, 1, 3, 0, 0, NULL, "m3.test").err == E_INVALID_ARG, "trust 3 refused");
-    CHECK(tls_open(0, 1, BUNDLE, 0x02, 0, NULL, "m3.test").err == E_INVALID_ARG, "opts bit1 refused");
-    CHECK(tls_open(0, 1, BUNDLE, 0x80, 0, NULL, "m3.test").err == E_INVALID_ARG, "opts bit7 refused");
-    CHECK(tls_open(2, 1, PIN, 0, 0, pin, "m3.test").err == E_INVALID_ARG, "slot 2 refused");
-    CHECK(tls_open(0xFF, 1, PIN, 0, 0, pin, "m3.test").err == E_INVALID_ARG, "slot 0xFF refused");
-    CHECK(tls_open(0, 0, PIN, 0, 0, pin, "m3.test").err == E_INVALID_ARG, "tag 0 refused");
+    CHECK(tls_open(0, 1, 3, 0, 0, NULL, "server.test").err == E_INVALID_ARG, "trust 3 refused");
+    CHECK(tls_open(0, 1, BUNDLE, 0x02, 0, NULL, "server.test").err == E_INVALID_ARG, "opts bit1 refused");
+    CHECK(tls_open(0, 1, BUNDLE, 0x80, 0, NULL, "server.test").err == E_INVALID_ARG, "opts bit7 refused");
+    CHECK(tls_open(2, 1, PIN, 0, 0, pin, "server.test").err == E_INVALID_ARG, "slot 2 refused");
+    CHECK(tls_open(0xFF, 1, PIN, 0, 0, pin, "server.test").err == E_INVALID_ARG, "slot 0xFF refused");
+    CHECK(tls_open(0, 0, PIN, 0, 0, pin, "server.test").err == E_INVALID_ARG, "tag 0 refused");
     CHECK(tls_open(0, 1, BUNDLE, 0, 0, NULL, "").err == E_INVALID_ARG, "BUNDLE without a name refused");
     CHECK(tls_open(0, 1, CUSTOM, 0, 7, NULL, "").err == E_INVALID_ARG, "CUSTOM without a name refused");
-    CHECK(tls_open2(0, 1, PIN, 0, 0, pin, "m3\0test", 7).err == E_INVALID_ARG, "a NUL in the name refused");
+    CHECK(tls_open2(0, 1, PIN, 0, 0, pin, "server\0test", 11).err == E_INVALID_ARG, "a NUL in the name refused");
     g_time_source = 2;
-    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "m3.test").err == E_INVALID_ARG, "time_source 2 refused");
+    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "server.test").err == E_INVALID_ARG, "time_source 2 refused");
     g_time_source = 1;
     stats_r s = tls_stats(0xFF, 0);
     CHECK(s.sessions == 0, "no session opened by a refused OPEN");
     // A refused OPEN touches nothing, not even an orphan in the slot it names
-    CHECK(tls_open(0, 7, PIN, 0, 0, pin, "m3.test").err == 0, "a session in slot 0");
-    CHECK(tls_open(0, 8, 3, 0, 0, pin, "m3.test").err == E_INVALID_ARG, "trust 3 into slot 0 refused");
-    CHECK(tls_open(0, 0, PIN, 0, 0, pin, "m3.test").err == E_INVALID_ARG, "tag 0 into slot 0 refused");
-    CHECK(tls_open(0, 8, BUNDLE, 0x02, 0, NULL, "m3.test").err == E_INVALID_ARG, "opts bit1 into slot 0 refused");
+    CHECK(tls_open(0, 7, PIN, 0, 0, pin, "server.test").err == 0, "a session in slot 0");
+    CHECK(tls_open(0, 8, 3, 0, 0, pin, "server.test").err == E_INVALID_ARG, "trust 3 into slot 0 refused");
+    CHECK(tls_open(0, 0, PIN, 0, 0, pin, "server.test").err == E_INVALID_ARG, "tag 0 into slot 0 refused");
+    CHECK(tls_open(0, 8, BUNDLE, 0x02, 0, NULL, "server.test").err == E_INVALID_ARG, "opts bit1 into slot 0 refused");
     CHECK(tls_stats(0, 7).err == 0, "the session in slot 0 survives refused OPENs");
 }
 
@@ -631,9 +631,9 @@ static void c_heap_min(void)
 {
     uint8_t pin[32] = { 1 };
     int before = monitor_starts;
-    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "m3.test").err == 0, "first OPEN");
+    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "server.test").err == 0, "first OPEN");
     CHECK(monitor_starts == before + 1, "restarted by the OPEN into an empty table (%d)", monitor_starts - before);
-    CHECK(tls_open(1, 2, PIN, 0, 0, pin, "m3.test").err == 0, "second OPEN");
+    CHECK(tls_open(1, 2, PIN, 0, 0, pin, "server.test").err == 0, "second OPEN");
     CHECK(monitor_starts == before + 1, "not restarted with a session open (%d)", monitor_starts - before);
 }
 
@@ -643,7 +643,7 @@ static void c_no_entropy(void)
     entropy = ENTROPY_NONE;
     uint8_t pin[32] = { 1 };
     long draws = rng_draws;
-    open_r o = tls_open(0, 1, PIN, 0, 0, pin, "m3.test");
+    open_r o = tls_open(0, 1, PIN, 0, 0, pin, "server.test");
     CHECK(o.err == E_INVALID_STATE && o.reason == 1, "no entropy -> INVALID_STATE reason 1 (0x%x, %d)", o.err, o.reason);
     CHECK(o.slot == 0xFF, "no slot on failure");
     CHECK(rng_draws == draws, "no random bytes drawn before the gate");
@@ -655,16 +655,16 @@ static void c_no_time(void)
     uint8_t pin[32] = { 1 };
     fake_now = 1000;                          // a 1970 clock
     g_time_source = 1; g_unix_time = 0;
-    open_r o = tls_open(0, 1, BUNDLE, 0, 0, NULL, "m3.test");
+    open_r o = tls_open(0, 1, BUNDLE, 0, 0, NULL, "server.test");
     CHECK(o.err == E_INVALID_STATE && o.reason == 2, "BUNDLE without time -> reason 2 (0x%x, %d)", o.err, o.reason);
     g_time_source = 0; g_unix_time = (uint32_t)real_now();
-    o = tls_open(0, 1, BUNDLE, 0, 0, NULL, "m3.test");
+    o = tls_open(0, 1, BUNDLE, 0, 0, NULL, "server.test");
     CHECK(o.err == E_INVALID_STATE && o.reason == 2, "unix_time with time_source 0 is not taken (0x%x, %d)", o.err, o.reason);
     CHECK(fake_now == 1000, "clock untouched by time_source 0");
-    o = tls_open(0, 1, PIN, 0, 0, pin, "m3.test");
+    o = tls_open(0, 1, PIN, 0, 0, pin, "server.test");
     CHECK(o.err == 0, "PIN needs no clock (0x%x, %d)", o.err, o.reason);
     g_time_source = 1;
-    o = tls_open(0, 2, BUNDLE, 0, 0, NULL, "m3.test");
+    o = tls_open(0, 2, BUNDLE, 0, 0, NULL, "server.test");
     CHECK(o.err == 0 && fake_now == (time_t)g_unix_time, "time_source 1 sets the clock (0x%x)", o.err);
     stats_r s = tls_stats(0, 2);
     CHECK(s.time_source == 1, "session time_source NIOS (%u)", s.time_source);
@@ -678,7 +678,7 @@ static void pin_case(const char *crt, const char *key, const char *spkif, const 
     int fd = srv_start("tls", ver, pki(crt), pki(key), "run=echo", NULL);
     conn_t c;
     fake_now = 1000; g_time_source = 0; g_unix_time = 0;      // PIN works without any clock
-    int st = connect_open(&c, fd, PIN, 0, 0, spki, "m3.test");
+    int st = connect_open(&c, fd, PIN, 0, 0, spki, "server.test");
     CHECK(st == ESTABLISHED, "PIN with the right key -> ESTABLISHED (state %d reason %d err -0x%x)", st, c.r.fail_reason, -c.r.err);
     stats_r s = tls_stats(0, 1);
     CHECK(s.version == want_version, "version 0x%04x", s.version);
@@ -716,7 +716,7 @@ static void c_pin_eku(void)
     load("leafcli.spki", spki, 32);
     int fd = srv_start("tls", "ver=13", "ownusage=0", pki("leafcli.chain.pem"), pki("leafcli.key"), NULL);
     conn_t c;
-    int st = connect_open(&c, fd, PIN, 0, 0, spki, "m3.test");
+    int st = connect_open(&c, fd, PIN, 0, 0, spki, "server.test");
     CHECK(st == FAILED && c.r.fail_reason == R_CERT, "matching key, clientAuth-only EKU -> reason 4, not 5 (%d, %d)", st,
           c.r.fail_reason);
     CHECK(c.r.err == -0x7A00, "esp_err BAD_CERTIFICATE (-0x%x)", -c.r.err);
@@ -734,7 +734,7 @@ static void c_custom_expired(void)
     g_unix_time = (uint32_t)(real_now() + 20LL * 365 * 86400);
     int fd = srv_start("tls", "ver=13", pki("leaf.chain.pem"), pki("leaf.key"), NULL);
     conn_t c;
-    int st = connect_open(&c, fd, CUSTOM, 0, 5, NULL, "m3.test");
+    int st = connect_open(&c, fd, CUSTOM, 0, 5, NULL, "server.test");
     CHECK(st == FAILED && c.r.fail_reason == R_CERT, "leaf expired by the clock OPEN set -> reason 4 (%d, %d)", st, c.r.fail_reason);
     CHECK((c.r.verify_flags & 0x01) && (c.r.verify_flags & 0x08) == 0, "verify_flags EXPIRED, trusted (0x%08x)", c.r.verify_flags);
     close(fd);
@@ -757,7 +757,7 @@ static void c_pin_mismatch(void)
         case_index += 100;
         int fd = srv_start("tls", "ver=13", pki("leaf.chain.pem"), pki("leaf.key"), NULL);
         conn_t c;
-        int st = connect_open(&c, fd, PIN, 0, 0, pins[i], "m3.test");
+        int st = connect_open(&c, fd, PIN, 0, 0, pins[i], "server.test");
         CHECK(st == FAILED && c.r.fail_reason == R_PIN, "%s: FAILED reason 5 (state %d reason %d)", names[i], st, c.r.fail_reason);
         CHECK(c.r.verify_flags == 0x08, "%s: verify_flags 0x%08x", names[i], c.r.verify_flags);
         CHECK(c.r.err == -0x2700, "%s: esp_err -0x%04x", names[i], -c.r.err);
@@ -781,12 +781,12 @@ static void c_pin_sni(void)
     case_index += 100;
     fd = srv_start("raw:ch", NULL);
     c.fd = fd;
-    CHECK(tls_open(1, 4, PIN, 0, 0, pin, "pin.m3.test").err == 0, "PIN with a name opens");
+    CHECK(tls_open(1, 4, PIN, 0, 0, pin, "pin.server.test").err == 0, "PIN with a name opens");
     c.tag = 4;
     pump_step(&c, 0, NULL, 0);
     close(fd);
     srv_end(2000);
-    CHECK(log_has("CH sni pin.m3.test") == 1, "SNI sent with a name");
+    CHECK(log_has("CH sni pin.server.test") == 1, "SNI sent with a name");
 }
 
 /* CUSTOM: the uploaded CA is the only anchor, matched by ca_tag */
@@ -798,7 +798,7 @@ static void c_custom_accept(void)
     CHECK(r.err == 0 && r.reject == 0, "SET_CA loads (0x%x, %d)", r.err, r.reject);
     int fd = srv_start("tls", "ver=1213", pki("leaf.chain.pem"), pki("leaf.key"), "run=echo", NULL);
     conn_t c;
-    int st = connect_open(&c, fd, CUSTOM, 0, 5, NULL, "m3.test");
+    int st = connect_open(&c, fd, CUSTOM, 0, 5, NULL, "server.test");
     CHECK(st == ESTABLISHED, "CUSTOM under the uploaded CA -> ESTABLISHED (%d, reason %d, -0x%x, w 0x%x)", st, c.r.fail_reason,
           -c.r.err, c.r.verify_flags);
     close(fd);
@@ -810,17 +810,17 @@ static void c_custom_catag(void)
 {
     uint8_t der[2048];
     int n = load("ca.der", der, sizeof(der));
-    open_r o = tls_open(0, 1, CUSTOM, 0, 5, NULL, "m3.test");
+    open_r o = tls_open(0, 1, CUSTOM, 0, 5, NULL, "server.test");
     CHECK(o.err == E_INVALID_STATE && o.reason == 3, "no CA held -> reason 3 (0x%x, %d)", o.err, o.reason);
     CHECK(tls_set_ca(der, n, 5).err == 0, "SET_CA tag 5");
-    o = tls_open(0, 1, CUSTOM, 0, 6, NULL, "m3.test");
+    o = tls_open(0, 1, CUSTOM, 0, 6, NULL, "server.test");
     CHECK(o.err == E_INVALID_STATE && o.reason == 3, "ca_tag 6 != held 5 -> reason 3 (0x%x, %d)", o.err, o.reason);
-    o = tls_open(0, 1, CUSTOM, 0, 0, NULL, "m3.test");
+    o = tls_open(0, 1, CUSTOM, 0, 0, NULL, "server.test");
     CHECK(o.err == E_INVALID_STATE && o.reason == 3, "ca_tag 0 never matches (0x%x, %d)", o.err, o.reason);
-    o = tls_open(0, 1, CUSTOM, 0, 5, NULL, "m3.test");
+    o = tls_open(0, 1, CUSTOM, 0, 5, NULL, "server.test");
     CHECK(o.err == 0, "ca_tag 5 == held 5 opens (0x%x, %d)", o.err, o.reason);
     CHECK(tls_close_all() == 0, "CLOSE_ALL");
-    o = tls_open(0, 2, CUSTOM, 0, 5, NULL, "m3.test");
+    o = tls_open(0, 2, CUSTOM, 0, 5, NULL, "server.test");
     CHECK(o.err == E_INVALID_STATE && o.reason == 3, "CLOSE_ALL clears the CA -> reason 3 (0x%x, %d)", o.err, o.reason);
     CHECK(tls_set_ca(der, n, 0).err == E_INVALID_ARG, "SET_CA with ca_tag 0 refused");
 }
@@ -833,7 +833,7 @@ static void c_custom_untrusted(void)
     CHECK(tls_set_ca(der, n, 9).err == 0, "SET_CA other root");
     int fd = srv_start("tls", "ver=13", pki("leaf.chain.pem"), pki("leaf.key"), NULL); // leaf is under ca, which the bundle holds
     conn_t c;
-    int st = connect_open(&c, fd, CUSTOM, 0, 9, NULL, "m3.test");
+    int st = connect_open(&c, fd, CUSTOM, 0, 9, NULL, "server.test");
     CHECK(st == FAILED && c.r.fail_reason == R_CERT, "a leaf the uploaded CA did not sign fails, reason 4 (%d, %d)", st, c.r.fail_reason);
     CHECK(c.r.verify_flags == 0x08, "verify_flags NOT_TRUSTED exactly (0x%08x)", c.r.verify_flags);
     close(fd);
@@ -849,7 +849,7 @@ static void c_custom_ca_replaced(void)
     int fd = srv_start("tls", "ver=13", pki("leaf.chain.pem"), pki("leaf.key"), NULL);
     conn_t c;
     memset(&c, 0, sizeof(c)); c.fd = fd; c.tag = 1;
-    CHECK(tls_open(0, 1, CUSTOM, 0, 5, NULL, "m3.test").err == 0, "open");
+    CHECK(tls_open(0, 1, CUSTOM, 0, 5, NULL, "server.test").err == 0, "open");
     pump_step(&c, 0, NULL, 0);                    // ClientHello out
     CHECK(tls_set_ca(der2, n2, 6).err == 0, "SET_CA replaces the CA mid-handshake");
     CHECK(handshake(&c) == ESTABLISHED, "the session verifies with the CA it opened with (state %d, reason %d)", c.state,
@@ -876,15 +876,15 @@ static void c_set_ca_rejects(void)
         setca_r r = tls_set_ca(der, n, (uint16_t)(50 + i));
         CHECK(r.err == t[i].err && r.reject == t[i].reject, "%s: err 0x%x reject %d, want 0x%x %d", t[i].f, r.err, r.reject,
               t[i].err, t[i].reject);
-        open_r o = tls_open(0, 1, CUSTOM, 0, 40, NULL, "m3.test");
+        open_r o = tls_open(0, 1, CUSTOM, 0, 40, NULL, "server.test");
         CHECK(o.reason == 3, "%s: the earlier CA is gone (reason %d)", t[i].f, o.reason);
-        o = tls_open(0, 1, CUSTOM, 0, (uint16_t)(50 + i), NULL, "m3.test");
+        o = tls_open(0, 1, CUSTOM, 0, (uint16_t)(50 + i), NULL, "server.test");
         CHECK((o.err == 0) == (t[i].err == 0), "%s: held exactly when loaded (0x%x %d)", t[i].f, o.err, o.reason);
     }
     int n = load("garbage.der", der, sizeof(der));
     setca_r r = tls_set_ca(der, n, 90);
     CHECK(r.err < -1 && r.reject == 0, "garbage: a negative parse code <= -2, reject 0 (%d, %d)", r.err, r.reject);
-    CHECK(tls_open(0, 1, CUSTOM, 0, 90, NULL, "m3.test").reason == 3, "garbage: no CA held");
+    CHECK(tls_open(0, 1, CUSTOM, 0, 90, NULL, "server.test").reason == 3, "garbage: no CA held");
     CHECK(tls_set_ca(der, 0, 91).err == E_INVALID_ARG, "der_len 0 refused");
 }
 
@@ -893,7 +893,7 @@ static void bundle_case(const char *crt, const char *key, int want_state, uint32
 {
     int fd = srv_start("tls", "ver=1213", pki(crt), pki(key), NULL);
     conn_t c;
-    int st = connect_open(&c, fd, BUNDLE, 0, 0, NULL, "m3.test");
+    int st = connect_open(&c, fd, BUNDLE, 0, 0, NULL, "server.test");
     CHECK(st == want_state, "%s: state %d, want %d (reason %d, -0x%x, w 0x%08x)", crt, st, want_state, c.r.fail_reason, -c.r.err,
           c.r.verify_flags);
     if (want_state == FAILED) {
@@ -915,7 +915,7 @@ static void hs_case(const char *ver, const char *groups, uint16_t want_version, 
     load(!strcmp(crt, "leaf.chain.pem") ? "leaf.spki" : "leafrsa.spki", spki, 32);
     int fd = srv_start("tls", ver, groups, pki(crt), pki(key), NULL);
     conn_t c;
-    int st = connect_open(&c, fd, PIN, 0, 0, spki, "m3.test");
+    int st = connect_open(&c, fd, PIN, 0, 0, spki, "server.test");
     CHECK(st == ESTABLISHED, "%s %s: ESTABLISHED (%d, reason %d, -0x%x)", ver, groups, st, c.r.fail_reason, -c.r.err);
     stats_r s = tls_stats(0, 1);
     CHECK(s.version == want_version, "version 0x%04x", s.version);
@@ -950,7 +950,7 @@ static void c_client_hello(void)
         int fd = srv_start("raw:ch", NULL);
         conn_t c;
         memset(&c, 0, sizeof(c)); c.fd = fd; c.tag = 1;
-        CHECK(tls_open(0, 1, PIN, require ? REQUIRE_TLS13 : 0, 0, pin, "m3.test").err == 0, "open");
+        CHECK(tls_open(0, 1, PIN, require ? REQUIRE_TLS13 : 0, 0, pin, "server.test").err == 0, "open");
         pump_step(&c, 0, NULL, 0);
         close(fd);
         srv_end(2000);
@@ -985,7 +985,7 @@ static void raw_case(const char *what, uint8_t opts, int want_reason, uint32_t w
     int fd = srv_start(what, NULL);
     conn_t c;
     memset(&c, 0, sizeof(c)); c.fd = fd; c.tag = 1;
-    CHECK(tls_open(0, 1, PIN, opts, 0, pin, "m3.test").err == 0, "open");
+    CHECK(tls_open(0, 1, PIN, opts, 0, pin, "server.test").err == 0, "open");
     int st = handshake(&c);
     CHECK(st == FAILED, "%s opts %d: FAILED (%d)", what, opts, st);
     CHECK(c.r.fail_reason == want_reason, "%s opts %d: fail_reason %d, want %d (err -0x%x)", what, opts, c.r.fail_reason,
@@ -1019,7 +1019,7 @@ static void c_no_ems(void)
     load("leaf.spki", spki, 32);
     int fd = srv_start("tls", "ver=12", "ems=0", pki("leaf.chain.pem"), pki("leaf.key"), NULL);
     conn_t c;
-    int st = connect_open(&c, fd, PIN, 0, 0, spki, "m3.test");
+    int st = connect_open(&c, fd, PIN, 0, 0, spki, "server.test");
     CHECK(st == FAILED && c.r.fail_reason == R_NO_EMS, "no EMS -> FAILED reason 3 (%d, %d, -0x%x)", st, c.r.fail_reason, -c.r.err);
     static const uint8_t alert40[] = { 0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28 };
     CHECK(c.r.ct_len == 7 && !memcmp(c.r.data, alert40, 7), "the failing step sends exactly a plaintext fatal alert 40 (%d B)",
@@ -1038,7 +1038,7 @@ static void c_established_no_pt(void)
     int fd = srv_start("tls", "ver=12", pki("leaf.chain.pem"), pki("leaf.key"), "run=app:100,drain", NULL);
     conn_t c;
     memset(&c, 0, sizeof(c)); c.fd = fd; c.tag = 1;
-    CHECK(tls_open(0, 1, PIN, 0, 0, spki, "m3.test").err == 0, "open");
+    CHECK(tls_open(0, 1, PIN, 0, 0, spki, "server.test").err == 0, "open");
     int saw = 0;
     for (int i = 0; i < 200 && c.state == HANDSHAKING; i++) {
         if (c.socklen == 0) gather(&c, 50, 100, sizeof(c.sock)); // server Finished and the app record in one ct_in
@@ -1053,13 +1053,13 @@ static void c_established_no_pt(void)
 }
 
 /* NO_READ: (a) with pt_in, (b) input-less, (c) then plain steps return exactly the pending plaintext */
-static void c_e1_no_read(void)
+static void c_no_read(void)
 {
     uint8_t spki[32];
     load("leaf.spki", spki, 32);
     int fd = srv_start("tls", "ver=13", pki("leaf.chain.pem"), pki("leaf.key"), "run=app:3000,rd:10,drain", NULL);
     conn_t c;
-    int st = connect_open(&c, fd, PIN, 0, 0, spki, "m3.test");
+    int st = connect_open(&c, fd, PIN, 0, 0, spki, "server.test");
     CHECK(st == ESTABLISHED, "established");
     // Feed the 3000-B record with plain steps until the first plaintext comes out
     for (int i = 0; i < 100 && c.ptlen == 0; i++) {
@@ -1089,14 +1089,14 @@ static void c_e1_no_read(void)
 }
 
 /* Warning alerts: no_renegotiation warnings then data in ONE ct_in, and the queued variant */
-static void e2_case(const char *ver, int queued)
+static void warning_alerts_case(const char *ver, int queued)
 {
     uint8_t spki[32];
     load("leaf.spki", spki, 32);
     const char *run = queued ? "run=sleep:300,app:1200,wa:100,wa:100,app:100,drain" : "run=sleep:300,wa:100,wa:100,app:100,drain";
     int fd = srv_start("tls", ver, pki("leaf.chain.pem"), pki("leaf.key"), run, NULL);
     conn_t c;
-    int st = connect_open(&c, fd, PIN, 0, 0, spki, "m3.test");
+    int st = connect_open(&c, fd, PIN, 0, 0, spki, "server.test");
     CHECK(st == ESTABLISHED, "established");
     // Plain steps on nothing (tickets, if any), then all the records at once
     for (int i = 0; i < 3; i++) pump_step(&c, 0, NULL, 0);
@@ -1119,9 +1119,9 @@ static void e2_case(const char *ver, int queued)
     close(fd);
     srv_end(2000);
 }
-static void c_e2_12(void) { e2_case("ver=12", 0); }
-static void c_e2_12_queued(void) { e2_case("ver=12", 1); }
-static void c_e2_13(void) { e2_case("ver=13", 0); }
+static void c_warning_alerts_12(void) { warning_alerts_case("ver=12", 0); }
+static void c_warning_alerts_12_queued(void) { warning_alerts_case("ver=12", 1); }
+static void c_warning_alerts_13(void) { warning_alerts_case("ver=13", 0); }
 
 /* The tag rule: a stale (slot, tag) touches nothing */
 static void c_tag_rule(void)
@@ -1129,11 +1129,11 @@ static void c_tag_rule(void)
     uint8_t spki[32];
     load("leaf.spki", spki, 32);
     uint8_t pin[32] = { 1 };
-    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "m3.test").err == 0, "old session (slot 0, tag 1)");
+    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "server.test").err == 0, "old session (slot 0, tag 1)");
     int fd = srv_start("tls", "ver=13", pki("leaf.chain.pem"), pki("leaf.key"), "run=echo", NULL);
     conn_t c;
     memset(&c, 0, sizeof(c)); c.fd = fd; c.slot = 0; c.tag = 2;
-    CHECK(tls_open(0, 2, PIN, 0, 0, spki, "m3.test").err == 0, "OPEN slot 0 tag 2 takes the slot over");
+    CHECK(tls_open(0, 2, PIN, 0, 0, spki, "server.test").err == 0, "OPEN slot 0 tag 2 takes the slot over");
     CHECK(handshake(&c) == ESTABLISHED, "new session established");
     stats_r before = tls_stats(0, 2);
     CHECK(tls_stats(0, 1).err == E_NOT_FOUND, "the old tag is gone (takeover)");
@@ -1163,7 +1163,7 @@ static void c_tag_rule(void)
 static void c_step_flags(void)
 {
     uint8_t pin[32] = { 1 };
-    CHECK(tls_open(1, 7, PIN, 0, 0, pin, "m3.test").err == 0, "open");
+    CHECK(tls_open(1, 7, PIN, 0, 0, pin, "server.test").err == 0, "open");
     stats_r s0 = tls_stats(1, 7);
     uint8_t ct[5] = { 0x16, 3, 3, 0, 0 };
     step_r *r = tls_step(1, 7, 0x02, ct, 5, NULL, 0);
@@ -1181,7 +1181,7 @@ static void c_close_notify(void)
     load("leaf.spki", spki, 32);
     int fd = srv_start("tls", "ver=13", pki("leaf.chain.pem"), pki("leaf.key"), "run=drain", NULL);
     conn_t c;
-    CHECK(connect_open(&c, fd, PIN, 0, 0, spki, "m3.test") == ESTABLISHED, "established");
+    CHECK(connect_open(&c, fd, PIN, 0, 0, spki, "server.test") == ESTABLISHED, "established");
     for (int i = 0; i < 3; i++) pump_step(&c, 0, NULL, 0);
     close_r r = tls_close(0, 1);
     CHECK(r.err == 0 && r.ct_len >= 20 && r.ct_len <= 64, "CLOSE ok with the close_notify record (%d B)", r.ct_len);
@@ -1193,7 +1193,7 @@ static void c_close_notify(void)
     CHECK(tls_close(0, 1).err == E_NOT_FOUND, "a second CLOSE -> NOT_FOUND");
     CHECK(tls_stats(0xFF, 0).sessions == 0, "no session left");
     uint8_t pin[32] = { 1 };
-    CHECK(tls_open(1, 9, PIN, 0, 0, pin, "m3.test").err == 0, "a session that never handshakes");
+    CHECK(tls_open(1, 9, PIN, 0, 0, pin, "server.test").err == 0, "a session that never handshakes");
     CHECK(tls_step(1, 9, 0, NULL, 0, NULL, 0)->ct_len > 0, "its ClientHello is out");
     CHECK(tls_step(1, 9, 0, NULL, 0, NULL, 0)->ct_len == 0, "nothing more pending");
     r = tls_close(1, 9);
@@ -1206,13 +1206,13 @@ static void c_close_all(void)
     uint8_t pin[32] = { 1 }, der[2048];
     int n = load("ca.der", der, sizeof(der));
     CHECK(tls_set_ca(der, n, 5).err == 0, "CA");
-    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "m3.test").err == 0, "slot 0");
-    CHECK(tls_open(1, 2, CUSTOM, 0, 5, NULL, "m3.test").err == 0, "slot 1");
+    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "server.test").err == 0, "slot 0");
+    CHECK(tls_open(1, 2, CUSTOM, 0, 5, NULL, "server.test").err == 0, "slot 1");
     CHECK(tls_stats(0xFF, 0).sessions == 2, "two sessions");
     CHECK(tls_close_all() == 0, "CLOSE_ALL ok");
     CHECK(tls_stats(0xFF, 0).sessions == 0, "none left");
     CHECK(tls_stats(0, 1).err == E_NOT_FOUND && tls_stats(1, 2).err == E_NOT_FOUND, "both gone");
-    CHECK(tls_open(1, 3, CUSTOM, 0, 5, NULL, "m3.test").reason == 3, "the CA is gone");
+    CHECK(tls_open(1, 3, CUSTOM, 0, 5, NULL, "server.test").reason == 3, "the CA is gone");
 }
 
 /* A fatal alert after the handshake: FAILED, alert_in set, alert_out none (encrypted) */
@@ -1222,7 +1222,7 @@ static void c_fatal_alert(void)
     load("leaf.spki", spki, 32);
     int fd = srv_start("tls", "ver=12", pki("leaf.chain.pem"), pki("leaf.key"), "run=sleep:200,fa:20", NULL);
     conn_t c;
-    CHECK(connect_open(&c, fd, PIN, 0, 0, spki, "m3.test") == ESTABLISHED, "established");
+    CHECK(connect_open(&c, fd, PIN, 0, 0, spki, "server.test") == ESTABLISHED, "established");
     for (int i = 0; i < 40 && c.state == ESTABLISHED; i++) {
         if (c.socklen == 0) gather(&c, 50, 20, sizeof(c.sock));
         pump_step(&c, 0, NULL, 0);
@@ -1242,7 +1242,7 @@ static void alert_out_case(const char *ver)
     load("leaf.spki", spki, 32);
     int fd = srv_start("tls", ver, pki("leaf.chain.pem"), pki("leaf.key"), "run=sleep:200,app:100,drain", NULL);
     conn_t c;
-    CHECK(connect_open(&c, fd, PIN, 0, 0, spki, "m3.test") == ESTABLISHED, "established");
+    CHECK(connect_open(&c, fd, PIN, 0, 0, spki, "server.test") == ESTABLISHED, "established");
     for (int i = 0; i < 40 && c.state == ESTABLISHED; i++) {
         if (c.socklen == 0 && gather(&c, 50, 50, sizeof(c.sock)) > 0) c.sock[c.socklen - 1] ^= 0x55; // a man in the middle
         pump_step(&c, 0, NULL, 0);
@@ -1267,7 +1267,7 @@ static void c_known_issue_hrr_cookie(void)
     int fd = srv_start("raw:hrrcookie", NULL);
     conn_t c;
     memset(&c, 0, sizeof(c)); c.fd = fd; c.tag = 1;
-    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "m3.test").err == 0, "open");
+    CHECK(tls_open(0, 1, PIN, 0, 0, pin, "server.test").err == 0, "open");
     for (int i = 0; i < 400 && c.state == HANDSHAKING && !log_has("RAW done"); i++) {
         if (c.socklen == 0) gather(&c, 20, 5, sizeof(c.sock));
         pump_step(&c, 0, NULL, 0);
@@ -1288,11 +1288,11 @@ static void c_sntp_wins(void)
     time_t sntp_now = real_now();
     fake_now = sntp_now; sntp_flag = 1;
     g_time_source = 0; g_unix_time = 0;
-    open_r o = tls_open(0, 1, BUNDLE, 0, 0, NULL, "m3.test");
+    open_r o = tls_open(0, 1, BUNDLE, 0, 0, NULL, "server.test");
     CHECK(o.err == 0, "BUNDLE with SNTP time and no Nios time opens (0x%x, %d)", o.err, o.reason);
     CHECK(tls_stats(0, 1).time_source == 2, "session time_source SNTP (%u)", tls_stats(0, 1).time_source);
     g_time_source = 1; g_unix_time = (uint32_t)sntp_now + 86400 * 400;   // a later, different Nios time
-    o = tls_open(1, 2, BUNDLE, 0, 0, NULL, "m3.test");
+    o = tls_open(1, 2, BUNDLE, 0, 0, NULL, "server.test");
     CHECK(o.err == 0 && fake_now == sntp_now, "the Nios's time does not replace SNTP (clock moved by %ld s)", (long)(fake_now - sntp_now));
     CHECK(tls_stats(1, 2).time_source == 2, "session time_source SNTP, not NIOS (%u)", tls_stats(1, 2).time_source);
     sntp_flag = 0;
@@ -1316,8 +1316,8 @@ static const tcase_t cases[] = {
     { "sh13_comp", c_sh13_comp, 1 }, { "sh13_comp_require13", c_sh13_comp_require13, 1 }, { "sh13_suite", c_sh13_suite, 1 },
     { "sh13_suite_require13", c_sh13_suite_require13, 1 }, { "sh13_sentinel_bytes", c_sh13_sentinel_bytes, 1 }, { "sh12_bad_suite", c_sh12_bad_suite, 1 }, { "alert70", c_alert70, 1 },
     { "peer_closed", c_peer_closed, 1 }, { "no_ems", c_no_ems, 1 },
-    { "established_no_pt", c_established_no_pt, 1 }, { "e1_no_read", c_e1_no_read, 1 },
-    { "e2_12", c_e2_12, 1 }, { "e2_12_queued", c_e2_12_queued, 1 }, { "e2_13", c_e2_13, 1 },
+    { "established_no_pt", c_established_no_pt, 1 }, { "no_read", c_no_read, 1 },
+    { "warning_alerts_12", c_warning_alerts_12, 1 }, { "warning_alerts_12_queued", c_warning_alerts_12_queued, 1 }, { "warning_alerts_13", c_warning_alerts_13, 1 },
     { "tag_rule", c_tag_rule, 1 }, { "step_flags", c_step_flags, 0 }, { "close_notify", c_close_notify, 1 },
     { "close_all", c_close_all, 0 }, { "fatal_alert", c_fatal_alert, 1 },
     { "heap_min", c_heap_min, 0 }, { "alert_out_12", c_alert_out_12, 1 }, { "alert_out_13", c_alert_out_13, 1 },

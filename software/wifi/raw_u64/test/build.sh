@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Builds the engine host test and its server: build.sh [head|base|mut-NAME|at-SHA[+NAME]...] (default head).
 # Variants and the required inputs MB4, S4, IDF, SRV, S36: README.md. Output: build/<variant>/engine_test,
-# build/m3srv, build/pki (mkpki.sh).
+# build/tls_server, build/pki (mkpki.sh).
 set -e
 T=${0:A:h}; RAW=${T:h}; SW=${RAW:h:h}; REPO=${SW:h}
 for e in MB4 S4 IDF SRV S36; do [ -n "${(P)e}" ] || { echo "build.sh: set $e (see the header)" >&2; exit 2; }; done
@@ -13,12 +13,12 @@ if [ ! -f $BD/x509_crt_bundle ]; then
   (cd $BD && python3 $IDF/components/mbedtls/esp_crt_bundle/gen_crt_bundle.py -q --input $BD/pki/ca.pem)
 fi
 # The server and the embedded files (only when missing or changed: mutrun.sh builds in parallel)
-if [ ! -f $BD/m3srv -o $T/m3srv.c -nt $BD/m3srv ]; then
+if [ ! -f $BD/tls_server -o $T/tls_server.c -nt $BD/tls_server ]; then
   printf '    .section __TEXT,__const\n    .globl _binary_x509_crt_bundle_start\n    .globl _binary_x509_crt_bundle_end\n_binary_x509_crt_bundle_start:\n    .incbin "%s"\n_binary_x509_crt_bundle_end:\n' $BD/x509_crt_bundle > $BD/bundle.s
   printf '    .section __TEXT,__const\n    .globl _binary_tls_test_ca_pem_start\n    .globl _binary_tls_test_ca_pem_end\n_binary_tls_test_ca_pem_start:\n    .incbin "%s"\n    .byte 0\n_binary_tls_test_ca_pem_end:\n' $BD/pki/ca.pem > $BD/testca.s
 
-  cc -std=gnu17 -g -O1 -w -I$S36/include -I$S36/library -I$SRV/include $T/m3srv.c \
-     $SRV/library/libmbedtls.a $SRV/library/libmbedx509.a $SRV/library/libmbedcrypto.a -o $BD/m3srv
+  cc -std=gnu17 -g -O1 -w -I$S36/include -I$S36/library -I$SRV/include $T/tls_server.c \
+     $SRV/library/libmbedtls.a $SRV/library/libmbedx509.a $SRV/library/libmbedcrypto.a -o $BD/tls_server
 fi
 
 MI=(-I$MB4/config -I$S4/include -I$S4/tf-psa-crypto/include -I$S4/tf-psa-crypto/drivers/builtin/include

@@ -1,4 +1,4 @@
-/* m3srv.c: the server side of the engine host test (engine_test.c), one connection per run: a TLS server
+/* tls_server.c: the server side of the engine host test (engine_test.c), one connection per run: a TLS server
  * (mbedTLS 3.6.0, default configuration) or a raw mode that answers the ClientHello by hand. It logs one
  * "KEY value" line per event to stdout for the test to check. Options and raw answers: README.md. */
 #define MBEDTLS_ALLOW_PRIVATE_ACCESS
@@ -444,7 +444,7 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60); // never outlive a test case that crashed or hung
     if (argc < 3) {
-        fprintf(stderr, "usage: m3srv PORT tls|raw:WHAT [options]\n");
+        fprintf(stderr, "usage: tls_server PORT tls|raw:WHAT [options]\n");
         return 2;
     }
     int port = atoi(argv[1]);

@@ -25,12 +25,12 @@ basicConstraints = critical, CA:FALSE
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
-subjectAltName = DNS:m3.test
+subjectAltName = DNS:server.test
 [leaf_cli]
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth
-subjectAltName = DNS:m3.test
+subjectAltName = DNS:server.test
 [leaf_other]
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature, keyEncipherment
@@ -48,11 +48,11 @@ spki() { openssl x509 -in $1.pem -pubkey -noout | openssl pkey -pubin -outform d
 
 ec ca; root ca ca                                  # the trusted root (EC P-256)
 ec other; root other ca                            # a root nobody trusts
-ec leaf; leaf leaf ca leaf                         # m3.test under ca
-rsa leafrsa 2048; leaf leafrsa ca leaf             # m3.test, RSA key, under ca
-ec leafother; leaf leafother other leaf            # m3.test under the untrusted root
+ec leaf; leaf leaf ca leaf                         # server.test under ca
+rsa leafrsa 2048; leaf leafrsa ca leaf             # server.test, RSA key, under ca
+ec leafother; leaf leafother other leaf            # server.test under the untrusted root
 ec leafname; leaf leafname ca leaf_other           # other.test under ca
-ec leafcli; leaf leafcli ca leaf_cli               # m3.test under ca, extendedKeyUsage clientAuth only
+ec leafcli; leaf leafcli ca leaf_cli               # server.test under ca, extendedKeyUsage clientAuth only
 for c in leaf leafrsa leafother leafname leafcli; do spki $c; done
 # CUSTOM CA upload cases
 rsa rsa1024 1024; root rsa1024 ca                  # RSA KEY < 2048

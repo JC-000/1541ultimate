@@ -3,7 +3,7 @@
 `engine_test.c` plays the Ultimate against the real `rpc_dispatch.c` and `tls_engine.c`, built on the host
 with mbedTLS 4.1.1 in the ESP32's configuration (ASan and UBSan on). It builds every request byte by byte at
 the protocol spec's offsets, never from `rpc_calls.h`, so a layout slip on the ESP32 side fails here.
-The server is `m3srv.c` (mbedTLS 3.6.0, default configuration), which can also answer a ClientHello by hand
+The server is `tls_server.c` (mbedTLS 3.6.0, default configuration), which can also answer a ClientHello by hand
 (version refusals, the downgrade sentinel) and log what the client offered.
 
     ./build.sh head          # this tree; also base (the previous engine at a846369f) and mut-NAME
@@ -32,12 +32,12 @@ Inputs, all read-only and required in the environment:
     IDF   ESP-IDF v6.0.3 (76f5dedd), for esp_crt_bundle.c and gen_crt_bundle.py
     SRV   mbedTLS 3.6.0 with its default configuration (the server side), and S36 its source
 
-Output: `build/<variant>/engine_test`, `build/m3srv`, `build/pki` (`mkpki.sh`).
+Output: `build/<variant>/engine_test`, `build/tls_server`, `build/pki` (`mkpki.sh`).
 
 `engine_test [CASE...]` runs every case (or the named ones), each in its own process. Environment:
-M3SRV (server binary), PKI (`mkpki.sh` output), LOGDIR, PORTBASE; `run.sh` sets them.
+TLS_SERVER (server binary), PKI (`mkpki.sh` output), LOGDIR, PORTBASE; `run.sh` sets them.
 
-`m3srv PORT tls OPTIONS...` is a TLS server (mbedTLS 3.6.0, default configuration); `m3srv PORT raw:WHAT`
+`tls_server PORT tls OPTIONS...` is a TLS server (mbedTLS 3.6.0, default configuration); `tls_server PORT raw:WHAT`
 uses no TLS library: it reads the ClientHello, logs it, and answers WHAT by hand. Everything it sees goes to
 stdout, one "KEY value" line each, for the test to check.
 

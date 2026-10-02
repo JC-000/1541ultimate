@@ -112,14 +112,14 @@ static tls_session_t *tls_find_close(uint8_t slot, uint16_t tag)
  'flags_unchecked': [(E, '    if ((flags & ~TLS_STEP_NO_READ) || (ct_in_len < 0)', '    if ((ct_in_len < 0)')],
  'no_block_timing': [(D, '''    if (ms > block_max_ms) {''', '''    if (0) {''')],
  # SNTP time, orphan slots, alert_out, heap_min and a ServerHello that cannot be found
- 'adv_sntp_ignored': [(E, '    if (sntp_has_time() && (time(NULL) > floor)) {\n        return TLS_TIME_SNTP;\n    }\n', '')],
- 'adv_orphan_freed_on_bad_args': [(E, '    *reason = TLS_OPEN_REASON_NONE;\n    // Verifying', '    *reason = TLS_OPEN_REASON_NONE;\n    if ((slot < TLS_MAX_SESSIONS) && sessions[slot]) {\n        tls_free(sessions[slot]);\n    }\n    // Verifying')],
- 'adv_alert_out_encrypted': [(E, '(s->ssl.out_msgtype == MBEDTLS_SSL_MSG_ALERT) && (s->ssl.transform_out == NULL) &&', '(s->ssl.out_msgtype == MBEDTLS_SSL_MSG_ALERT) &&')],
- 'adv_heap_min_not_reset': [(E, '        heap_caps_monitor_local_minimum_free_size_stop();\n        heap_caps_monitor_local_minimum_free_size_start();\n', '')],
- 'adv_sh_not_found': [(E, '    const uint8_t *m = s->ssl.in_msg;\n    size_t n = s->ssl.in_hslen;\n', '    const uint8_t *m = s->ssl.in_msg;\n    size_t n = s->ssl.in_hslen;\n    if (type == MBEDTLS_SSL_HS_SERVER_HELLO) {\n        return NULL; // models an mbedTLS change: the ServerHello is no longer in in_msg after its step\n    }\n')],
+ 'sntp_ignored': [(E, '    if (sntp_has_time() && (time(NULL) > floor)) {\n        return TLS_TIME_SNTP;\n    }\n', '')],
+ 'orphan_freed_on_bad_args': [(E, '    *reason = TLS_OPEN_REASON_NONE;\n    // Verifying', '    *reason = TLS_OPEN_REASON_NONE;\n    if ((slot < TLS_MAX_SESSIONS) && sessions[slot]) {\n        tls_free(sessions[slot]);\n    }\n    // Verifying')],
+ 'alert_out_encrypted': [(E, '(s->ssl.out_msgtype == MBEDTLS_SSL_MSG_ALERT) && (s->ssl.transform_out == NULL) &&', '(s->ssl.out_msgtype == MBEDTLS_SSL_MSG_ALERT) &&')],
+ 'heap_min_not_reset': [(E, '        heap_caps_monitor_local_minimum_free_size_stop();\n        heap_caps_monitor_local_minimum_free_size_start();\n', '')],
+ 'sh_not_found': [(E, '    const uint8_t *m = s->ssl.in_msg;\n    size_t n = s->ssl.in_hslen;\n', '    const uint8_t *m = s->ssl.in_msg;\n    size_t n = s->ssl.in_hslen;\n    if (type == MBEDTLS_SSL_HS_SERVER_HELLO) {\n        return NULL; // models an mbedTLS change: the ServerHello is no longer in in_msg after its step\n    }\n')],
  # the downgrade sentinel counts only in a ServerHello without supported_versions
- 'er23_sentinel_ignored': [(E, '        size_t len;\n        const uint8_t *d, *m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len);\n', '        if (!(s->opts & TLS_OPT_REQUIRE_TLS13)) {\n            r->fail_reason = TLS_FAIL_DOWNGRADE;\n            return;\n        }\n        size_t len;\n        const uint8_t *d, *m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len);\n')],
- 'er23_supported_versions_ignored': [(E, '(tls_sh_ext(m, len, 43, &d) == -1)', '1')],
+ 'downgrade_sentinel_ignored': [(E, '        size_t len;\n        const uint8_t *d, *m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len);\n', '        if (!(s->opts & TLS_OPT_REQUIRE_TLS13)) {\n            r->fail_reason = TLS_FAIL_DOWNGRADE;\n            return;\n        }\n        size_t len;\n        const uint8_t *d, *m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len);\n')],
+ 'downgrade_supported_versions_ignored': [(E, '(tls_sh_ext(m, len, 43, &d) == -1)', '1')],
 }
 os.makedirs(RAW + '/test/mutants', exist_ok=True)
 for name, edits in M.items():
