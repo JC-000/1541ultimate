@@ -53,8 +53,9 @@ target 'niosapps'. This target will only succeed if you have already successfull
 For the U2+L, you can build the 'u2pl' target.
 
 The U64 firmware can be built by typing 'make u64'.
-Its WiFi module firmware (software/wifi/raw_u64) needs ESP-IDF 6, so 'make' and 'make u64' stop there
-unless IDF_PATH is an ESP-IDF 6; software/wifi/raw_u64/README.md shows how to build it and then 'make u64_no_esp'.
+The WiFi module firmware of the U64, U64E-II and U2+L (software/wifi, software/u64ctrl) needs ESP-IDF 6, so
+'make', 'make u64', 'make u64ii' and 'make u2pl' stop there unless IDF_PATH is an ESP-IDF 6; see
+software/wifi/raw_u64/README.md.
 
 The U64E-II firmware can be built by typing 'make u64ii'
 
