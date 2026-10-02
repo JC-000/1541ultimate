@@ -1,0 +1,11 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -110,6 +110,7 @@
+     MBEDTLS_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+     MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+     MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
++    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
+     0
+ };
+ 

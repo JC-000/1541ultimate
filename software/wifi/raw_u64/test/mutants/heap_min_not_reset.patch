@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -402,8 +402,6 @@
+ 
+     if (tls_sessions_open() == 0) {
+         // heap_min then reports the peak of this burst of sessions, not of the Wi-Fi start
+-        heap_caps_monitor_local_minimum_free_size_stop();
+-        heap_caps_monitor_local_minimum_free_size_start();
+     }
+     tls_session_t *s = NULL;
+     int ret = tls_setup(&s, tag, p, hostname, time_source);

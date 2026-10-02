@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -593,7 +593,7 @@
+     r->state = s->stats.state;
+ 
+     // Caller errors consume nothing, return nothing and leave the session as it is
+-    if ((flags & ~TLS_STEP_NO_READ) || (ct_in_len < 0) || (pt_in_len < 0) || (ct_in_len + pt_in_len > TLS_STEP_IN_MAX)) {
++    if ((ct_in_len < 0) || (pt_in_len < 0) || (ct_in_len + pt_in_len > TLS_STEP_IN_MAX)) {
+         return ESP_ERR_INVALID_ARG;
+     }
+     if (pt_in_len && (s->stats.state != TLS_STATE_ESTABLISHED)) {

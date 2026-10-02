@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:17
+@@ -667,7 +667,7 @@
+     // a NO_READ step (a WRITE's): what is pending stays in the engine for the next plain step
+     int ct_len = (s->out_len < TLS_STEP_OUT_MAX) ? s->out_len : TLS_STEP_OUT_MAX;
+     int pt_len = 0;
+-    while ((ret == 0) && (s->stats.state == TLS_STATE_ESTABLISHED) && !just_established && !(flags & TLS_STEP_NO_READ) &&
++    while ((ret == 0) && (s->stats.state == TLS_STATE_ESTABLISHED) && !just_established && !((flags & TLS_STEP_NO_READ) && pt_in_len) &&
+            (ct_len + pt_len + TLS_ALERT_ROOM < TLS_STEP_OUT_MAX)) {
+         int in_before = s->in_off;
+         int n = mbedtls_ssl_read(&s->ssl, out + ct_len + pt_len, TLS_STEP_OUT_MAX - TLS_ALERT_ROOM - ct_len - pt_len);

@@ -1,0 +1,13 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -359,6 +359,9 @@
+     char hostname[TLS_SNI_MAX_LEN + 1];
+ 
+     *reason = TLS_OPEN_REASON_NONE;
++    if ((slot < TLS_MAX_SESSIONS) && sessions[slot]) {
++        tls_free(sessions[slot]);
++    }
+     // Verifying without a host name would skip the name check, so only PIN may go without one
+     if ((slot >= TLS_MAX_SESSIONS) || (tag == 0) || (p->trust > TLS_TRUST_PIN) ||
+         (p->opts & ~TLS_OPT_REQUIRE_TLS13) || (p->time_source > TLS_TIME_NIOS) ||

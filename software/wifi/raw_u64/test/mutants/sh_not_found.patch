@@ -1,0 +1,13 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -420,6 +420,9 @@
+ {
+     const uint8_t *m = s->ssl.in_msg;
+     size_t n = s->ssl.in_hslen;
++    if (type == MBEDTLS_SSL_HS_SERVER_HELLO) {
++        return NULL; // models an mbedTLS change: the ServerHello is no longer in in_msg after its step
++    }
+     if (!m || (s->ssl.in_msgtype != MBEDTLS_SSL_MSG_HANDSHAKE) || (n < 4) || (m[0] != type) ||
+         ((size_t)((m[1] << 16) | (m[2] << 8) | m[3]) != n - 4)) {
+         return NULL;

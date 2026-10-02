@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -706,7 +706,7 @@
+             r->alert_in = (alert >= 0) ? (uint8_t)alert : TLS_ALERT_NONE;
+         }
+         // The alert this engine sent, when mbedTLS wrote it before any keys (mbedTLS has no getter for it)
+-        if ((s->ssl.out_msgtype == MBEDTLS_SSL_MSG_ALERT) && (s->ssl.transform_out == NULL) &&
++        if ((s->ssl.out_msgtype == MBEDTLS_SSL_MSG_ALERT) &&
+             (s->ssl.out_msg[0] == MBEDTLS_SSL_ALERT_LEVEL_FATAL)) {
+             r->alert_out = s->ssl.out_msg[1];
+         }

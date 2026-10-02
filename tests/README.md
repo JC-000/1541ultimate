@@ -121,6 +121,8 @@ pip install -r tests/requirements.txt
 | `Pillow` | `e2e/api/input_test.py`, `e2e/io/c64/ultimax_cartridge_test.py`, `e2e/io/printer/printer_test.py` |
 | `PyYAML` | `tests/lib/openapi_contract.py`, reads `doc/api/rest_api_openapi_*.yaml` |
 | `pyftpdlib` | `e2e/filesystem/ftp_client_test.py` |
+| `cryptography` | `e2e/io/command_interface/net_tls_test.py` and its self-test `net_tls_selftest.py`, for the throwaway PKI of their TLS servers; without it the self-test is a skip. Not in `requirements.txt` |
+| `c64-test-harness` | `e2e/io/command_interface/net_tls_test.py`, which refuses to run unless the harness's device lock shows no other run on the device, and `net_tls_selftest.py`, which tests that check. Not on PyPI and not in `requirements.txt`: `pip install git+https://github.com/JC-000/c64-test-harness` |
 | `selenium` | `e2e/web/theme_test.py`, `e2e/web/index_test.py`. Also needs an installed Chrome or Firefox with its WebDriver on PATH, and a route to the CDN `html/index.html` loads jQuery from; whatever is missing is reported as a skip |
 | `pytesseract` | `e2e/io/printer/printer_test.py`, only under `--stage verify` |
 | `ruff` | `tests/lib/lint_test.py`, and `make lint_test`, which lint this tree against `tests/ruff.toml`. Pinned in `tests/requirements-lint.txt`, which this file includes, because the suite is a gate |

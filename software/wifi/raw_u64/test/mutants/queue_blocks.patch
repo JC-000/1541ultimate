@@ -1,0 +1,14 @@
+diff -ru a/main/rpc_dispatch.c b/main/rpc_dispatch.c
+--- a/main/rpc_dispatch.c	2026-10-01 19:59:10
++++ b/main/rpc_dispatch.c	2026-10-01 20:15:18
+@@ -674,9 +674,7 @@
+     case CMD_TLS_STATS:
+     case CMD_TLS_CLOSE_ALL:
+     case CMD_TLS_SET_CA:
+-        if (xQueueSend(tls_queue, &pbuffer, 0) != pdTRUE) {
+-            cmd_tls_busy(pbuffer);
+-        }
++        tls_serve(pbuffer);
+         break;
+     default:
+         cmd_not_implemented(pbuffer);
