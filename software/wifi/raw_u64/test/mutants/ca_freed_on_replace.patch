@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -253,7 +253,7 @@
+ 
+ static void tls_ca_release(tls_ca_t *ca)
+ {
+-    if (ca && (--ca->refs == 0)) {
++    if (ca) {
+         mbedtls_x509_crt_free(&ca->crt);
+         free(ca);
+     }

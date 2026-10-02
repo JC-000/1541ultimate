@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -487,7 +487,7 @@
+             // (ssl_tls12_client.c:742-759), so the engine refuses it here, before any key is derived. A ServerHello
+             // it cannot find counts as one without EMS: fail closed.
+             s->ems_checked = 1;
+-            s->stats.ems = m && (tls_sh_ext(m, len, 23, &d) == 0);
++            s->stats.ems = 1;
+             if (!s->stats.ems) {
+                 ESP_LOGW(TAG, "TLS 1.2 server without the extended master secret: refused");
+                 mbedtls_ssl_send_alert_message(&s->ssl, MBEDTLS_SSL_ALERT_LEVEL_FATAL,

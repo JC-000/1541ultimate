@@ -1,0 +1,11 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -327,6 +327,7 @@
+             s->ca = custom_ca;
+             s->ca->refs++;
+             mbedtls_ssl_conf_ca_chain(&s->conf, &s->ca->crt, NULL);
++            ret = esp_crt_bundle_attach(&s->conf);
+         } else if (p->trust == TLS_TRUST_PIN) {
+             mbedtls_ssl_conf_ca_chain(&s->conf, &tls_empty_ca, NULL);
+         }

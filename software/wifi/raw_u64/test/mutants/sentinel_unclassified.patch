@@ -1,0 +1,12 @@
+diff -ru a/main/tls_engine.c b/main/tls_engine.c
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -525,7 +525,7 @@
+                 r->fail_reason = TLS_FAIL_VERSION_REFUSED;
+                 r->verify_flags = (m[4] << 8) | m[5]; // legacy_version: the version it chose
+             } else if (!memcmp(tail, "\x44\x4F\x57\x4E\x47\x52\x44", 7) && (tail[7] <= 1)) {
+-                r->fail_reason = TLS_FAIL_DOWNGRADE;
++                r->fail_reason = TLS_FAIL_NONE;
+             }
+         }
+     } else if (ret == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
