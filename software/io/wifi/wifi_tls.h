@@ -1,7 +1,7 @@
 /*
  * wifi_tls.h
  *
- * TLS sessions that run on the WiFi module (esp-tls M3). The module
+ * TLS sessions that run on the WiFi module. The module
  * holds the keys and runs the protocol; this side carries the ciphertext
  * between a socket and the module, one step at a time, and the module never
  * speaks unasked. U64 only.
@@ -46,7 +46,7 @@
 #define WIFI_TLS_FAILED         3 // esp_err holds the mbedTLS error, fail_reason says more
 #define WIFI_TLS_UNKNOWN        0xFF // the answer did not say
 
-// Why a step FAILED (M3-SPEC 5.2), besides esp_err.
+// Why a step FAILED, besides esp_err.
 #define WIFI_TLS_FAIL_NONE            0 // generic: esp_err has the mbedTLS code, alert_in any alert
 #define WIFI_TLS_FAIL_VERSION_REFUSED 1 // the version chosen is in verify_flags' low 16 bits
 #define WIFI_TLS_FAIL_DOWNGRADE       2

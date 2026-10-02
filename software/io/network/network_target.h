@@ -57,7 +57,7 @@
 // module hands out per request (RANDOM_MAX_BYTES in its rpc_calls.h).
 #define NET_MAX_RANDOM 512
 
-// TLS sockets (esp-tls M3): the WiFi module runs the session, this target
+// TLS sockets: the WiFi module runs the session, this target
 // keeps the TCP socket and carries the ciphertext. U64 only; elsewhere the
 // commands exist and answer that TLS is not available.
 #if U64 == 1
@@ -81,7 +81,7 @@
 #endif
 
 // One TLS socket: the TCP socket, which is also in sockets[], and the session
-// on the module that runs over it (M3-SPEC 4.2).
+// on the module that runs over it.
 struct TlsSocket {
     bool used;
     int socketnr;

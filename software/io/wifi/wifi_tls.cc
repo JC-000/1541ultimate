@@ -15,7 +15,7 @@ extern "C" {
 #include "wifi_dedicated.h"
 #include "wifi_tls.h"
 
-// M3-SPEC v1 section 5.2, byte for byte.
+// The wire layouts of the protocol spec, byte for byte.
 static_assert(sizeof(rpc_header_t) == 4, "rpc_header_t");
 static_assert(sizeof(rpc_espcmd_resp) == 8, "rpc_espcmd_resp");
 static_assert(offsetof(rpc_tls_open_req, trust) == 4, "open.trust");
@@ -321,7 +321,7 @@ int wifi_tls_take_close_all(const uint8_t *reply, int size, uint16_t sequence, i
     return 0;
 }
 
-// Three answers are well formed (M3-SPEC 5.2): loaded (0, no reject), a parse
+// Three answers are well formed: loaded (0, no reject), a parse
 // error (an mbedTLS or PSA code, never ESP_FAIL, no reject) and a refusal of a
 // certificate that parsed (ESP_ERR_INVALID_ARG with reject 1, 3 or 4).
 // Anything else is not.

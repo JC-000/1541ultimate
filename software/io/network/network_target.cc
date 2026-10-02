@@ -40,7 +40,7 @@ Message c_status_internal_error      = { 17, true, (uint8_t *)"86,INTERNAL ERROR
 Message c_status_no_entropy          = { 20, true, (uint8_t *)"87,NO ENTROPY SOURCE" };
 Message c_status_entropy_busy        = { 22, true, (uint8_t *)"88,ENTROPY SOURCE BUSY" };
 
-// The TLS commands (M3-SPEC v1). Texts are those of section 2.
+// The TLS commands. The status texts are part of the protocol spec.
 #define TLS_MESSAGE(text) { sizeof(text) - 1, true, (uint8_t *)text }
 Message c_status_tls_not_available = TLS_MESSAGE("90,TLS NOT AVAILABLE");
 Message c_status_tls_in_use        = TLS_MESSAGE("91,TLS SESSIONS IN USE");
@@ -53,7 +53,7 @@ Message c_status_tls_pin_mismatch  = TLS_MESSAGE("96,PINNED KEY MISMATCH");
 Message c_status_tls_no_notify     = TLS_MESSAGE("05,TLS CLOSED WITHOUT NOTIFY");
 
 #if NET_TLS
-// Deadlines and caps (M3-SPEC 4.3).
+// Deadlines and caps.
 #define TLS_DNS_MS            10000
 #define TLS_CONNECT_MS        10000
 #define TLS_OPEN_TOTAL_MS     40000
@@ -74,7 +74,7 @@ Message c_status_tls_no_notify     = TLS_MESSAGE("05,TLS CLOSED WITHOUT NOTIFY")
 #define TLS_UNSENT_RETRIES    10
 #define TLS_UNSENT_DELAY_MS   50
 #define TLS_SLICE_MS          100  // the longest any wait goes without looking at a reset
-#define TLS_SNDTIMEO_MS       500  // OI-3: caps lwIP's close when it cannot get memory for the FIN
+#define TLS_SNDTIMEO_MS       500  // caps lwIP's close when it cannot get memory for the FIN
                                    // (api_msg.c:1034-1037, else 20 s); our sends are MSG_DONTWAIT
 #define TLS_EARLIEST_TIME     1735689600u // 2025-01-01: an SNTP time before this is not one
 
@@ -137,7 +137,7 @@ void NetworkTarget :: parse_command(Message *command, Message **reply, Message *
     // client bytes left over from an earlier read.
     discard_read_reply();
 
-    // M3-SPEC 1.1 Rule 2: every command claims every TLS session, so that
+    // Every command claims every TLS session, so that
     // only the session of the latest OPEN_TLS or START_TLS can be unclaimed,
     // and only until the next command. $25, which frees an unclaimed session,
     // and $23 $FF, which counts them, leave them as they are.
@@ -151,7 +151,7 @@ void NetworkTarget :: parse_command(Message *command, Message **reply, Message *
             tls[i].claimed = true;
         }
     }
-    // A CA upload takes no other network command in between (1.2).
+    // A CA upload takes no other network command in between.
     if ((code != NET_CMD_TLS_TRUST_CA) && (ca_state == CA_UPLOADING)) {
         ca_state = CA_EMPTY;
     }
@@ -537,7 +537,7 @@ void NetworkTarget :: close_socket(Message *command, Message **reply, Message **
     uint8_t socketnr = command->message[2];
     int result = -1;
 #if NET_TLS
-    // Always OK: the session goes, whatever state it is in (1.5).
+    // Always OK: the session goes, whatever state it is in.
     TlsSocket *session = tls_find(socketnr);
     if (session) {
         tls_close_entry(session, true);
@@ -698,7 +698,7 @@ void NetworkTarget :: abort(int a)
 }
 
 // ---------------------------------------------------------------------------
-// TLS sockets (esp-tls M3, M3-SPEC v1 sections 1-4)
+// TLS sockets
 // ---------------------------------------------------------------------------
 
 Message *NetworkTarget :: set_status(const char *text)
@@ -824,7 +824,7 @@ static char *put_hex(char *p, uint32_t value, int digits)
     return p;
 }
 
-// An mbedTLS code, -0x%04X (M3-SPEC 1, status hex format).
+// An mbedTLS code, as -0x%04X in a status text.
 static char *put_error(char *p, int error)
 {
     if (error < 0) {
@@ -835,7 +835,7 @@ static char *put_error(char *p, int error)
 }
 
 // lwIP's own predicate for an IPv4 literal, which also takes 127.1 and
-// 0x7f.0.0.1 (1.1).
+// 0x7f.0.0.1.
 static bool is_ipv4_literal(const char *text, int length)
 {
     char name[254];
@@ -860,7 +860,7 @@ static uint32_t earlier(uint32_t a, uint32_t b)
     return ((int32_t)(a - b) <= 0) ? a : b;
 }
 
-// The cancel predicate of the module calls (4.1): a C64 reset always, and a
+// The cancel predicate of the module calls: a C64 reset always, and a
 // deadline for the waits that have one. Cleanup calls pass no deadline.
 typedef struct {
     bool use_deadline;
@@ -928,7 +928,7 @@ void NetworkTarget :: tls_new_ca_tag(void)
     }
 }
 
-// A module restart ends every session it held, and its CA (4.5).
+// A module restart ends every session it held, and its CA.
 void NetworkTarget :: tls_check_generation(void)
 {
     if (!wifi_tls_module_available()) {
@@ -958,7 +958,7 @@ void NetworkTarget :: tls_check_generation(void)
 }
 
 // Sticky: the entry answers text on every READ and WRITE until CLOSE, and
-// plaintext not yet read is dropped (U8).
+// plaintext not yet read is dropped.
 void NetworkTarget :: tls_fail(TlsSocket *e, const char *text)
 {
     e->failed = true;
@@ -982,7 +982,7 @@ void NetworkTarget :: tls_fail_module(TlsSocket *e, bool cleanup)
 }
 
 // A session that FAILED after its handshake: 14 for a fatal alert from the
-// peer, 16 otherwise (section 2). The module has freed it.
+// peer, 16 otherwise. The module has freed it.
 void NetworkTarget :: tls_fail_step(TlsSocket *e, int esp_err, uint8_t alert_in)
 {
     char text[NET_TLS_STICKY_MAX];
@@ -1074,8 +1074,8 @@ bool NetworkTarget :: tls_wait(int sock, bool for_write, uint32_t until)
     return n > 0;
 }
 
-// Sends all of it, polling a non-blocking socket, before SEND_MS and deadline
-// (4.3). Returns 0, an errno (ETIMEDOUT at the deadline), or -1 on a reset.
+// Sends all of it, polling a non-blocking socket, before SEND_MS and deadline.
+// Returns 0, an errno (ETIMEDOUT at the deadline), or -1 on a reset.
 int NetworkTarget :: tls_send_all(int sock, const uint8_t *data, int length, uint32_t deadline)
 {
     uint32_t until = earlier(tick_after(TLS_SEND_MS), deadline);
@@ -1100,7 +1100,7 @@ int NetworkTarget :: tls_send_all(int sock, const uint8_t *data, int length, uin
     return 0;
 }
 
-// DNS inside OPEN_TLS (1.1): lwIP's callback resolver, polled. One slot, and a
+// DNS inside OPEN_TLS: lwIP's callback resolver, polled. One slot, and a
 // lookup is known by its sequence number, carried by value; a late answer to
 // an abandoned lookup finds another number and writes nothing.
 #define DNS_PENDING 0
@@ -1196,9 +1196,9 @@ int NetworkTarget :: tls_connect(int sock, uint32_t address, uint16_t port, uint
     return 0;
 }
 
-// What every TLS socket gets (4.3): non-blocking, TCP_NODELAY, and a send
+// What every TLS socket gets: non-blocking, TCP_NODELAY, and a send
 // timeout, which lwIP's close also takes as its bound when it runs out of
-// memory for the FIN (OI-3). OPEN_TLS sets them on its new socket; START_TLS
+// memory for the FIN. OPEN_TLS sets them on its new socket; START_TLS
 // only once steps 1-5 have passed, so that a kept code leaves the socket as
 // it was.
 static void tls_socket_options(int sock)
@@ -1212,7 +1212,7 @@ static void tls_socket_options(int sock)
     lwip_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
-// Steps 2 to 5 of the refusal order (1.1): the module, the table, the CA, and
+// Steps 2 to 5 of the refusal order: the module, the table, the CA, and
 // the OPEN RPC, which starts a session on the module under (slot, tag). keep
 // says whether START_TLS leaves the TCP socket as it was. NULL once the module
 // holds the session.
@@ -1288,7 +1288,7 @@ Message *NetworkTarget :: tls_prepare(TlsSocket *e, uint8_t trust, uint8_t flags
     return &c_status_tls_module;
 }
 
-// A handshake that FAILED, to its code (section 2, verify classification).
+// A handshake that FAILED, to its status code.
 Message *NetworkTarget :: tls_classify(TlsSocket *e, void *step)
 {
     wifi_tls_step_t *st = (wifi_tls_step_t *)step;
@@ -1401,9 +1401,9 @@ Message *NetworkTarget :: tls_handshake(TlsSocket *e, uint32_t total)
                 if ((error == ETIMEDOUT) && reached(deadline)) {
                     return &c_status_tls_hs_timeout;
                 }
-                // Section 2 gives 12 to READ/WRITE only; a send that fails
+                // Status 12 is for READ/WRITE only; a send that fails
                 // mid-handshake, by a reset or by SEND_MS (116), is a
-                // handshake failure (D3, ruled).
+                // handshake failure.
                 put_dec(put_text(text, "13,TLS HANDSHAKE FAILED: SEND ERROR: "), error);
                 return set_status(text);
             }
@@ -1425,7 +1425,7 @@ Message *NetworkTarget :: tls_handshake(TlsSocket *e, uint32_t total)
         more = (st.ct_out_len != 0) || (result == WIFI_TLS_AGAIN);
     }
 
-    // What the reply reports is the module's, never guessed here (1.7).
+    // What the reply reports is the module's, never guessed here.
     tls_cancel_context_t context = { true, deadline };
     wifi_tls_cancel_t cancel = { tls_cancelled, &context };
     wifi_tls_stats_t stats;
@@ -1473,7 +1473,7 @@ void NetworkTarget :: tls_abandon(TlsSocket *e)
 void NetworkTarget :: open_tls(Message *command, Message **reply, Message **status)
 {
     *reply = &c_message_empty;
-    // No reply means nothing opened (1.1): an OPEN whose handle nobody reads
+    // No reply means nothing opened: an OPEN whose handle nobody reads
     // could never be closed.
     if (command->message[0] & CMD_IF_NO_REPLY) {
         *status = &c_status_invalid_params;
@@ -1491,7 +1491,7 @@ void NetworkTarget :: open_tls(Message *command, Message **reply, Message **stat
     bool name_literal = (!refusal && name) ? is_ipv4_literal(name, name_len) : false;
     if (!refusal && (trust <= WIFI_TLS_TRUST_CUSTOM)) {
         if (name ? name_literal : host_literal) {
-            refusal = &c_status_invalid_params; // BUNDLE and CUSTOM check a name (U11)
+            refusal = &c_status_invalid_params; // BUNDLE and CUSTOM check a name
         }
     }
     if (!refusal) {
@@ -1532,7 +1532,7 @@ void NetworkTarget :: open_tls(Message *command, Message **reply, Message **stat
         *status = failure;
         return;
     }
-    // From here on, every refusal closes the session just opened (1.1).
+    // From here on, every refusal closes the session just opened.
     uint32_t address = 0;
     int result = tls_resolve(hostname, earlier(tick_after(TLS_DNS_MS), total), &address);
     if (result) {
@@ -1588,7 +1588,7 @@ void NetworkTarget :: start_tls(Message *command, Message **reply, Message **sta
         return;
     }
     // The handle first, before any other check: a TCP socket this target
-    // owns that is not TLS already (1.4). Every 81 here leaves it alone.
+    // owns that is not TLS already. Every 81 here leaves it alone.
     if (command->length < 3) {
         *status = &c_status_invalid_params;
         return;
@@ -1647,7 +1647,7 @@ void NetworkTarget :: start_tls(Message *command, Message **reply, Message **sta
         failure = tls_handshake(e, total);
     }
     if (failure) {
-        // Every other code ends the handle (1.4).
+        // Every other code ends the handle.
         *status = failure;
         untrack_socket(sock);
         lwip_close(sock);
@@ -1660,7 +1660,7 @@ void NetworkTarget :: start_tls(Message *command, Message **reply, Message **sta
     *status = &c_status_ok;
 }
 
-// $22 (1.2): the Nios owns the CA state; the module gets the certificate once
+// $22: the Nios owns the CA state; the module gets the certificate once
 // it is complete.
 void NetworkTarget :: trust_ca(Message *command, Message **reply, Message **status)
 {
@@ -1817,7 +1817,7 @@ void NetworkTarget :: tls_info(Message *command, Message **reply, Message **stat
             m[12] = (uint8_t)info_block_max_ms;
             m[13] = (uint8_t)(info_block_max_ms >> 8);
             // The CA store date: no reply carries it, so "a bundle, date
-            // unknown" (Amendment 3, errata v1.2 candidate).
+            // unknown".
             m[9] = 0xFF;
             m[10] = 0xFF;
             m[11] = 0xFF;
@@ -1893,8 +1893,8 @@ void NetworkTarget :: tls_end(TlsSocket *e, Message **reply, Message **status)
     *reply = &data_message;
     char text[NET_TLS_STICKY_MAX];
     // A WRITE that reported the latched 12 fixes the end to that 12, also
-    // when the drain had found close_notify before it (4.3, r7.5 L-2): the
-    // client was told to CLOSE, so the handle must still be its own (M10).
+    // when the drain had found close_notify before it: the
+    // client was told to CLOSE, so the handle must still be its own.
     if (e->write_saw_rx_err && (e->end != TLS_END_NONE)) {
         e->end = TLS_END_RX_ERR;
     }
@@ -1915,7 +1915,7 @@ void NetworkTarget :: tls_end(TlsSocket *e, Message **reply, Message **status)
     }
 }
 
-// READ on a TLS handle (1.6, 4.3): plaintext already received first; else
+// READ on a TLS handle: plaintext already received first; else
 // steps, within READ_BUDGET, until one hands out plaintext or the stream
 // ends.
 void NetworkTarget :: tls_read(TlsSocket *e, uint32_t length, Message **reply, Message **status)
@@ -1931,7 +1931,7 @@ void NetworkTarget :: tls_read(TlsSocket *e, uint32_t length, Message **reply, M
         int steps = 0;
         while (!reset_now()) {
             // Eager: top up the ciphertext before each step, unless the
-            // stream has ended or a receive error is latched (4.3).
+            // stream has ended or a receive error is latched.
             if (!e->rx_err && !e->rx_fin && (e->held_len < NET_TLS_CT_MAX)) {
                 int n = lwip_recv(e->socketnr, e->held + e->held_len, NET_TLS_CT_MAX - e->held_len, MSG_DONTWAIT);
                 if (n > 0) {
@@ -2065,7 +2065,7 @@ static void write_header(Message *m, Message **reply, uint16_t value)
     *reply = m;
 }
 
-// WRITE on a TLS handle (1.6): all of it, or a sticky failure. The steps take
+// WRITE on a TLS handle: all of it, or a sticky failure. The steps take
 // no ciphertext in and hand no plaintext out (NO_READ).
 void NetworkTarget :: tls_write(TlsSocket *e, const uint8_t *data, int length, Message **reply, Message **status)
 {
@@ -2076,7 +2076,7 @@ void NetworkTarget :: tls_write(TlsSocket *e, const uint8_t *data, int length, M
         return;
     }
     if (e->rx_err) {
-        // Nothing is sent; the READs go on draining, and end in this 12 (4.3).
+        // Nothing is sent; the READs go on draining, and end in this 12.
         e->write_saw_rx_err = true;
         write_header(&data_message, reply, 0xFFFF);
         put_dec(put_text(text, "12,RECEIVE ERROR: "), e->rx_err);
