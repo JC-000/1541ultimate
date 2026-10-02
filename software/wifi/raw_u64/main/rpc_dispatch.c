@@ -269,7 +269,7 @@ void cmd_get_random(command_buf_t *buf)
     my_uart_transmit_packet(UART_CHAN, buf);
 }
 
-// TLS (M3-SPEC v1 section 5.2). Same rules as GET_RANDOM: the layout is part of the wire, the header is echoed,
+// TLS. Same rules as GET_RANDOM: the layout is part of the wire, the header is echoed,
 // and the fixed part of every reply is zeroed before it is filled. The Ultimate asserts the same offsets.
 _Static_assert(sizeof(rpc_tls_open_req) == 52, "rpc_tls_open_req size");
 _Static_assert(offsetof(rpc_tls_open_req, trust) == 4, "rpc_tls_open_req.trust");

@@ -1,7 +1,7 @@
 /*
  * tls_engine.h
  *
- * TLS client sessions whose ciphertext is carried by the Ultimate (M3-SPEC v1 section 5). The ESP32
+ * TLS client sessions whose ciphertext is carried by the Ultimate. The ESP32
  * never touches a socket; every call is lock-step, and all of them run on the TLS task only.
  */
 

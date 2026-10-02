@@ -1,7 +1,7 @@
 /*
  * tls_engine.c
  *
- * TLS sessions on the UCI network target (M3-SPEC v1 section 5): the ESP32 runs mbedTLS as a TLS 1.3
+ * TLS sessions on the UCI network target: the ESP32 runs mbedTLS as a TLS 1.3
  * client with a hardened TLS 1.2 fallback, and the Ultimate pumps the ciphertext between its own TCP
  * socket and CMD_TLS_STEP. The bio callbacks never block: recv takes from a per-session input buffer
  * and send appends to a per-session output buffer. Everything here runs on the TLS task only.
@@ -10,7 +10,7 @@
 // The engine reads a few fields of mbedtls_ssl_context (public ssl.h, marked private) that have no getter:
 // the handshake state and version, and the handshake message just processed (tls_note_handshake()). It
 // includes nothing from mbedTLS's library/ (ssl_misc.h): a build that links a fork with another
-// mbedtls_ssl_handshake_params layout (esp-pqc) would otherwise read the wrong bytes (pqcadv6).
+// mbedtls_ssl_handshake_params layout would otherwise read the wrong bytes.
 #define MBEDTLS_ALLOW_PRIVATE_ACCESS
 #include <string.h>
 #include <stdlib.h>
@@ -105,7 +105,7 @@ static mbedtls_x509_crt tls_empty_ca;
 static int psa_ready;
 static int clock_set_by_nios;
 
-// 1.7: the six hardened TLS 1.2 suites and the three TLS 1.3 ones, in mbedTLS's own order of preference
+// The six hardened TLS 1.2 suites and the three TLS 1.3 ones, in mbedTLS's own order of preference
 static const int tls_ciphersuites[] = {
     MBEDTLS_TLS1_3_CHACHA20_POLY1305_SHA256,
     MBEDTLS_TLS1_3_AES_256_GCM_SHA384,
@@ -119,7 +119,7 @@ static const int tls_ciphersuites[] = {
     0
 };
 
-// Key-exchange groups for both versions (Amendment 4): mbedTLS 4's default list adds x448 and FFDHE
+// Key-exchange groups for both versions: mbedTLS 4's default list adds x448 and FFDHE
 // 2048-8192 (an 8192-bit modexp on the ESP32). mbedTLS keeps the pointer, so static.
 static const uint16_t tls_groups[] = {
     MBEDTLS_SSL_IANA_TLS_GROUP_X25519, MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
@@ -158,7 +158,7 @@ static int tls_bio_recv(void *ctx, unsigned char *buf, size_t len)
 }
 
 // The verify callback of every session, installed on the ssl context (mbedtls_ssl_set_verify), which takes
-// precedence over the config's, so esp_crt_bundle_attach() cannot replace it (section 2). It never returns
+// precedence over the config's, so esp_crt_bundle_attach() cannot replace it. It never returns
 // non-zero, so the final verify result stays decodable; a rejection still fails the handshake because it
 // leaves flags set.
 static int tls_verify(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags)
@@ -183,7 +183,7 @@ static int tls_verify(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *fla
         break;
 #endif
     case TLS_TRUST_PIN:
-        // The key is the identity: chain, dates and name are not checked (U3). The mode comes from trust alone.
+        // The key is the identity: chain, dates and name are not checked. The mode comes from trust alone.
         *flags = 0;
         if ((depth == 0) && (!hashed || memcmp(s->stats.spki_sha256, s->pin, TLS_PIN_LEN) != 0)) {
             s->pin_mismatch = 1;
@@ -316,7 +316,7 @@ static int tls_setup(tls_session_t **out, uint16_t tag, const tls_open_params_t 
     int ret = mbedtls_ssl_config_defaults(&s->conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
                                           MBEDTLS_SSL_PRESET_DEFAULT);
     if (ret == 0) {
-        // 1.7: TLS 1.3, and the hardened TLS 1.2 unless the program requires 1.3
+        // TLS 1.3, and the hardened TLS 1.2 unless the program requires 1.3
         mbedtls_ssl_conf_min_tls_version(&s->conf, (p->opts & TLS_OPT_REQUIRE_TLS13) ? MBEDTLS_SSL_VERSION_TLS1_3
                                                                                      : MBEDTLS_SSL_VERSION_TLS1_2);
         mbedtls_ssl_conf_max_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
@@ -329,7 +329,7 @@ static int tls_setup(tls_session_t **out, uint16_t tag, const tls_open_params_t 
         mbedtls_ssl_conf_session_tickets(&s->conf, MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
         mbedtls_ssl_conf_authmode(&s->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
         // One config per session: a CUSTOM or PIN config never has the bundle attached, since a config with the
-        // bundle's CA callback makes mbedTLS ignore conf->ca_chain (section 2)
+        // bundle's CA callback makes mbedTLS ignore conf->ca_chain
         if (p->trust == TLS_TRUST_CUSTOM) {
             s->ca = custom_ca;
             s->ca->refs++;
@@ -402,7 +402,7 @@ int tls_open(uint8_t slot, uint16_t tag, const tls_open_params_t *p, uint8_t *re
     // the radio, but with MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG: PSA keeps no seeded state and draws every
     // byte from esp_fill_random() when it is needed. A session draws only after this entropy gate,
     // but the gate is checked here at OPEN only, and the handshake steps draw later: this relies on
-    // the bridge never stopping the radio once started (M2-SPEC section 8).
+    // the bridge never stopping the radio once started.
     if (!tls_psa_ready()) {
         return ESP_FAIL;
     }
@@ -516,7 +516,7 @@ static int tls_note_handshake(tls_session_t *s, int state_before, int version_be
     return 0;
 }
 
-// Classifies a failed handshake step (section 2 and 1.7). The Ultimate infers nothing from bare mbedTLS codes.
+// Classifies a failed handshake step for the Ultimate's failure reasons. The Ultimate infers nothing from bare mbedTLS codes.
 static void tls_classify(tls_session_t *s, int ret, int state_before, int version_before, tls_step_result_t *r)
 {
     if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
@@ -530,7 +530,7 @@ static void tls_classify(tls_session_t *s, int ret, int state_before, int versio
         // This one step is the whole TLS 1.3 ServerHello processing (ssl_tls13_client.c:1995-2060): pre-processing,
         // which refuses a ServerHello without supported_versions when 1.2 was not offered or when its random carries
         // the downgrade sentinel (:1458), and the parse, which raises ILLEGAL_PARAMETER for a suite not offered,
-        // compression != 0, a session-id echo mismatch, a bad HRR key_share and more (errata12adv H-1). So the
+        // compression != 0, a session-id echo mismatch, a bad HRR key_share and more. So the
         // ServerHello mbedTLS reassembled is looked at: only one without supported_versions chose TLS 1.2 or lower
         // (the version refused under REQUIRE_TLS13), and of those only one whose random ends in the RFC 8446 4.1.3
         // sentinel is a downgrade. Everything else, a ServerHello not found included, is fail_reason 0.
@@ -581,7 +581,7 @@ static int tls_handshake(tls_session_t *s, tls_step_result_t *r)
         }
     }
     if (s->stats.group == 0) {
-        // The group is never 0 once ESTABLISHED (5.2): if it was not found, the reads above no longer match this
+        // The group is never 0 once ESTABLISHED: if it was not found, the reads above no longer match this
         // mbedTLS, and nothing they check (EMS) can be trusted either. Fail closed.
         ESP_LOGE(TAG, "Negotiated group not found in the server's messages: session refused");
         mbedtls_ssl_send_alert_message(&s->ssl, MBEDTLS_SSL_ALERT_LEVEL_FATAL, MBEDTLS_SSL_ALERT_MSG_INTERNAL_ERROR);
@@ -782,7 +782,7 @@ void tls_close_all(void)
     custom_ca = NULL;
 }
 
-// 3.3: the upload-time refusals, in their order of precedence
+// SET_CA: the upload-time refusals, in their order of precedence
 static uint8_t tls_ca_reject(const mbedtls_x509_crt *crt)
 {
     psa_key_type_t type = mbedtls_pk_get_key_type(&crt->pk);
