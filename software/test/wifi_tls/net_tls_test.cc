@@ -1507,7 +1507,7 @@ static void test_empty_read_reply(void)
 
 
 // --- edge cases: latch, STATS cache, drain, WRITE budget, send failures -------------------------
-static void test_adversarial(void)
+static void test_edge_cases(void)
 {
     printf("Edge cases: latch, STATS cache, drain, WRITE budget, send failures\n");
     const std::string rst = "12,RECEIVE ERROR: " + num(ECONNRESET);
@@ -1627,7 +1627,7 @@ static void test_adversarial(void)
 
 // Send failures late in the handshake, NO_MODULE from STATS, and a module failure in the drain
 // after a WRITE's 12.
-static void test_adv2(void)
+static void test_late_send_failures(void)
 {
     printf("Late handshake send failures, STATS NO_MODULE, a drain failure after a WRITE\n");
     Res r;
@@ -1722,8 +1722,8 @@ int main(int argc, char **argv)
     test_cleanup();
     test_status_lengths();
     test_empty_read_reply();
-    test_adversarial();
-    test_adv2();
+    test_edge_cases();
+    test_late_send_failures();
     check(longest_status.size() <= 40, "status cap: the longest status of the whole run is %d bytes: '%s'",
           (int)longest_status.size(), longest_status.c_str());
     printf("\n%d checks, %d failures\n", checks, failures);
