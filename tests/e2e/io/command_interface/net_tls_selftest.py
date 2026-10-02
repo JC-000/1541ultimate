@@ -3,38 +3,18 @@
 
 """Check net_tls_test.py without a device: it must go GREEN, RED, and red for the right reason.
 
-Three parts, none of which touches any Ultimate:
+Seven parts, none of which touches any Ultimate:
 
-1. The client deadlines on the REST route. `RestLink` drives the real `uci.Uci`
-   against fake registers ($DF1B-$DF1F in Python) that stay busy as long as a
-   test says. A reply inside its bound is collected; a reply past it is
-   ABORTed and the link waits for bit 2; a bit 2 that never clears is a
-   LinkLost at the deadline, never a hang.
-2. The suite's own scenarios against net_tls_mock.MockDevice, with the real
-   local fixture (servers on 127.0.0.1) and two stand-in "internet" hosts
-   under a second throwaway root, which is the mock's bundle and the CA this
-   machine verifies them with:
-     m3     every scenario GREEN, except S22, whose second half needs the
-            negotiated group that Python's ssl does not expose (a mock limit)
-     stock  every TLS scenario RED with `21,UNKNOWN COMMAND` to its first TLS
-            command, and every control PASS, so --expect red is met
-3. Mutants of the mock, each breaking one rule: the scenario that claims to
-   guard that rule must go red (signature FAIL, not RED).
-4. The whole suite, main() and all, over real HTTP: tests/lib/device_double.py
-   serves REST on loopback, with $DF1B-$DF1F backed by a register model whose
-   commands run on the mock. That exercises the settings it sets and reads
-   back, the lock check, the reset, the ready wait, RestLink's register
-   protocol (multi-block replies, an ABORT in PROCESSING) and the result files,
-   for Tier 1 without S30 (whose hosts are real). --expect green on the m3
-   flavour and --expect red on stock must both exit 0, and swapped, both 1.
-6. Setup and bounds: a WiFi refusal changes no setting; a scenario selected
-   but run on no route fails the run; a READ answering 00,OK with no data is
-   bounded; and --require-lock refuses outside the caller's device lock.
-5. Verdict and setup cases, through main() the same way: a run whose evidence
-   is missing must FAIL, never pass on SKIPs (no fixture; S32 on REST; only a
-   measurement on stock); a native route that cannot start keeps the REST
-   route's records; WiFi is never switched on without --set-wifi; and a read
-   budget measures idle time, not total time.
+1. The client deadlines on the REST route, against fake registers: a late
+   reply is ABORTed, and a bit 2 that never clears is a LinkLost, never a hang.
+2. The scenarios against net_tls_mock.MockDevice and the real local fixture:
+   the m3 flavour GREEN (except S22, a mock limit), stock RED.
+3. Mutants of the mock: the scenario guarding each broken rule must go red.
+4. main() over real HTTP (tests/lib/device_double.py) for Tier 1 without S30:
+   --expect green on m3 and red on stock exit 0, and swapped, 1.
+5. No verdict without evidence, and setup failures are errors.
+6. Setup refusals change no setting; READs and routes are bounded.
+7. The fixture outlasts a slow reader (S13 over REST).
 
 Usage: net_tls_selftest.py [--quick]   (--quick skips the m3 flavour's 15 s
 handshake-timeout scenario and the 16 KB record)

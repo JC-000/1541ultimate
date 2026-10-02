@@ -84,10 +84,9 @@ class NativeUci:
         self.machine = machine
         self.runners = runners
         self.busy_timeout = busy_timeout
-        # How many wraps of its 16-bit counter the agent may wait for a reply,
-        # about 1.7 s each at 1 MHz (25 cycles a pass, by count). Zero keeps the
-        # agent's default of 8 wraps, about 14 s; a caller with a longer command
-        # raises it together with busy_timeout.
+        # Wraps of the agent's 16-bit wait counter (about 1.7 s each at 1 MHz).
+        # Zero keeps the agent's default of 8, about 14 s; a caller with a
+        # longer command raises it together with busy_timeout.
         self.wait_wraps = 0
         self._sequence = 0
 

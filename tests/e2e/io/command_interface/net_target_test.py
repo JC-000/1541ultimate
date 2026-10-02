@@ -99,10 +99,8 @@ STATUS_OUT_OF_RANGE = b"82,PARAMETER(S) OUT OF RANGE"
 # answered with no data, whatever the reason.
 STATUS_NO_ENTROPY = b"87,NO ENTROPY SOURCE"
 STATUS_NO_ENTROPY_PREFIX = b"87,"
-# GET_RANDOM's answer when the ESP32 is running but did not answer in time,
-# because it was still busy with another command or another caller's. It asks
-# the client to try again later, and like 87 it is only ever answered with no
-# data.
+# GET_RANDOM's answer when the ESP32 runs but was busy with another command
+# and did not answer in time: try again later. Like 87, never with data.
 STATUS_ENTROPY_BUSY = b"88,ENTROPY SOURCE BUSY"
 STATUS_ENTROPY_BUSY_PREFIX = b"88,"
 # What the network target answers for an opcode it does not implement, which
@@ -177,17 +175,13 @@ PROBE_ATTEMPTS = 3
 SOCKETS_LEFT_OPEN_AT_RESET = 4
 RESET_CYCLES = 3
 
-# The products whose firmware draws GET_RANDOM bytes on the ESP32, as /v1/info
-# reports them: the two U64 == 1 names of software/system/product.cc. Matched
-# exactly, because "Ultimate 64-II" starts with "Ultimate 64". Everywhere else,
-# the Elite II, the C64 Ultimate and the Ultimate II+L included, the firmware
-# answers 87 even where it reports a wifi_mac, since its ESP32 runs other code.
+# The /v1/info products whose ESP32 draws GET_RANDOM bytes (U64 == 1 in
+# software/system/product.cc), matched exactly ("Ultimate 64-II" shares the
+# prefix). Every other product answers 87, even one reporting a wifi_mac.
 U64_MK1_PRODUCTS = ("Ultimate 64", "Ultimate 64 Elite")
-# The setting that starts the Wi-Fi module on those products. Requested by the
-# store's exact name, lower-case "settings" included: the firmware matches the
-# path without regard to case but keys its answer by the name as registered.
-# It is read, never written, because turning Wi-Fi off or on bounces a link
-# the other suites may be using.
+# The setting that starts the Wi-Fi module there, by its exact registered name
+# (the answer is keyed by it). Read, never written: toggling Wi-Fi bounces a
+# link other suites may be using.
 CFG_WIFI_CATEGORY = "WiFi settings"
 CFG_WIFI_ENABLED = "WiFi Enabled"
 
@@ -206,20 +200,16 @@ RANDOM_REPEAT_PERIOD_MAX = RANDOM_MAX_BYTES // 2
 # counts as the socket read buffer handed back. A chance match of eight bytes
 # is 1 in 2^56 per position.
 STALE_RUN_BYTES = 8
-# The run length at which bytes handed out again are caught. Every window of
-# this many bytes, at every offset of every GET_RANDOM reply in a route, has
-# to be new. A route holds about 4,000 windows, so honest random bytes repeat
-# one by chance with a probability of about 4,000^2 / 2 / 2^64, 1 in 10^12.
+# Every window of this many bytes, at every offset of every GET_RANDOM reply in
+# a route, must be new. With about 4,000 windows per route, honest bytes repeat
+# one with a probability of about 1 in 10^12.
 RANDOM_WINDOW_BYTES = 8
 # Lengths that are not a multiple of 4 or of 16, so a handler that fills whole
 # words or blocks leaves a tail it did not draw in every one of them.
 RANDOM_ODD_LENGTHS = (3, 17, 31, 257, 511)
-# Two replies share a byte at the same offset with a probability of 1/256, so
-# the count over a pair of length m is Binomial(m, 1/256). A pair fails at the
-# smallest count whose chance is below this, and never above
-# RANDOM_PAIR_MATCHES_MAX. Where not even all m equal gets there, as for
-# m = 1 or 3, the pair is not judged. The cap is what 512-byte pairs meet, at
-# 4 in 10^10 each, and a route's 450 or so pairs stay below 1 in 10^8.
+# Same-offset matches between two replies of length m are Binomial(m, 1/256);
+# a pair fails at the smallest count less likely than this (at most the MAX
+# below), and is not judged when even m matches are not (m = 1 or 3).
 RANDOM_PAIR_FALSE_ALARM = 1e-12
 RANDOM_PAIR_MATCHES_MAX = 16
 # A run of replies of one length, so a byte a handler never draws stays the
@@ -227,11 +217,9 @@ RANDOM_PAIR_MATCHES_MAX = 16
 # with a probability of 256^-15 per offset.
 RANDOM_SERIES_LENGTH = 17
 RANDOM_SERIES_COUNT = 16
-# How often, and how far apart, a GET_RANDOM that answered 88 is asked again.
-# The ESP32 answers commands one at a time, and one that queues a Wi-Fi scan
-# or connect waits up to 1000 ticks, 10 s at 100 Hz, when that queue is full.
-# Fifteen seconds in all covers that with room; a source still busy after it
-# fails where bytes are owed.
+# Retries of a GET_RANDOM that answered 88. A queued Wi-Fi scan or connect can
+# hold the ESP32 up to 10 s (1000 ticks at 100 Hz); 15 s covers that, and a
+# source still busy after it fails where bytes are owed.
 RANDOM_BUSY_RETRIES = 15
 RANDOM_BUSY_DELAY_SECONDS = 1.0
 # How many GET_RANDOM calls in one route may need a retry where bytes are

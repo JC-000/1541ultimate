@@ -49,12 +49,9 @@ except ImportError:  # pragma: no cover - reported as a SKIP by the suite
 FIXTURE_NAME = "m3-fixture.test"
 WRONG_NAME = "wrong-host.test"
 ACCEPT_TIMEOUT = 60.0
-# How long a connection may sit idle before the server gives up on it. It has to
-# outlast the slowest route: over REST every byte is one REST call, and a device
-# run measured about 250 s for the device to read S13's 16 KB record before it
-# wrote (at 60 s the server closed and the WRITE met a reset).
-# 600 s covers that with room and still bounds every wait; TlsServer.close() ends
-# whatever is still open, so a finished scenario does not leave threads waiting.
+# Idle limit per connection: it must outlast the slowest route (over REST a device
+# took about 250 s to read S13's 16 KB record), yet still bound every wait;
+# TlsServer.close() ends whatever is still open.
 CONN_TIMEOUT = 600.0
 
 
@@ -221,10 +218,9 @@ class Behaviour:
     rcvbuf: int | None = None
     # Sent once, as one write, right after the handshake.
     send: bytes = b""
-    # After `send`: "echo" (keep echoing until the client ends), "close_notify",
-    # "fin" (no close_notify), "hold" (read and discard until the client ends),
-    # "http" (answer one request with a 200, then close_notify), or "stall"
-    # (never read again, so the client's writes fill TCP; S32).
+    # After `send`: "echo" (until the client ends), "close_notify", "fin" (no
+    # close_notify), "hold" (read and discard), "http" (one 200, then
+    # close_notify), or "stall" (never read again, so writes fill TCP; S32).
     then: str = "echo"
 
 

@@ -20,30 +20,14 @@ Tier 1 is the RED signature and the smoke test to run first:
   S19e an ABORTed OPEN, then $25 (client deadlines; REST route only)
   S30  BUNDLE to real hosts (internet_hosts.json) with an HTTP GET
 Tier 2 is the rest of the test plan that this machine can drive (see --list).
+Oracles come from the server side (net_tls_fixture.py logs), never from the device's claim.
 
-Each scenario's oracle comes from the server's side where there is one: the
-fixture (net_tls_fixture.py) logs version, suite, SNI, the sha256 of what it
-received and how the client ended the connection. The device's claim is never
-the evidence for itself.
-
-Before anything runs, the suite SETS what it depends on and records it read
-back: Command Interface Enabled, WiFi Enabled (entropy; a one-way setting on
-the U64, so it is set and recorded but never written back), SNTP Enable (the
-trusted clock BUNDLE and CUSTOM need), and Turbo Control Off (the 6502 agent's
-waits are counted at 1 MHz). Then it resets the C64 and runs the startup
-procedure on the route ($0C, then CLOSE 0..15), so leftovers from an earlier
-program or run cannot pass for this firmware's behaviour.
-
-Every command carries a client deadline: 45 s from the PUSH for an open,
-12 s for the other TLS commands; then ABORT, wait for $DF1C bit 2 up to the
-later of PUSH + bound and ABORT + 12 s, and reset the C64 if it is still set.
-Nothing here can wait forever.
-
-The results land in --results (default .net_tls_results/<UTC>-<expect>/
-beside this file, git-ignored): run.json (device, settings read back, every
-scenario with its tier, verdict and RED/GREEN signature), wire.jsonl (every
-command and its answer). --expect red makes a stock run exit 0 exactly when
-every TLS scenario showed the RED signature and every control passed.
+The suite first SETS and reads back Command Interface, WiFi Enabled (one-way on the U64:
+never written back), SNTP Enable and Turbo Control Off, resets the C64 and sweeps the route.
+Every command has a client deadline (45 s for an open, 12 s otherwise), then ABORT and,
+if $DF1C bit 2 stays set, a C64 reset: nothing waits forever.
+Results: --results (default .net_tls_results/<UTC>-<expect>/): run.json and wire.jsonl.
+--expect red exits 0 exactly when every TLS scenario is RED and every control passed.
 """
 
 import argparse
