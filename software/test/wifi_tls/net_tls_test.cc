@@ -1,6 +1,6 @@
 /* Host tests for the TLS commands ($21-$25, and READ/WRITE/CLOSE on a TLS handle) of the real
  * network_target.cc in the world of net_world.cc. Run: make -C target/pc/linux/wifitls test
- * A test group is RED on a846369f (before the TLS commands), where they answer 21,UNKNOWN COMMAND. */
+ * A test group is RED on the network target before the TLS commands, where they answer 21,UNKNOWN COMMAND. */
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>

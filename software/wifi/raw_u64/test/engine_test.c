@@ -1258,7 +1258,7 @@ static void c_alert_out_13(void) { alert_out_case("ver=13"); }
 
 /* KNOWN ISSUE Mbed-TLS/mbedtls#9543: stock mbedTLS 4.1.1 refuses a cookie in a TLS 1.3 HelloRetryRequest (RFC 8446
    4.2.2), as OpenJDK's JSSE always sends. Asserted on purpose: this goes RED once stock mbedTLS accepts it; then restore
-   the acceptance test from commit 8056e128 and drop KNOWN ISSUE from the name. */
+   the acceptance test that accepted the cookie (removed with the cookie patch) and drop KNOWN ISSUE from the name. */
 static void c_known_issue_hrr_cookie(void)
 {
     uint8_t pin[32] = { 3 };

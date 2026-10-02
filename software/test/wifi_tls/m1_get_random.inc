@@ -1,4 +1,4 @@
-// VERBATIM from software/io/wifi/wifi.cc at 764a75ac, lines 482-591:
+// VERBATIM from an earlier software/io/wifi/wifi.cc, lines 482-591:
 // GET_RANDOM before it moved into wifi_dedicated.cc. Do not edit; it is
 // the oracle that the new code must match call for call (wifi_dedicated_test.cc).
 // Checks a queued reply against the request, hands over its bytes if it is the

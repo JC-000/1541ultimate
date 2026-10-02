@@ -6,7 +6,7 @@ the protocol spec's offsets, never from `rpc_calls.h`, so a layout slip on the E
 The server is `tls_server.c` (mbedTLS 3.6.0, default configuration), which can also answer a ClientHello by hand
 (version refusals, the downgrade sentinel) and log what the client offered.
 
-    ./build.sh head          # this tree; also base (the previous engine at a846369f) and mut-NAME
+    ./build.sh head          # this tree; also base (the previous engine at BASE_REF) and mut-NAME
     ./run.sh head [CASE...]  # each case runs in its own process; server logs in build/head/logs
     ./mutrun.sh              # every mutant in mutants/ must be killed by at least one case
 
@@ -20,8 +20,9 @@ trusted nowhere else.
 `build.sh [VARIANT...]` (default `head`):
 
     head           this tree
-    base           the previous engine at a846369f (built with -DBASE_ENGINE, where the TLS task and
-                   CLOSE_ALL/SET_CA do not exist), for RED runs
+    base           the previous engine at commit BASE_REF (built with -DBASE_ENGINE, where the TLS task and
+                   CLOSE_ALL/SET_CA do not exist), for RED runs. That engine is not in this repository's
+                   history, so the base variant runs only where it is; elsewhere the mutants are the RED evidence
     mut-NAME       this tree with mutants/NAME.patch applied
     at-SHA[+NAME]  the engine at commit SHA, optionally with mutant NAME applied
 

@@ -35,7 +35,8 @@ HOSTOFF="CONFIG_MBEDTLS_HARDWARE_AES CONFIG_MBEDTLS_HARDWARE_SHA CONFIG_MBEDTLS_
 for v in ${@:-head}; do
   O=$BD/$v; rm -rf $O; mkdir -p $O/src
   case $v in
-    base) git -C $REPO archive a846369f software/wifi/raw_u64/main software/wifi/raw_u64/sdkconfig | tar -x -C $O/src
+    base) [ -n "$BASE_REF" ] || { echo "build.sh: base needs BASE_REF, a commit with the previous engine (README.md)" >&2; exit 2; }
+          git -C $REPO archive $BASE_REF software/wifi/raw_u64/main software/wifi/raw_u64/sdkconfig | tar -x -C $O/src
           M=$O/src/software/wifi/raw_u64/main; SDK=$O/src/software/wifi/raw_u64/sdkconfig; EXTRA=(-DBASE_ENGINE); CA=($BD/testca.s);;
     head) M=$RAW/main; SDK=$RAW/sdkconfig; EXTRA=(); CA=();;
     at-*) sha=${${v#at-}%%+*}; git -C $REPO archive $sha software/wifi/raw_u64/main | tar -x -C $O/src   # at-SHA[+MUTANT]
