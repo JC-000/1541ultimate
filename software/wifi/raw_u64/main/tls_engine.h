@@ -1,9 +1,5 @@
-/*
- * tls_engine.h
- *
- * TLS client sessions whose ciphertext is carried by the Ultimate. The ESP32
- * never touches a socket; every call is lock-step, and all of them run on the TLS task only.
- */
+/* tls_engine.h: TLS client sessions whose ciphertext the Ultimate carries; the ESP32 never touches a socket.
+ * Every call is lock-step, and all of them run on the TLS task only. */
 
 #ifndef TLS_ENGINE_H_
 #define TLS_ENGINE_H_
@@ -48,20 +44,17 @@ typedef struct {
     uint32_t verify_flags;
 } tls_step_result_t;
 
-// All functions return ESP_OK, an esp_err_t, or a negative mbedTLS code.
-// A session is named by (slot, tag). A call whose (slot, tag) is not the live session in that slot returns
-// ESP_ERR_NOT_FOUND and touches nothing. A session ends (and is freed) on FAILED, on CLOSED, on tls_close(),
-// on tls_close_all(), and when an OPEN names its slot again.
+// All return ESP_OK, an esp_err_t, or a negative mbedTLS code. A (slot, tag) that is not the live session in that slot
+// gets ESP_ERR_NOT_FOUND and touches nothing. A session is freed on FAILED, on CLOSED, by tls_close() and
+// tls_close_all(), and when an OPEN names its slot again.
 
 // unix_time sets the ESP32 clock (time_source TLS_TIME_NIOS, and no SNTP time of its own). BUNDLE and CUSTOM need a
 // trustworthy clock: without one OPEN fails with ESP_ERR_INVALID_STATE, reason NO_TIME.
 int tls_open(uint8_t slot, uint16_t tag, const tls_open_params_t *params, uint8_t *reason);
 
-// Consumes all of ct_in (and pt_in, only when ESTABLISHED) or none of it, then writes ct_out followed by
-// pt_out to out, together at most TLS_STEP_OUT_MAX. With TLS_STEP_NO_READ no plaintext comes out.
-// ESP_ERR_NO_MEM: a buffer is full, nothing was consumed, but output is returned; send the same input again.
-// ESP_ERR_INVALID_ARG/INVALID_STATE/NOT_FOUND: nothing consumed, nothing returned. A negative code comes with
-// state FAILED. out may overlap ct_in and pt_in: they are consumed (or refused) before out is written.
+// Consumes all of ct_in (pt_in only when ESTABLISHED) or none, then writes ct_out and pt_out (no pt with NO_READ) to out,
+// at most TLS_STEP_OUT_MAX; out may overlap the inputs. ESP_ERR_NO_MEM: buffer full, nothing consumed, output returned,
+// resend. INVALID_ARG/INVALID_STATE/NOT_FOUND: nothing consumed or returned. A negative code comes with state FAILED.
 int tls_step(uint8_t slot, uint16_t tag, uint8_t flags, const uint8_t *ct_in, int ct_in_len, const uint8_t *pt_in,
              int pt_in_len, uint8_t *out, uint16_t *ct_out_len, uint16_t *pt_out_len, tls_step_result_t *result);
 

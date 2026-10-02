@@ -1,10 +1,6 @@
-/*
- * tls_engine_stub.c
- *
- * Stands in for tls_engine.c in a size-measurement build (idf.py -D BRIDGE_TLS_STUB=1): the RPC
- * commands stay, and every TLS call answers ESP_ERR_NOT_SUPPORTED, so mbedTLS's TLS and X.509 code
- * is not linked. Never flashed to a device.
- */
+/* tls_engine_stub.c: stands in for tls_engine.c in a size-measurement build (idf.py -D BRIDGE_TLS_STUB=1). The RPC
+ * commands stay and every TLS call answers ESP_ERR_NOT_SUPPORTED, so mbedTLS's TLS and X.509 code is not linked.
+ * Never flashed to a device. */
 
 #include <string.h>
 #include "esp_err.h"

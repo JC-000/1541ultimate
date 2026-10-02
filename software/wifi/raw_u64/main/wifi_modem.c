@@ -69,11 +69,9 @@ void wifi_note_user_disconnect(void)
     user_disconnected = true;
 }
 
-/* What the hardware RNG is fed by. esp_fill_random() only returns true random
- * numbers while the radio runs (see esp_random.h), so this stays ENTROPY_NONE
- * until esp_wifi_start() has succeeded, and random bytes are refused until then.
- *
- * Set once, by wifi_init(), and read by the dispatcher task, so volatile. */
+/* What feeds the hardware RNG: esp_fill_random() is only truly random while the radio runs (esp_random.h), so this
+ * stays ENTROPY_NONE, and random bytes are refused, until esp_wifi_start() has succeeded. Set once by wifi_init()
+ * and read by the dispatcher task, so volatile. */
 static volatile entropy_source_t entropy = ENTROPY_NONE;
 
 entropy_source_t entropy_source(void)

@@ -5,11 +5,9 @@ cmake_minimum_required(VERSION 3.16)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(bridge)
 
-# The certificate bundle is the vendored Mozilla root store, ../ca_store/cacert.pem (sdkconfig: DEFAULT_NONE plus
-# CUSTOM_CERTIFICATE_BUNDLE_PATH). ca_store.py checks it against ../ca_store/CA_PINS, and the configuration this build
-# really uses (its sdkconfig.json) against the store's rules: at every configure (an edit to the store, its pins or
-# the checker configures again), and again at every build, before the bundle is made, so a tree configured earlier
-# cannot skip it. RELEASE=1 in the environment also fails a stale store. How the store is refreshed: README.md.
+# The certificate bundle is the vendored Mozilla root store, ../ca_store/cacert.pem. ca_store.py checks it against
+# CA_PINS and the configuration this build really uses (sdkconfig.json) at every configure and again at every build,
+# before the bundle is made, so an earlier configure cannot skip it. RELEASE=1 also fails a stale store. See README.md.
 set(CA_STORE ${CMAKE_CURRENT_LIST_DIR}/../ca_store)
 set(CA_STORE_CHECK ${CMAKE_CURRENT_LIST_DIR}/../../../tools/ca_store/ca_store.py)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CA_STORE}/cacert.pem ${CA_STORE}/CA_PINS ${CA_STORE_CHECK})

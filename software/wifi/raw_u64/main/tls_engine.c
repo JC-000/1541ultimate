@@ -1,16 +1,10 @@
-/*
- * tls_engine.c
- *
- * TLS sessions on the UCI network target: the ESP32 runs mbedTLS as a TLS 1.3
- * client with a hardened TLS 1.2 fallback, and the Ultimate pumps the ciphertext between its own TCP
- * socket and CMD_TLS_STEP. The bio callbacks never block: recv takes from a per-session input buffer
- * and send appends to a per-session output buffer. Everything here runs on the TLS task only.
- */
+/* tls_engine.c: TLS sessions on the UCI network target. mbedTLS runs a TLS 1.3 client with a hardened TLS 1.2 fallback;
+ * the Ultimate pumps the ciphertext between its TCP socket and CMD_TLS_STEP. The bio callbacks never block (per-session
+ * input and output buffers). Everything here runs on the TLS task only. */
 
-// The engine reads a few fields of mbedtls_ssl_context (public ssl.h, marked private) that have no getter:
-// the handshake state and version, and the handshake message just processed (tls_note_handshake()). It
-// includes nothing from mbedTLS's library/ (ssl_misc.h): a build that links a fork with another
-// mbedtls_ssl_handshake_params layout would otherwise read the wrong bytes.
+// Reads a few private mbedtls_ssl_context fields that have no getter (handshake state and version, the message just
+// processed). It includes nothing from mbedTLS's library/ (ssl_misc.h): a fork with another
+// mbedtls_ssl_handshake_params layout would otherwise be read at the wrong offsets.
 #define MBEDTLS_ALLOW_PRIVATE_ACCESS
 #include <string.h>
 #include <stdlib.h>
@@ -157,10 +151,9 @@ static int tls_bio_recv(void *ctx, unsigned char *buf, size_t len)
     return (int)len;
 }
 
-// The verify callback of every session, installed on the ssl context (mbedtls_ssl_set_verify), which takes
-// precedence over the config's, so esp_crt_bundle_attach() cannot replace it. It never returns
-// non-zero, so the final verify result stays decodable; a rejection still fails the handshake because it
-// leaves flags set.
+// Every session's verify callback, set on the ssl context (mbedtls_ssl_set_verify) so it overrides the config's and
+// esp_crt_bundle_attach() cannot replace it. It returns 0 so the verify result stays decodable; a rejection still
+// fails the handshake because it leaves flags set.
 static int tls_verify(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags)
 {
     tls_session_t *s = (tls_session_t *)ctx;
@@ -398,11 +391,9 @@ int tls_open(uint8_t slot, uint16_t tag, const tls_open_params_t *p, uint8_t *re
         return ESP_ERR_NOT_SUPPORTED;
     }
 #endif
-    // All randomness comes from PSA. ESP-IDF 6 has already run psa_crypto_init() at startup, before
-    // the radio, but with MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG: PSA keeps no seeded state and draws every
-    // byte from esp_fill_random() when it is needed. A session draws only after this entropy gate,
-    // but the gate is checked here at OPEN only, and the handshake steps draw later: this relies on
-    // the bridge never stopping the radio once started.
+    // All randomness comes from PSA, which (MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG) keeps no seeded state and draws every byte
+    // from esp_fill_random() when needed. The entropy gate above runs at OPEN only and the handshake steps draw later:
+    // this relies on the bridge never stopping the radio once started.
     if (!tls_psa_ready()) {
         return ESP_FAIL;
     }
@@ -476,13 +467,9 @@ static int tls_sh_ext(const uint8_t *m, size_t len, uint16_t type, const uint8_t
     return -1;
 }
 
-// After each successful handshake step: records the negotiated group (neither mbedTLS 3.6 nor 4.1.1 has a getter
-// for it), and requires the extended master secret once a TLS 1.2 ServerHello is processed. Both come from the
-// server's own messages as mbedTLS has just parsed them: the key_share of a TLS 1.3 ServerHello (or the group a
-// HelloRetryRequest asks for, which the next ServerHello then confirms), the named curve of a TLS 1.2
-// ServerKeyExchange, and the extended_master_secret extension of a TLS 1.2 ServerHello. The host test checks
-// each against the server.
-// Returns MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE when the server did not echo EMS.
+// After each successful handshake step: records the negotiated group (no mbedTLS getter) from the TLS 1.3 ServerHello
+// key_share (or the HelloRetryRequest group) or the TLS 1.2 ServerKeyExchange curve, and requires EMS in a TLS 1.2
+// ServerHello, as mbedTLS has just parsed them. Returns MBEDTLS_ERR_SSL_HANDSHAKE_FAILURE when EMS is not echoed.
 static int tls_note_handshake(tls_session_t *s, int state_before, int version_before)
 {
     int state = s->ssl.state;
@@ -527,13 +514,9 @@ static void tls_classify(tls_session_t *s, int ret, int state_before, int versio
         r->verify_flags = (uint16_t)s->ssl.tls_version;
     } else if ((state_before == MBEDTLS_SSL_SERVER_HELLO) && (version_before == MBEDTLS_SSL_VERSION_TLS1_3) &&
                (ret == MBEDTLS_ERR_SSL_ILLEGAL_PARAMETER)) {
-        // This one step is the whole TLS 1.3 ServerHello processing (ssl_tls13_client.c:1995-2060): pre-processing,
-        // which refuses a ServerHello without supported_versions when 1.2 was not offered or when its random carries
-        // the downgrade sentinel (:1458), and the parse, which raises ILLEGAL_PARAMETER for a suite not offered,
-        // compression != 0, a session-id echo mismatch, a bad HRR key_share and more. So the
-        // ServerHello mbedTLS reassembled is looked at: only one without supported_versions chose TLS 1.2 or lower
-        // (the version refused under REQUIRE_TLS13), and of those only one whose random ends in the RFC 8446 4.1.3
-        // sentinel is a downgrade. Everything else, a ServerHello not found included, is fail_reason 0.
+        // This one step is all of mbedTLS's TLS 1.3 ServerHello processing (ssl_tls13_client.c:1995-2060), so
+        // ILLEGAL_PARAMETER has many causes. Only a ServerHello without supported_versions chose TLS 1.2 or lower, and
+        // of those only one whose random ends in the RFC 8446 4.1.3 sentinel is a downgrade; all else is fail_reason 0.
         size_t len;
         const uint8_t *d, *m = tls_hs_msg(s, MBEDTLS_SSL_HS_SERVER_HELLO, &len);
         if (m && (len >= 4 + 2 + 32) && (tls_sh_ext(m, len, 43, &d) == -1)) {

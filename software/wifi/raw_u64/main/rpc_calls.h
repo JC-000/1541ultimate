@@ -146,9 +146,8 @@ typedef struct {
 } rpc_get_random_resp;
 
 //----------------------------------
-// TLS sessions: the ESP32 runs the TLS engine, the Ultimate moves the ciphertext.
-// The Ultimate names every session by (slot, tag). Fixed fields first, variable data last. Both sides use
-// these definitions; the layouts are asserted against the protocol spec's offsets in rpc_dispatch.c and wifi_tls.cc.
+// TLS sessions, named by (slot, tag): the ESP32 runs the engine, the Ultimate moves the ciphertext. Fixed fields first,
+// variable data last; rpc_dispatch.c and wifi_tls.cc assert these layouts against the protocol spec's offsets.
 #define TLS_MAX_SESSIONS   2
 #define TLS_SNI_MAX_LEN    253  // longest DNS name
 #define TLS_STEP_IN_MAX    1536 // ct_in_len + pt_in_len per step
