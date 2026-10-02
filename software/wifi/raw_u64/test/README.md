@@ -12,5 +12,5 @@ The server is `m3srv.c` (mbedTLS 3.6.0, default configuration), which can also a
 
 `mutants/make.py` rewrites the mutant patches from the current `main/`. `build.sh` names the libraries it
 links (mbedTLS 4.1.1 built by engine4's `build_mb4.sh` with this bridge's sdkconfig, and mbedTLS 3.6.0);
-override their paths with MB4, S4, IDF, SRV and S36. The PKI (`mkpki.sh`) is generated, throwaway, and
+set their paths in MB4, S4, IDF, SRV and S36. The PKI (`mkpki.sh`) is generated, throwaway, and
 trusted nowhere else.

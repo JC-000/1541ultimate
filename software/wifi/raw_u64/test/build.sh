@@ -3,19 +3,14 @@
 #   build.sh [VARIANT...]     VARIANT = head (this tree, the default) | base (the M2 engine at a846369f, for RED runs)
 #                             | mut-NAME (this tree with mutants/NAME.patch applied)
 #                             | at-SHA[+NAME] (the engine at commit SHA, optionally with mutant NAME applied)
-# Inputs, all read-only (override with the environment):
+# Inputs, all read-only, from the environment (required):
 #   MB4   mbedTLS 4.1.1 (espressif ce3f3485) built by build_mb4.sh with this bridge's sdkconfig, ASan+UBSan
 #   S4    its source tree; IDF: ESP-IDF v6.0.3 (76f5dedd), for esp_crt_bundle.c and gen_crt_bundle.py
 #   SRV   mbedTLS 3.6.0 with its default configuration (the server side), and S36 its source
 # Output: build/<variant>/engine_test, build/m3srv, build/pki (mkpki.sh).
 set -e
 T=${0:A:h}; RAW=${T:h}; SW=${RAW:h:h}; REPO=${SW:h}
-AR=${AR_ROOT:-/Users/someone/Documents/1541u-esp-tls-archive}
-MB4=${MB4:-$AR/session-0930/m3esp-work/mb4}
-S4=${S4:-$AR/session-0929/engine4-work/mbedtls-4.1.1}
-IDF=${IDF:-$AR/session-0929/engine4-work/idf-v6.0.3}
-SRV=${SRV:-$AR/session-0930/m3esp-work/srv36}
-S36=${S36:-$AR/session-0928/fixreview-work/mbedtls-3.6.0}
+for e in MB4 S4 IDF SRV S36; do [ -n "${(P)e}" ] || { echo "build.sh: set $e (see the header)" >&2; exit 2; }; done
 BD=$T/build; mkdir -p $BD $T/stub/x # stub/x: "../lwip/..." includes resolve from it (an empty dir git does not keep)
 $T/mkpki.sh $BD/pki
 
