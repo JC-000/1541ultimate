@@ -314,7 +314,7 @@ class CheckTest(unittest.TestCase):
 
 class EffectiveConfigTest(unittest.TestCase):
     """What the build actually uses: its sdkconfig.json (the build passes it), and RELEASE from the
-    environment of every build, not only of the configure step (m3fix-adversarial1 F2, F3)."""
+    environment of every build, not only of the configure step."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

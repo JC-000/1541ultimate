@@ -208,7 +208,7 @@ class RefreshTest(unittest.TestCase):
 
 
     def test_changed_certificates_without_an_allocated_version_write_nothing(self):
-        # m3fix-adversarial1 F4: the next minor is not necessarily free on the dev line.
+        # The next minor is not necessarily free on a development line.
         before = self.tree.snapshot()
         with self.assertRaisesRegex(ca_store.StoreError, "--ident-minor"):
             self.refresh(pem(NEW_DATE, first=5, count=30), ident_minor=None)
