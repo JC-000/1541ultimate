@@ -460,7 +460,7 @@ ssize_t lwip_recv(int s, void *mem, size_t len, int flags)
     k.recv_calls++;
     if (k.err_taken) {
         k.recv_after_err++;
-        errno = ENOTCONN; // lwIP's errno changes on later calls (4.3)
+        errno = ENOTCONN; // lwIP's errno changes on later calls
         return -1;
     }
     if (!available(k)) {

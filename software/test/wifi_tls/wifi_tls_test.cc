@@ -1,6 +1,6 @@
 /*
  * Host tests for the TLS calls to the WiFi module (software/io/wifi/wifi_tls.cc,
- * the M3 wire of M3-SPEC v1 section 5.2) and for the channel they share with
+ * the wire layouts of the protocol spec) and for the channel they share with
  * GET_RANDOM (wifi_dedicated.cc), its cancel predicate included.
  *
  *   make -C target/pc/linux/wifitls test
@@ -111,7 +111,7 @@ static bool nothing_out(const wifi_tls_step_t *st)
 
 static void test_take_step(void)
 {
-    printf("The check on a STEP answer (5.2: 20-byte header)\n");
+    printf("The check on a STEP answer (20-byte header)\n");
     wifi_tls_step_t st;
     const uint16_t sizes[][2] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 255, 1 }, { 256, 0 }, { 300, 700 }, { 1024, 0 }, { 0, 1024 } };
     bool all = true;
@@ -154,14 +154,14 @@ static void test_take_step(void)
         fresh_step(&st, 1024);
         shorts += (wifi_tls_take_step(reply.bytes, s, SEQUENCE, &st) == WIFI_TLS_INVALID) && nothing_out(&st);
     }
-    check(shorts == 63, "an answer of any size but its own (40) hands out nothing (%d of 63), M2's 16-byte header too",
+    check(shorts == 63, "an answer of any size but its own (40) hands out nothing (%d of 63), the older 16-byte header too",
           shorts);
     size = step_reply(TLS_STATE_ESTABLISHED, 0, 20, 0);
     fresh_step(&st, 19);
     int r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
     check((r == WIFI_TLS_INVALID) && nothing_out(&st), "more ciphertext than the caller has room for is invalid, not cut");
 
-    // FAILED carries the reasons (5.2), and only FAILED does.
+    // FAILED carries the reasons, and only FAILED does.
     size = step_reply(TLS_STATE_FAILED, -0x2700, 7, 3);
     rpc_tls_step_resp *res = (rpc_tls_step_resp *)reply.bytes;
     res->fail_reason = TLS_FAIL_CERT_VERIFY;
@@ -189,7 +189,7 @@ static void test_take_step(void)
     r = wifi_tls_take_step(reply.bytes, size, SEQUENCE, &st);
     check((r == 0) && (st.alert_in == WIFI_TLS_ALERT_NONE) && (st.fail_reason == 0), "no alert is 0xFF");
 
-    // NO_READ (5.2, r7.3 H-1).
+    // NO_READ.
     size = step_reply(TLS_STATE_ESTABLISHED, 0, 30, 1);
     fresh_step(&st, 1024);
     st.flags = WIFI_TLS_STEP_NO_READ;
@@ -294,7 +294,7 @@ static void test_take_step(void)
 
 static void test_take_others(void)
 {
-    printf("The checks on OPEN, CLOSE, STATS, CLOSE_ALL and SET_CA answers (5.2)\n");
+    printf("The checks on OPEN, CLOSE, STATS, CLOSE_ALL and SET_CA answers\n");
     int esp_err = 0;
     uint8_t reason = 0x77;
 
@@ -323,12 +323,12 @@ static void test_take_others(void)
     r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
     check((r == WIFI_TLS_REFUSED) && (esp_err == 0x103) && (reason == WIFI_TLS_REASON_NO_CUSTOM_CA),
           "OPEN: refused, with reason 3 NO_CUSTOM_CA");
-    // m3niosadv: the refusal as m3-esp sends it, slot 0xFF (rpc_dispatch.c cmd_tls_open).
+    // The refusal as the ESP32 sends it, slot 0xFF (rpc_dispatch.c cmd_tls_open).
     ((rpc_tls_open_resp *)reply.bytes)->slot = 0xFF;
     ((rpc_tls_open_resp *)reply.bytes)->reason = TLS_OPEN_REASON_NO_TIME;
     r = wifi_tls_take_open(reply.bytes, sizeof(rpc_tls_open_resp), SEQUENCE, 1, &esp_err, &reason);
     check((r == WIFI_TLS_REFUSED) && (reason == WIFI_TLS_REASON_NO_TIME),
-          "ADV-7: OPEN refused as m3-esp sends it (slot byte 0xFF) -> REFUSED with its reason, not malformed");
+          "OPEN refused as the ESP32 sends it (slot byte 0xFF) -> REFUSED with its reason, not malformed");
     ((rpc_tls_open_resp *)reply.bytes)->slot = 1;
     header(CMD_TLS_OPEN);
     ((rpc_espcmd_resp *)reply.bytes)->esp_err = 0x106;
@@ -391,7 +391,7 @@ static void test_take_others(void)
         wrong += (wifi_tls_take_stats(reply.bytes, stat_sizes[k], SEQUENCE, &stats, &esp_err) == WIFI_TLS_INVALID) &&
                  (stats.heap_free == 0);
     }
-    check(wrong == 5, "STATS: any size but 96, M2's 60 included, is invalid (%d of 5)", wrong);
+    check(wrong == 5, "STATS: any size but 96, the older 60 included, is invalid (%d of 5)", wrong);
 
     header(CMD_TLS_CLOSE_ALL);
     check(wifi_tls_take_close_all(reply.bytes, 8, SEQUENCE, &esp_err) == 0, "CLOSE_ALL: 8 bytes, no error");
@@ -403,7 +403,7 @@ static void test_take_others(void)
         { 0, 0, 0 },
         { -0x2180, 0, WIFI_TLS_REFUSED },
         { -2, 0, WIFI_TLS_REFUSED },
-        { -1, 0, WIFI_TLS_INVALID },          // ESP_FAIL is not a parse code (r7.1 L-3)
+        { -1, 0, WIFI_TLS_INVALID },          // ESP_FAIL is not a parse code
         { 0, 1, WIFI_TLS_INVALID },
         { 0x102, 1, WIFI_TLS_REFUSED },
         { 0x102, 3, WIFI_TLS_REFUSED },
@@ -428,7 +428,7 @@ static void test_take_others(void)
         }
         good += ok;
     }
-    check(good == (int)(sizeof(ca) / sizeof(ca[0])), "SET_CA: only the three well formed answers pass (r7 L-3)");
+    check(good == (int)(sizeof(ca) / sizeof(ca[0])), "SET_CA: only the three well formed answers pass");
     header(CMD_TLS_SET_CA);
     check(wifi_tls_take_set_ca(reply.bytes, 11, SEQUENCE, &esp_err, &reason) == WIFI_TLS_INVALID, "SET_CA: 11 bytes");
     ((rpc_espcmd_resp *)reply.bytes)->esp_err = 0x106;
@@ -523,7 +523,7 @@ static int count(const std::string &text, const std::string &what)
 
 static void test_calls(void)
 {
-    printf("The TLS calls through the channel (5.2 layouts, byte for byte)\n");
+    printf("The TLS calls through the channel (wire layouts, byte for byte)\n");
     int esp_err = 0x55;
     uint8_t reason = 0x55;
 
@@ -638,7 +638,7 @@ static void test_calls(void)
     r = wifi_tls_set_ca(big_ca, WIFI_TLS_CA_MAX, 1, &esp_err, &reject, 5000, NULL);
     check((r == 0) && (sent().compare(0, 15, "transmit 1480: ") == 0), "SET_CA: 1472 bytes go in one request");
 
-    // The waits: each call its caller's timeout; with a cancel, in slices (4.1).
+    // The waits: each call its caller's timeout; with a cancel, in slices.
     world_reset(13, late_maker, true);
     fresh_step(&st, 1024);
     r = wifi_tls_step(0, 1, &st, 5000, NULL);

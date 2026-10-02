@@ -1,7 +1,7 @@
 /*
  * lwIP's ip4addr_aton, from software/lwip/src/core/ipv4/ip4_addr.c at
  * 26a22151, for the host tests: network_target.cc decides what an IPv4 literal
- * is with it (M3-SPEC 1.1), so the tests need the same predicate, forms like
+ * is with it, so the tests need the same predicate, forms like
  * 127.1, 0x7f.0.0.1 and "1.2.3.4 x" included.
  *
  * Copyright (c) 2001-2004 Swedish Institute of Computer Science.

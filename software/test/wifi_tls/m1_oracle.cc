@@ -1,7 +1,7 @@
 /*
- * M1's wifi_get_random, compiled unchanged from m1_get_random.inc as
+ * The earlier wifi_get_random, compiled unchanged from m1_get_random.inc as
  * m1_wifi_get_random, against the same world as the new code. Only the names
- * that the split renamed are mapped back.
+ * that the move to wifi_dedicated.cc renamed are mapped back.
  */
 #include <stddef.h>
 #include "wifi_cmd.h"

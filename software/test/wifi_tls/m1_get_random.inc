@@ -1,5 +1,5 @@
-// VERBATIM from software/io/wifi/wifi.cc at 764a75ac (esp-tls/m1), lines 482-591:
-// M1's GET_RANDOM before it was split into wifi_dedicated.cc. Do not edit; it is
+// VERBATIM from software/io/wifi/wifi.cc at 764a75ac, lines 482-591:
+// GET_RANDOM before it moved into wifi_dedicated.cc. Do not edit; it is
 // the oracle that the new code must match call for call (wifi_dedicated_test.cc).
 // Checks a queued reply against the request, hands over its bytes if it is the
 // answer, and frees it. A reply queued before the last reset of the buffer

@@ -1,7 +1,7 @@
 #
 # Host build of the checks on the TLS calls to the WiFi module, of the channel
-# they share with GET_RANDOM (against M1's code), and of the TLS commands of
-# the network target (M3). FreeRTOS, the UART, lwIP and, for the network
+# they share with GET_RANDOM (against its earlier code), and of the TLS
+# commands of the network target. FreeRTOS, the UART, lwIP and, for the network
 # target, the module are stand-ins.
 #
 #   make          build

@@ -1,5 +1,5 @@
 /*
- * GET_RANDOM through wifi_dedicated_call against M1's wifi_get_random.
+ * GET_RANDOM through wifi_dedicated_call against the earlier wifi_get_random.
  *
  * Both run in the same scripted world, seed by seed: replies that are right,
  * late, foreign, refused, short, stale from before a pool reset, bursts that
@@ -86,13 +86,13 @@ static void first_difference(const std::string &a, const std::string &b)
         i++;
     }
     size_t from = (i > 200) ? (i - 200) : 0;
-    printf("        M1 : ...%s\n", a.substr(from, 300).c_str());
+    printf("        old: ...%s\n", a.substr(from, 300).c_str());
     printf("        new: ...%s\n", b.substr(from, 300).c_str());
 }
 
 void test_dedicated(void)
 {
-    printf("GET_RANDOM through wifi_dedicated_call, against M1, seed by seed\n");
+    printf("GET_RANDOM through wifi_dedicated_call, against the earlier code, seed by seed\n");
     const uint32_t seeds = 200000;
     int differ = 0;
     int results[8] = { 0 };
@@ -126,7 +126,7 @@ void test_dedicated(void)
         with[6] += (now.result == 0) && (t.find("isr queue") != t.rfind("isr queue"));
         with[7] += t.find("receive 0 -> b") != std::string::npos;
     }
-    check(differ == 0, "%u seeds, M1 and the new code make the same calls and leave the same state (%d differ)",
+    check(differ == 0, "%u seeds, the earlier and the new code make the same calls and leave the same state (%d differ)",
           seeds, differ);
     printf("        results: 0 OK %d, 1 BUSY %d, 2 REFUSED %d, 3 INVALID %d, 4 NO_MODULE %d\n",
            results[0], results[1], results[2], results[3], results[4]);
@@ -134,7 +134,7 @@ void test_dedicated(void)
         check(with[i] > 100, "the seeds include %s (%d)", features[i], with[i]);
     }
 
-    // What the split must not change for anyone: the channel is free again
+    // What the move must not change for anyone: the channel is free again
     // and the queue empty after every call, and every take ran suspended.
     int left_over = 0;
     for (uint32_t seed = 1; seed <= 20000; seed++) {

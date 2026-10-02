@@ -1,6 +1,6 @@
 /*
- * The world that the host tests run network_target.cc in (M3-SPEC v1, the
- * Nios side): a clock, lwIP's sockets and DNS, the C64 reset line, and a WiFi
+ * The world that the host tests run network_target.cc in (the Nios side of
+ * the TLS commands): a clock, lwIP's sockets and DNS, the C64 reset line, and a WiFi
  * module that runs a pretend TLS. All of it is single threaded and
  * deterministic: time moves only when the code under test waits.
  *
