@@ -3,13 +3,13 @@
 
 Two flavours, each a `net_tls_proto.Link`:
 
-  "m3"     answers $21-$25 the way the protocol spec says, doing
+  "tls"    answers $21-$25 the way the protocol spec says, doing
            real TLS from this machine with Python's ssl module, so a scenario
            that passes against it has exercised its own oracle end to end;
   "stock"  the firmware without the TLS commands: $21-$25 answer `21,UNKNOWN COMMAND`, and
            the plain commands ($01, $07, $09, $10, $11) work.
 
-And mutants of "m3", each breaking one rule a scenario claims to guard, so
+And mutants of "tls", each breaking one rule a scenario claims to guard, so
 the self-test can show that scenario turning red:
 
   "bundle-accepts-all"  BUNDLE verifies nothing (S5 / S4 must catch it)
@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover
 
 MUTANTS = ("bundle-accepts-all", "release-noop", "group-zero", "info-ff-claims",
            "abort-shortens")
-FLAVOURS = ("m3", "stock", *MUTANTS)
+FLAVOURS = ("tls", "stock", *MUTANTS)
 MAX_TLS = 2
 
 SUITES = {
@@ -92,7 +92,7 @@ class Entry:
 class MockDevice(Link):
     """A network target in Python. See the module docstring."""
 
-    def __init__(self, flavour: str = "m3", bundle_cafile: str | None = None,
+    def __init__(self, flavour: str = "tls", bundle_cafile: str | None = None,
                  resolver: dict[str, str] | None = None, system_bundle: bool = True) -> None:
         super().__init__()
         if flavour not in FLAVOURS:

@@ -8,15 +8,15 @@ Seven parts, none of which touches any Ultimate:
 1. The client deadlines on the REST route, against fake registers: a late
    reply is ABORTed, and a bit 2 that never clears is a LinkLost, never a hang.
 2. The scenarios against net_tls_mock.MockDevice and the real local fixture:
-   the m3 flavour GREEN (except S22, a mock limit), stock RED.
+   the tls flavour GREEN (except S22, a mock limit), stock RED.
 3. Mutants of the mock: the scenario guarding each broken rule must go red.
 4. main() over real HTTP (tests/lib/device_double.py) for Tier 1 without S30:
-   --expect green on m3 and red on stock exit 0, and swapped, 1.
+   --expect green on tls and red on stock exit 0, and swapped, 1.
 5. No verdict without evidence, and setup failures are errors.
 6. Setup refusals change no setting; READs and routes are bounded.
 7. The fixture outlasts a slow reader (S13 over REST).
 
-Usage: net_tls_selftest.py [--quick]   (--quick skips the m3 flavour's 15 s
+Usage: net_tls_selftest.py [--quick]   (--quick skips the tls flavour's 15 s
 handshake-timeout scenario and the 16 KB record)
 """
 
@@ -317,8 +317,8 @@ def part4(world: "World") -> bool:
     section("part 4: main() over HTTP, against a REST double with a mocked network target")
     ok = True
     tier1 = ["S1", "S20", "S2", "S23", "S5", "S19e"]
-    for flavour, expect, code in (("m3", "green", 0), ("stock", "red", 0),
-                                  ("m3", "red", 1), ("stock", "green", 1)):
+    for flavour, expect, code in (("tls", "green", 0), ("stock", "red", 0),
+                                  ("tls", "red", 1), ("stock", "green", 1)):
         double = UciDouble(world.device(flavour))
         saved = {k: os.environ.get(k) for k in double.environment()}
         os.environ.update(double.environment())
@@ -421,8 +421,8 @@ def part5(world: "World") -> bool:
     ok = True
     t1 = ["--test", "tier1", "--module-minor", "308", "--route", "rest"]
     cases = [
-        ("m3, --expect green, the fixture cannot start -> exit 1",
-         "m3", ["--expect", "green", *t1], {"fixture": False}, 1),
+        ("tls, --expect green, the fixture cannot start -> exit 1",
+         "tls", ["--expect", "green", *t1], {"fixture": False}, 1),
         ("stock, --expect red, the fixture cannot start -> exit 1",
          "stock", ["--expect", "red", *t1], {"fixture": False}, 1),
         ("mutant bundle-accepts-all, --expect green, no fixture -> exit 1",
@@ -432,10 +432,10 @@ def part5(world: "World") -> bool:
         ("stock, --expect red, only the S33 measurement -> exit 1",
          "stock", ["--expect", "red", "--test", "S33", "--route", "rest"], {}, 1),
         ("WiFi Disabled and no --set-wifi: setup refuses, WiFi untouched -> exit 1",
-         "m3", ["--expect", "green", "--test", "S1", "--route", "rest", "--module-minor", "308"],
+         "tls", ["--expect", "green", "--test", "S1", "--route", "rest", "--module-minor", "308"],
          {"wifi": "Disabled"}, 1),
         ("WiFi Disabled with --set-wifi: set and kept -> exit 0",
-         "m3", ["--expect", "green", "--test", "S1", "--route", "rest", "--module-minor", "308",
+         "tls", ["--expect", "green", "--test", "S1", "--route", "rest", "--module-minor", "308",
                 "--set-wifi"], {"wifi": "Disabled"}, 0),
     ]
     for label, flavour, argv, options, wanted in cases:
@@ -454,7 +454,7 @@ def part5(world: "World") -> bool:
             ok = False
     try:
         with check("the native agent fails to start: REST records kept, native ERROR, exit 1"):
-            code, run, _ = run_main(world, "m3", ["--expect", "green", "--test", "S1",
+            code, run, _ = run_main(world, "tls", ["--expect", "green", "--test", "S1",
                                                   "--module-minor", "308"], native_fails=True)
             records = [(o["route"], o["sid"], o["verdict"]) for o in run["scenarios"]]
             detail(str(records))
@@ -497,7 +497,7 @@ def part6(world: "World") -> bool:
     ok = True
     try:
         with check("WiFi off, no --set-wifi: refused before ANY setting is written"):
-            code, run, double = run_main(world, "m3", ["--expect", "green", "--test", "S1", "--route",
+            code, run, double = run_main(world, "tls", ["--expect", "green", "--test", "S1", "--route",
                                                        "rest", "--module-minor", "308"],
                                          wifi="Disabled")
             ci = double.configs["C64 and Cartridge Settings"]["Command Interface"]
@@ -538,7 +538,7 @@ def part6(world: "World") -> bool:
         ok = False
     try:
         with check("--require-lock with no session lock: refused, nothing changed"):
-            code, run, double = run_main(world, "m3", ["--expect", "green", "--test", "S1", "--route",
+            code, run, double = run_main(world, "tls", ["--expect", "green", "--test", "S1", "--route",
                                                        "rest", "--module-minor", "308",
                                                        "--require-lock"])
             ci = double.configs["C64 and Cartridge Settings"]["Command Interface"]
@@ -554,7 +554,7 @@ def part6(world: "World") -> bool:
                 raise Failure("could not take the 127.0.0.1 test lock")
             os.environ["NET_TLS_LOCK_PID"] = str(os.getpid())
             try:
-                code, run, _ = run_main(world, "m3", ["--expect", "green", "--test", "S1", "--route",
+                code, run, _ = run_main(world, "tls", ["--expect", "green", "--test", "S1", "--route",
                                                       "rest", "--module-minor", "308",
                                                       "--require-lock"])
             finally:
@@ -587,7 +587,7 @@ def part7(world: "World") -> bool:
             data = fx.payload(13, 16384)
             server = fx.TlsServer("127.0.0.1", world.pki.chains["ecdsa"],
                                   fx.Behaviour(send=data, then="echo"))
-            device = world.device("m3")
+            device = world.device("tls")
             ctx = suite.Ctx(device, SimpleNamespace(), world.pki, "127.0.0.1", None, [])
             try:
                 reply = ctx.expect_open(server.port, "127.0.0.1",
@@ -636,12 +636,12 @@ def main() -> int:
         everything = [s.sid for s in suite.SCENARIOS if s.default]
         if args.quick:
             everything = [sid for sid in everything if sid not in ("S10", "S13")]
-        section("part 2: the m3 flavour goes GREEN")
-        m3 = world.run("m3", everything)
+        section("part 2: the tls flavour goes GREEN")
+        tls = world.run("tls", everything)
         wanted = {sid: ("CONTROL-PASS" if suite.BY_NAME[sid].kind == "control" else "GREEN")
                   for sid in everything}
         wanted["S22"] = "FAIL"   # the mock cannot report the negotiated group
-        ok &= judge_flavour("m3", m3, wanted)
+        ok &= judge_flavour("tls", tls, wanted)
         section("part 2: the stock flavour goes RED")
         stock = world.run("stock", everything)
         wanted = {sid: ("CONTROL-PASS" if suite.BY_NAME[sid].kind == "control" else "RED")
@@ -673,7 +673,7 @@ def main() -> int:
     finally:
         world.close()
     if ok:
-        suite_ok(SUITE, "GREEN on m3, RED on stock, every mutant caught")
+        suite_ok(SUITE, "GREEN with TLS, RED on stock, every mutant caught")
         return 0
     suite_fail(SUITE, "see the checks above")
     return 1

@@ -46,7 +46,7 @@ try:
 except ImportError:  # pragma: no cover - reported as a SKIP by the suite
     HAVE_CRYPTOGRAPHY = False
 
-FIXTURE_NAME = "m3-fixture.test"
+FIXTURE_NAME = "fixture.test"
 WRONG_NAME = "wrong-host.test"
 ACCEPT_TIMEOUT = 60.0
 # Idle limit per connection: it must outlast the slowest route (over REST a device
@@ -98,12 +98,12 @@ class Pki:
         now = datetime.datetime.now(datetime.UTC)
         self.now = now
         self.root_key = ec.generate_private_key(ec.SECP256R1())
-        self.root = self._ca("M3 E2E Test Root", self.root_key, None, None, now)
+        self.root = self._ca("E2E Test Root", self.root_key, None, None, now)
         self.int_key = ec.generate_private_key(ec.SECP256R1())
-        self.intermediate = self._ca("M3 E2E Test Intermediate", self.int_key,
+        self.intermediate = self._ca("E2E Test Intermediate", self.int_key,
                                      self.root, self.root_key, now)
         self.unknown_key = ec.generate_private_key(ec.SECP256R1())
-        self.unknown_root = self._ca("M3 E2E Unknown Root", self.unknown_key, None, None, now)
+        self.unknown_root = self._ca("E2E Unknown Root", self.unknown_key, None, None, now)
         self.chains: dict[str, Chain] = {}
         day = datetime.timedelta(days=1)
         self._leaf("ecdsa", FIXTURE_NAME, ec.generate_private_key(ec.SECP256R1()),

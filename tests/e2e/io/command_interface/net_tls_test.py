@@ -107,7 +107,7 @@ RESAMPLE_AFTER_SECONDS = 30.0
 MAC_SAMPLES = 3
 # A name no resolver answers (RFC 6761), and an address nothing answers SYNs on
 # (RFC 5737 TEST-NET-1, dropped rather than refused on most networks).
-UNRESOLVABLE = "m3-e2e-unresolvable.invalid"
+UNRESOLVABLE = "e2e-unresolvable.invalid"
 # S32 stops here: with a 4 KB receive buffer the stall comes within tens of
 # WRITEs, and each native WRITE is a body-carrying writemem.
 S32_MAX_WRITES = 100
@@ -720,7 +720,7 @@ def one_real_host(ctx: Ctx, host: Host) -> str:
                                   f"offer): device {info.spki_sha256.hex()[:16]}, this machine "
                                   f"{sorted(s[:16] for s in samples)}")
         with check(f"{host.host}: step 5, an HTTP GET over the session starts with HTTP/1."):
-            request = (f"GET / HTTP/1.1\r\nHost: {host.host}\r\nUser-Agent: u64-m3-e2e\r\n"
+            request = (f"GET / HTTP/1.1\r\nHost: {host.host}\r\nUser-Agent: u64-e2e\r\n"
                        f"Connection: close\r\n\r\n").encode("ascii")
             ctx.write(handle, request)
             got = bytearray()
