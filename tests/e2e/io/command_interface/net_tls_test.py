@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-# E2E: M3 TLS sockets on the UCI network target ($21-$25): RED on stock firmware, GREEN on M3.
+# E2E: TLS sockets on the UCI network target ($21-$25): RED on stock firmware, GREEN with TLS.
 
-"""End-to-end check of the UCI network target's TLS commands (M3).
+"""End-to-end check of the UCI network target's TLS commands ($21-$25).
 
-The contract is M3-SPEC v1 (FROZEN) with errata v1.1 and v1.2; section 7 is
-the plan this suite implements. Every scenario is RED on firmware without M3
-with the one signature `21,UNKNOWN COMMAND` to its first TLS command, and
-GREEN on M3. The exceptions are marked `control` (they pass on both, and say
-the bench itself works) and `measurement` (they only record a number).
+The contract is the protocol spec; this suite implements its test plan. Every
+scenario is RED on firmware without the TLS commands, with the one signature
+`21,UNKNOWN COMMAND` to its first TLS command, and GREEN on firmware with
+them. The exceptions are marked `control` (they pass on both, and say the
+test setup itself works) and `measurement` (they only record a number).
 
-Tier 1 is the RED signature and the smoke test the bench runs first:
-  S0   startup sweep (errata ER-2)              control
+Tier 1 is the RED signature and the smoke test to run first:
+  S0   startup sweep (CLOSE 0..15)              control
   S1   capability: `03 23 FF`, 16 bytes          RED 21 / GREEN v1 record
   S20  plain TCP round trip                      control
   S2   PIN echo to this machine, TLS 1.3, INFO for the handle
   S23  hardened TLS 1.2 fallback (EMS bit, one of the six suites)
   S5   a refused certificate: exactly `93,CERTIFICATE NOT TRUSTED: 0x00000008`,
        and `96` for a wrong pin
-  S19e an ABORTed OPEN, then $25 (errata ER-1 deadlines; REST route only)
+  S19e an ABORTed OPEN, then $25 (client deadlines; REST route only)
   S30  BUNDLE to real hosts (internet_hosts.json) with an HTTP GET
-Tier 2 is the rest of section 7 that this machine can drive (see --list).
+Tier 2 is the rest of the test plan that this machine can drive (see --list).
 
 Each scenario's oracle comes from the server's side where there is one: the
 fixture (net_tls_fixture.py) logs version, suite, SNI, the sha256 of what it
@@ -31,10 +31,10 @@ back: Command Interface Enabled, WiFi Enabled (entropy; a one-way setting on
 the U64, so it is set and recorded but never written back), SNTP Enable (the
 trusted clock BUNDLE and CUSTOM need), and Turbo Control Off (the 6502 agent's
 waits are counted at 1 MHz). Then it resets the C64 and runs the startup
-procedure of errata ER-2 on the route, so leftovers from an earlier program
-or lane cannot pass for this firmware's behaviour.
+procedure on the route ($0C, then CLOSE 0..15), so leftovers from an earlier
+program or run cannot pass for this firmware's behaviour.
 
-Every command carries ER-1's client deadline: 45 s from the PUSH for an open,
+Every command carries a client deadline: 45 s from the PUSH for an open,
 12 s for the other TLS commands; then ABORT, wait for $DF1C bit 2 up to the
 later of PUSH + bound and ABORT + 12 s, and reset the C64 if it is still set.
 Nothing here can wait forever.
@@ -125,7 +125,7 @@ MAC_SAMPLES = 3
 # (RFC 5737 TEST-NET-1, dropped rather than refused on most networks).
 UNRESOLVABLE = "m3-e2e-unresolvable.invalid"
 # S32 stops here: with a 4 KB receive buffer the stall comes within tens of
-# WRITEs, and each native WRITE is a body-carrying writemem (adversarial1 L-4).
+# WRITEs, and each native WRITE is a body-carrying writemem.
 S32_MAX_WRITES = 100
 BLACKHOLE = "192.0.2.1"
 
@@ -190,8 +190,8 @@ class Ctx:
             if result.status == STATUS_UNKNOWN_COMMAND:
                 o.evidence.setdefault("unknown_command", []).append(command[:3].hex(" "))
         if result.aborted:
-            raise Failure(f"{command[:6].hex(' ')} gave no reply within its ER-1 bound and was "
-                          f"ABORTed after {result.elapsed:.1f}s")
+            raise Failure(f"{command[:6].hex(' ')} gave no reply within its client deadline "
+                          f"and was ABORTed after {result.elapsed:.1f}s")
         return result
 
     def expect(self, result: Result, status: bytes, what: str) -> Result:
@@ -237,8 +237,8 @@ class Ctx:
         `budget` is IDLE time: the clock restarts on every READ that brings at
         least one byte. On the REST route every byte costs one REST call, so a
         total-time budget would fail a healthy but slow transfer for the wrong
-        reason. A READ answering 00,OK with no bytes is not a 1.6 answer and
-        fails at once (adversarial2 M-4), so the loop is always bounded.
+        reason. A READ answering 00,OK with no bytes is not a valid READ answer
+        and fails at once, so the loop is always bounded.
         """
         got = bytearray()
         deadline = time.monotonic() + budget
@@ -250,7 +250,7 @@ class Ctx:
                 if reply.header != len(reply.payload):
                     raise Failure(f"READ header {reply.header} but {len(reply.payload)} bytes")
                 if not reply.payload:
-                    raise Failure("READ answered 00,OK with header $0000: section 1.6 has no "
+                    raise Failure("READ answered 00,OK with header $0000: the protocol has no "
                                   "such answer (data is 1..maxlen; nothing yet is $FFFF + 02)")
                 got += reply.payload
                 deadline = time.monotonic() + budget
@@ -294,7 +294,7 @@ class Ctx:
         return last
 
     def sweep(self) -> list[int]:
-        """ER-2's CLOSE sweep of 0..15; the numbers that were held."""
+        """The startup CLOSE sweep of 0..15; the numbers that were held."""
         held = []
         for handle in HANDLE_RANGE:
             r = self.link.command(close_command(handle))
@@ -334,7 +334,7 @@ class Ctx:
 
 
 class Skipped(Failure):
-    """The scenario could not run here. Counts AGAINST every verdict (adversarial1 H-1)."""
+    """The scenario could not run here. Counts AGAINST every verdict."""
 
 
 class NotOnRoute(Skipped):
@@ -387,9 +387,9 @@ def check_reply_bits(reply: OpenReply, version: int) -> None:
             raise Failure(f"version 0x{reply.version:04X}")
         suites = TLS13_SUITES if version == TLS13 else TLS12_SUITES
         if reply.suite not in suites:
-            raise Failure(f"suite 0x{reply.suite:04X} is not one of section 1.7's")
+            raise Failure(f"suite 0x{reply.suite:04X} is not one of the policy suites")
         if reply.group not in GROUPS:
-            raise Failure(f"group 0x{reply.group:04X} (0 is a FAIL in a GREEN run; 1.1)")
+            raise Failure(f"group 0x{reply.group:04X} (0 is a FAIL in a GREEN run)")
         ems = 1 if version == TLS12 else 0
         if reply.bits != ems:
             raise Failure(f"byte 7 = 0x{reply.bits:02X}, expected 0x{ems:02X} (bit0 EMS)")
@@ -399,13 +399,13 @@ def check_reply_bits(reply: OpenReply, version: int) -> None:
 
 def s0_startup_sweep(ctx: Ctx) -> None:
     if ctx.link.can_abort_in_flight:
-        with check("ER-2: $DF1D reads $C9/$49, $0C written, bit 2 back to 0 within 45 s"):
+        with check("startup: $DF1D reads $C9/$49, $0C written, bit 2 back to 0 within 45 s"):
             seconds = ctx.link.startup_abort()
             detail(f"bit 2 cleared {seconds:.2f}s after the $0C")
     else:
-        check_start("ER-2: $0C and the wait for bit 2")
+        check_start("startup: $0C and the wait for bit 2")
         check_skip("the 6502 agent starts from run_prg's reset, and writes no $0C itself")
-    with check("ER-2: CLOSE 0..15 each answers 00,OK or 12,ERROR ON CLOSE: 9"):
+    with check("startup: CLOSE 0..15 each answers 00,OK or 12,ERROR ON CLOSE: 9"):
         held = ctx.sweep()
         ctx.note("swept", held)
         detail(f"leftover handles closed: {held or 'none'}")
@@ -437,7 +437,7 @@ def s1_capability(ctx: Ctx) -> None:
             raise Failure(f"[4] = 0x{cap.ready:02X}: Wi-Fi and SNTP are set on, so b0-b2 are owed")
         if cap.ready & 0x08:
             raise Failure("[4] b3 (custom CA LOADED) is set after the startup reset")
-    with check("ER-15/16: module version set and [9..11] = FF FF FF while b0 is set"):
+    with check("module version set and [9..11] = FF FF FF while b0 is set"):
         major, minor = cap.module_version
         if (major, minor) == (0, 0):
             raise Failure("[6..8] = 0 with b0 set")
@@ -446,13 +446,13 @@ def s1_capability(ctx: Ctx) -> None:
         detail(f"module {major}.{minor}, block_max {cap.block_max_ms} ms")
         if ctx.args.module_minor is not None and minor != ctx.args.module_minor:
             raise Failure(f"module minor {minor}, expected {ctx.args.module_minor} (--module-minor)")
-    with check("ER-4: `03 23 FF 00` (4 bytes) answers 81"):
+    with check("`03 23 FF 00` (4 bytes) answers 81"):
         ctx.expect(ctx.cmd(bytes([3, NET_CMD_TLS_INFO, 0xFF, 0])), STATUS_INVALID_PARAMS, "03 23 FF 00")
-    with check("1.8: `03 25` answers 1 byte, 0, 00,OK; `03 25 00` answers 81"):
+    with check("`03 25` answers 1 byte, 0, 00,OK; `03 25 00` answers 81"):
         if ctx.release() != 0:
             raise Failure("$25 closed something with no OPEN before it")
         ctx.expect(ctx.cmd(bytes([3, NET_CMD_TLS_RELEASE, 0])), STATUS_INVALID_PARAMS, "03 25 00")
-    with check("1.3: a handle that is not TLS answers 81 with no data"):
+    with check("INFO on a handle that is not TLS answers 81 with no data"):
         r = ctx.cmd(info_command(0x7F))
         ctx.expect(r, STATUS_INVALID_PARAMS, "03 23 7F")
 
@@ -521,11 +521,11 @@ def s2_pin_echo(ctx: Ctx) -> None:
         if log.version != "TLSv1.3":
             raise Failure(f"server negotiated {log.version}")
         if log.sni is not None:
-            raise Failure(f"SNI {log.sni!r} was sent for an IP literal (M8)")
+            raise Failure(f"SNI {log.sni!r} was sent for an IP literal")
         if hashlib.sha256(log.received).digest() != hashlib.sha256(sent).digest():
             raise Failure(f"server received {len(log.received)} bytes that differ from the payload")
         if log.peer_end != "close_notify":
-            raise Failure(f"the client ended with {log.peer_end}, not close_notify (1.5)")
+            raise Failure(f"the client ended with {log.peer_end}, not close_notify")
 
 
 def s23_tls12(ctx: Ctx) -> None:
@@ -569,12 +569,12 @@ def s5_refused_cert(ctx: Ctx) -> None:
 def s19e_abort_release(ctx: Ctx) -> None:
     if not ctx.link.can_abort_in_flight:
         raise NotOnRoute(f"the {ctx.link.name} route cannot ABORT a command in flight (REST only)")
-    with check("TLS_INFO $FF answers before the OPEN (and does not claim; 1.1 Rule 2)"):
+    with check("TLS_INFO $FF answers before the OPEN (and claims no session)"):
         ctx.entries(0, "before the OPEN")
     server = ctx.server("ecdsa", fx.Behaviour(delay_handshake=SLOW_HANDSHAKE_SECONDS))
     command = open_tls_command(server.port, ctx.bind_ip, TRUST_PIN, pin=pin_of(ctx))
     with check(f"ABORT {ABORT_AFTER_SECONDS}s into an OPEN_TLS: bit 2 clears only when the "
-               "command ends (ABORT never shortens it), within ER-1's deadline"):
+               "command ends (ABORT never shortens it), within the client deadline"):
         aborted = ctx.link.abort_in_flight(command, ABORT_AFTER_SECONDS)
         ctx.note("abort", {"busy_at_abort": aborted.busy_at_abort,
                            "bit2_cleared_after": round(aborted.bit2_cleared_after, 2)})
@@ -584,7 +584,7 @@ def s19e_abort_release(ctx: Ctx) -> None:
         if aborted.bit2_cleared_after > BOUND_OPEN + 12:
             raise Failure(f"bit 2 cleared {aborted.bit2_cleared_after:.1f}s after the PUSH")
         # The server holds its answer SLOW_HANDSHAKE_SECONDS, so an OPEN that
-        # ran to its end cannot clear bit 2 sooner (adversarial1 M-6).
+        # ran to its end cannot clear bit 2 sooner.
         if aborted.bit2_cleared_after < SLOW_HANDSHAKE_SECONDS - 0.5:
             raise Failure(f"bit 2 cleared {aborted.bit2_cleared_after:.1f}s after the PUSH, before "
                           f"the server's {SLOW_HANDSHAKE_SECONDS:.0f}s delay: the ABORT shortened it")
@@ -688,16 +688,16 @@ def one_real_host(ctx: Ctx, host: Host) -> str:
         try:
             address = host.ip or socket.getaddrinfo(host.host, host.port, socket.AF_INET)[0][4][0]
         except OSError as exc:
-            raise Skipped(f"FAIL internet unreachable: mac: dns {host.host}: {exc}") from exc
+            raise Skipped(f"FAIL internet unreachable: host: dns {host.host}: {exc}") from exc
         try:
             first = mac_view(host, address, ctx.args.mac_cafile)
         except ssl.SSLError as exc:
-            raise Skipped(f"FAIL internet path failed TLS verification (Mac): {host.host} at "
-                          f"{address}: {exc}; possible causes: a captive portal, TLS "
+            raise Skipped(f"FAIL internet path failed TLS verification (this machine): "
+                          f"{host.host} at {address}: {exc}; possible causes: a captive portal, TLS "
                           f"interception, or a broken or misconfigured host; step 1 cannot "
                           f"tell which") from exc
         except OSError as exc:
-            raise Skipped(f"FAIL internet unreachable: mac: connect {host.host}: {exc}") from exc
+            raise Skipped(f"FAIL internet unreachable: host: connect {host.host}: {exc}") from exc
         detail(f"{address}, {first['version']}, leaf SPKI {first['spki'][:16]}, via {first['store']}")
     with check(f"{host.host}: step 2, the device's OPEN_TCP to the name and to {address}"):
         for target in (host.host, address):
@@ -710,14 +710,15 @@ def one_real_host(ctx: Ctx, host: Host) -> str:
         r = ctx.open_tls(host.port, address, TRUST_BUNDLE, name=host.host)
         if not r.ok:
             chain = "; ".join(f"{c['subject']} <- {c['issuer']}" for c in first["chain"])
-            raise Failure(f"FAIL {host.host}: {r.status.decode('latin-1')} (the Mac's chain: "
+            raise Failure(f"FAIL {host.host}: {r.status.decode('latin-1')} (this machine's chain: "
                           f"{chain or 'not available'})")
         reply = OpenReply(r.data)
         handle = reply.handle
         info = ctx.info(handle)
     gone = False
     try:
-        with check(f"{host.host}: step 4, version/group policy, leaf SPKI among the Mac's view"):
+        with check(f"{host.host}: step 4, version/group policy, "
+                   f"leaf SPKI among this machine's view"):
             samples = {first["spki"]}
             for _ in range(MAC_SAMPLES - 1):
                 samples.add(mac_view(host, address, ctx.args.mac_cafile)["spki"])
@@ -731,8 +732,8 @@ def one_real_host(ctx: Ctx, host: Host) -> str:
                 time.sleep(RESAMPLE_AFTER_SECONDS if ctx.args.hosts is None else 0)
                 samples.add(mac_view(host, address, ctx.args.mac_cafile)["spki"])
                 if info.spki_sha256.hex() not in samples:
-                    raise Failure(f"leaf key differs from the Mac's view (same IP, same offer): "
-                                  f"device {info.spki_sha256.hex()[:16]}, Mac "
+                    raise Failure(f"leaf key differs from this machine's view (same IP, same "
+                                  f"offer): device {info.spki_sha256.hex()[:16]}, this machine "
                                   f"{sorted(s[:16] for s in samples)}")
         with check(f"{host.host}: step 5, an HTTP GET over the session starts with HTTP/1."):
             request = (f"GET / HTTP/1.1\r\nHost: {host.host}\r\nUser-Agent: u64-m3-e2e\r\n"
@@ -848,7 +849,7 @@ def s13_tickets_big_record(ctx: Ctx) -> None:
 
 
 def s3_custom_ca(ctx: Ctx) -> None:
-    with check("ER-2: clear the CA (`03 22 00 00 00 00`) answers 00,OK, b3 clear"):
+    with check("clear the CA (`03 22 00 00 00 00`) answers 00,OK, b3 clear"):
         ctx.expect(ctx.cmd(trust_ca_command(0, 0, b"")), STATUS_OK, "clear")
         if ctx.info_ff().ready & 0x08:
             raise Failure("b3 still set after the clear")
@@ -1013,7 +1014,8 @@ def s24_require13(ctx: Ctx) -> None:
 
 def s18_block_max(ctx: Ctx) -> None:
     server = ctx.server("ecdsa", tls13_server())
-    with check("after a handshake, INFO module_block_max_ms < 50 (M2 had about 1070)"):
+    with check("after a handshake, INFO module_block_max_ms < 50 "
+               "(the earlier engine had about 1070)"):
         handle = ctx.expect_open(server.port, ctx.bind_ip, pin=pin_of(ctx)).handle
         ctx.close(handle)
         cap = ctx.info_ff()
@@ -1023,7 +1025,7 @@ def s18_block_max(ctx: Ctx) -> None:
 
 
 def s32_write_stall(ctx: Ctx) -> None:
-    """S32 (M12), and the ER-17 close cap measured on the stalled socket."""
+    """S32: a WRITE stall, and the CLOSE time measured on the stalled socket."""
     if ctx.link.name == "rest":
         raise NotOnRoute("hundreds of 892-B WRITEs cost a REST call per byte; run it native")
     server = ctx.server("ecdsa", fx.Behaviour(then="stall", rcvbuf=4096))
@@ -1046,11 +1048,11 @@ def s32_write_stall(ctx: Ctx) -> None:
             break
         else:
             raise Failure(f"{S32_MAX_WRITES} WRITEs never stalled")
-    with check("ER-17: CLOSE on the stalled TLS socket answers 00,OK within 12 s (measured)"):
+    with check("CLOSE on the stalled TLS socket answers 00,OK within 12 s (measured)"):
         r = ctx.close(reply.handle)
         ctx.note("close_elapsed", round(r.elapsed, 3))
         ctx.expect(r, STATUS_OK, "CLOSE")
-        detail(f"CLOSE took {r.elapsed:.2f}s (ER-17 predicts about 1 s at most, then RST)")
+        detail(f"CLOSE took {r.elapsed:.2f}s (expected: about 1 s at most, then RST)")
 
 
 def s34_big_curves(ctx: Ctx) -> None:
@@ -1076,7 +1078,7 @@ def s34_big_curves(ctx: Ctx) -> None:
 
 
 def s33_open_tcp_duration(ctx: Ctx) -> None:
-    """Measurement (errata ER-3): how long a plain OPEN_TCP takes to give up."""
+    """Measurement: how long a plain OPEN_TCP takes to give up."""
     for label, host in (("an address that drops SYNs", BLACKHOLE),
                         ("an unresolvable name", UNRESOLVABLE)):
         check_start(f"OPEN_TCP to {label}: time to 11 / 84")
@@ -1091,7 +1093,7 @@ def s33_open_tcp_duration(ctx: Ctx) -> None:
 SCENARIOS = [
     Scenario("S0", "startup-sweep", 1, "control", "every CLOSE 0..15 answers 00 or 12,…: 9",
              s0_startup_sweep),
-    Scenario("S1", "capability", 1, "tls", "16-byte v1 record, ready 0x07, ER-4 lengths",
+    Scenario("S1", "capability", 1, "tls", "16-byte v1 record, ready 0x07, length checks",
              s1_capability),
     Scenario("S20", "plain-tcp", 1, "control", "OPEN_TCP/WRITE/READ/CLOSE round trip",
              s20_plain_tcp, ("peer",)),
@@ -1103,7 +1105,7 @@ SCENARIOS = [
              s5_refused_cert, ("fixture",)),
     Scenario("S19e", "abort-then-release", 1, "tls", "ABORTed OPEN: [14] = 1, $25 -> 1, then 0",
              s19e_abort_release, ("fixture",)),
-    Scenario("S30", "bundle-real-hosts", 1, "tls", "7.1: BUNDLE to H1-H3, SPKI = Mac's, HTTP/1.",
+    Scenario("S30", "bundle-real-hosts", 1, "tls", "BUNDLE to H1-H3, SPKI as seen here, HTTP/1.",
              s30_real_hosts, ("internet", "crypto")),
     Scenario("S6", "peer-close-notify", 2, "tls", "3000 B then $0000 + 01; CLOSE -> 12,…: 9",
              s6_peer_close, ("fixture",)),
@@ -1135,11 +1137,11 @@ SCENARIOS = [
              s18_block_max, ("fixture",)),
     Scenario("S14", "reset-cleanup", 2, "tls", "reset closes both, b3 clear, then 97",
              s14_reset_cleanup, ("fixture",)),
-    Scenario("S32", "write-stall-close-cap", 2, "tls", "FFFF + 12/17 sticky; CLOSE time (ER-17)",
+    Scenario("S32", "write-stall-close-cap", 2, "tls", "FFFF + 12/17 sticky; CLOSE time",
              s32_write_stall, ("fixture",), default=False),
     Scenario("S34", "p384-p521-custom", 2, "measurement", "handshake ms for P-384/P-521, 1.3/1.2",
              s34_big_curves, ("fixture",), default=False),
-    Scenario("S33", "open-tcp-duration", 2, "measurement", "seconds to 11 / 84 (ER-3)",
+    Scenario("S33", "open-tcp-duration", 2, "measurement", "seconds to 11 / 84",
              s33_open_tcp_duration, (), default=False),
 ]
 BY_NAME = {s.name: s for s in SCENARIOS} | {s.sid: s for s in SCENARIOS}
@@ -1197,7 +1199,7 @@ def run_scenario(ctx: Ctx, scenario: Scenario, route: str) -> Outcome:
                + (f": {outcome.reason}" if outcome.reason else ""))
         ctx.outcome = None
     if outcome.verdict == "FAIL":
-        # Leave nothing behind for the next scenario (ER-2's sweep).
+        # Leave nothing behind for the next scenario (the startup sweep).
         try:
             ctx.sweep()
         except Failure as exc:
@@ -1206,7 +1208,7 @@ def run_scenario(ctx: Ctx, scenario: Scenario, route: str) -> Outcome:
 
 
 def expectation_met(outcomes: list[Outcome], expect: str) -> tuple[bool, list[str]]:
-    """Whether the run shows what --expect asks, from evidence only (adversarial1 H-1).
+    """Whether the run shows what --expect asks, from evidence only.
 
     A SKIP or ERROR of any selected scenario is a problem; only N/A (by design
     not on this route) is set aside. green: every control passes, every TLS
@@ -1230,7 +1232,7 @@ def expectation_met(outcomes: list[Outcome], expect: str) -> tuple[bool, list[st
         kind = o.scenario.kind
         if kind == "control":
             if o.verdict != "PASS":
-                problems.append(f"{label}: the control failed, so the bench is not sound: {o.reason}")
+                problems.append(f"{label}: the control failed, so the setup is not sound: {o.reason}")
         elif kind == "measurement":
             if expect == "green" and o.verdict != "PASS":
                 problems.append(f"{label}: the measurement failed: {o.reason}")
@@ -1247,7 +1249,7 @@ def expectation_met(outcomes: list[Outcome], expect: str) -> tuple[bool, list[st
     if not outcomes:
         problems.append("no scenario ran")
     # A scenario selected for this run but N/A on every route of it ran nowhere
-    # (e.g. --route native with S19e): never evidence (adversarial2 M-3).
+    # (e.g. --route native with S19e): never evidence.
     for sid in dict.fromkeys(o.scenario.sid for o in outcomes):
         if all(o.verdict == "N/A" for o in outcomes if o.scenario.sid == sid):
             problems.append(f"{sid}: selected, but N/A on every route of this run, so it ran nowhere")
@@ -1280,15 +1282,15 @@ LOCK_PID_ENV = "NET_TLS_LOCK_PID"
 def lock_check(host: str, require: bool = False) -> dict:
     """The harness DeviceLock: refuse if another live process holds this device.
 
-    With `require` (or when the runbook's lockrun exported NET_TLS_LOCK_PID),
+    With `require` (or when a locking wrapper exported NET_TLS_LOCK_PID),
     the lock must be HELD, by that very process, and that process must be this
     one or an ancestor of it. A free lock is then a refusal: the user has left
-    the session's locked shell, or never entered it (adversarial2 M-5).
+    the locked shell, or never entered it.
     """
     try:
         from c64_test_harness.backends.device_lock import DeviceLock  # noqa: PLC0415
     except ImportError as exc:
-        # Fail closed, as run-tests-locked does (adversarial1 L-5).
+        # Fail closed: no lock check means no run.
         raise Failure(f"the harness DeviceLock is not importable ({exc}); refusing to run "
                       f"unlocked against {host}") from exc
     marker = os.environ.get(LOCK_PID_ENV, "")
@@ -1296,30 +1298,30 @@ def lock_check(host: str, require: bool = False) -> dict:
     if require:
         if not marker.isdigit():
             raise Failure(f"--require-lock, but {LOCK_PID_ENV} is not set: this shell is not the "
-                          f"runbook's locked shell (lockrun). Nothing was run or changed")
+                          f"shell of a locking wrapper. Nothing was run or changed")
         if int(marker) == os.getpid() and DeviceLock.held_by_this_process(host):
             return {"lock": f"held by this process ({marker})"}
         holder = DeviceLock.foreign_holder(host)
         if (not holder or holder.get("pid") != int(marker)
                 or int(marker) not in ancestor_pids()):
             raise Failure(f"--require-lock: the session lock on {host} is not held by our "
-                          f"lockrun (pid {marker}); holder {holder or 'none'}. Nothing was run "
-                          f"or changed")
-        return {"lock": f"held by our lockrun, pid {marker}"}
+                          f"locking wrapper (pid {marker}); holder {holder or 'none'}. Nothing "
+                          f"was run or changed")
+        return {"lock": f"held by our locking wrapper, pid {marker}"}
     holder = DeviceLock.foreign_holder(host)
     if not holder:
         return {"lock": "free"}
     if holder.get("pid") in ancestor_pids():
-        return {"lock": f"held by our ancestor pid {holder.get('pid')} (lockrun or run-tests-locked)"}
-    raise Failure(f"{host} is held by pid {holder.get('pid')} ({holder}); another lane is on "
-                  f"the bench. Use run-tests-locked, or wait")
+        return {"lock": f"held by our ancestor pid {holder.get('pid')} (a locking wrapper)"}
+    raise Failure(f"{host} is held by pid {holder.get('pid')} ({holder}); another run is using "
+                  f"the device. Run under its lock, or wait")
 
 
 def apply_settings(device, set_wifi: bool, original: dict, header: dict) -> dict:
     """Read every setting first; refuse before writing anything; then set and read back.
 
     `original` is the caller's, filled as each setting is written, so whatever
-    happens after a write the caller can restore it (adversarial2 M-2).
+    happens after a write the caller can restore it.
     """
     before: dict[str, str] = {}
     header["settings_before"] = before
@@ -1335,7 +1337,7 @@ def apply_settings(device, set_wifi: bool, original: dict, header: dict) -> dict
     wifi = before.get(WIFI_SETTING, "absent")
     if wifi != "absent" and wifi.strip() != "Enabled" and not set_wifi:
         # One-way on the U64: switching it on cannot be undone by this suite, so
-        # only an explicit --set-wifi may do it (adversarial1 M-5).
+        # only an explicit --set-wifi may do it.
         raise SetupRefused(f"{WIFI_SETTING} is {wifi!r}; this suite needs it 'Enabled' and does "
                            f"not switch it on without --set-wifi (one-way on the U64). Nothing "
                            f"was changed")
@@ -1363,7 +1365,7 @@ class SetupRefused(Failure):
 
 
 def wait_ready(link: Link) -> dict:
-    """On M3, wait for INFO [4] b0-b2; on stock, the 21 says there is nothing to wait for."""
+    """With TLS, wait for INFO [4] b0-b2; on stock, the 21 says there is nothing to wait for."""
     deadline = time.monotonic() + READY_WAIT_SECONDS
     while True:
         r = link.command(info_command(INFO_CAPABILITY))
@@ -1388,8 +1390,8 @@ def git_head() -> str:
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="M3 TLS sockets on the UCI network target: "
-                                                 "RED on stock firmware, GREEN on M3.")
+    parser = argparse.ArgumentParser(description="TLS sockets on the UCI network target: "
+                                                 "RED on stock firmware, GREEN with TLS.")
     cli.add_device_arguments(parser, password=None, timeout=30.0, colour=False)
     parser.add_argument("--test", action="append",
                         help="A scenario id or name (repeatable), 'all', or 'tier1'. Default: "
@@ -1408,8 +1410,8 @@ def parse_args(argv=None):
     parser.add_argument("--strict-sni", action="store_true",
                         help="S5 also requires the BUNDLE ClientHello to carry the SNI.")
     parser.add_argument("--require-lock", action="store_true",
-                        help="Refuse unless the device's DeviceLock is held by the runbook's "
-                             "lockrun (NET_TLS_LOCK_PID), this process or an ancestor of it.")
+                        help="Refuse unless the device's DeviceLock is held by the process in "
+                             "NET_TLS_LOCK_PID, this process or an ancestor of it.")
     parser.add_argument("--set-wifi", action="store_true",
                         help="Switch 'WiFi Enabled' on if it is off. One-way on the U64 (a "
                              "reboot is the only way back), so without it the suite refuses.")
@@ -1422,7 +1424,7 @@ def parse_args(argv=None):
 
 
 def select(args) -> list[Scenario]:
-    """The scenarios asked for, always led by S0: every route starts with ER-2's sweep."""
+    """The scenarios asked for, always led by S0: every route starts with the startup sweep."""
     wanted = args.test or []
     if not wanted:
         return [s for s in SCENARIOS if s.default]
@@ -1464,7 +1466,7 @@ def run_routes(links: list[tuple[str, Callable[[], Link], Callable[[], Link] | N
         try:
             link = make_link()
         except Failure as exc:
-            # adversarial1 M-1: the other routes' records stay; this one is an ERROR.
+            # The other routes' records stay; this one is an ERROR.
             warn(f"the {route} route could not start: {exc}")
             for scenario in scenarios:
                 failed = Outcome(scenario, route, "ERROR", reason=f"the {route} route could not "
@@ -1480,7 +1482,7 @@ def run_routes(links: list[tuple[str, Callable[[], Link], Callable[[], Link] | N
                 missing = [need for need in scenario.needs if need not in available]
                 if missing:
                     # The run was meant to have it (the fixture could not start,
-                    # say): an ERROR, never a quiet SKIP (adversarial1 H-1).
+                    # say): an ERROR, never a quiet SKIP.
                     outcome = Outcome(scenario, route, "ERROR",
                                       reason=f"this run has no {', '.join(missing)}")
                     judge(outcome)
@@ -1533,10 +1535,10 @@ def main(argv=None) -> int:
     header = {"suite": SUITE, "suite_commit": git_head(), "started": stamp, "expect": args.expect,
               "label": args.label, "host": args.host, "routes": routes,
               "scenarios_selected": [s.sid for s in scenarios]}
-    # Before anything touches the device: a lane holding the lock is mid-run,
+    # Before anything touches the device: a run holding the lock is mid-run,
     # and even the reset below would land in the middle of its work.
     try:
-        with check("no other lane holds this device (harness DeviceLock)"):
+        with check("no other run holds this device (harness DeviceLock)"):
             header["lock"] = lock_check(target.device, args.require_lock)
             detail(header["lock"]["lock"])
     except Failure as exc:
@@ -1549,27 +1551,27 @@ def main(argv=None) -> int:
     rest_uci = Uci(computer.machine, BOUND_OPEN)
     ok = False
     setup_error = None
-    touched = False     # whether anything on the device was changed (adversarial2 M-2)
+    touched = False     # whether anything on the device was changed
     try:
         with check("read /v1/info: product, firmware, core, fpga, git hash"):
             info = device.info()
             header["device"] = {"product": info.product, "firmware_version": info.firmware_version,
                                 "fpga_version": info.fpga_version, **info.extra}
             detail(json.dumps(header["device"]))
-        check_start("/v1/info uci_tls (section 6) is present")
+        check_start("/v1/info uci_tls is present")
         if "uci_tls" in info.extra:
             check_ok(json.dumps(info.extra["uci_tls"]))
         else:
-            # Not built at esp-tls/m3 bf55063c, so not part of the RED/GREEN verdict.
-            check_warn("absent (section 6 is not implemented on this image); not judged")
+            # Not implemented in this firmware yet, so not part of the RED/GREEN verdict.
+            check_warn("absent (not implemented on this image); not judged")
         header["settings"] = apply_settings(device, args.set_wifi, original, header)
         touched = True
-        with check("reset the C64 so nothing another lane left is still driving the UCI"):
+        with check("reset the C64 so nothing another program left is still driving the UCI"):
             computer.machine.reset(force=True)
             rest_uci.release()
         if not interface_present(rest_uci):
             raise Failure("$DF1B-$DF1F all read $FF: no command interface on this machine")
-        with check("wait for INFO $FF ready bits (module, entropy, time), up to 90 s on M3"):
+        with check("wait for INFO $FF ready bits (module, entropy, time), up to 90 s with TLS"):
             header["ready"] = wait_ready(RestLink(rest_uci))
             detail(json.dumps(header["ready"]))
         available = {"internet"}
@@ -1582,7 +1584,7 @@ def main(argv=None) -> int:
             available |= {"fixture", "crypto"}
             check_ok(bind_ip)
         except (RuntimeError, OSError) as exc:
-            # Every scenario that needs it then records ERROR (adversarial1 H-1).
+            # Every scenario that needs it then records ERROR.
             check_fail(f"{exc}; the scenarios that need it will be ERROR")
         header["fixture"] = {"bind_ip": bind_ip, "cryptography": fx.HAVE_CRYPTOGRAPHY}
 

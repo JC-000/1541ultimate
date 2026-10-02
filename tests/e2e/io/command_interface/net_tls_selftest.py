@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# Self-test: the M3 TLS suite against a simulated device; needs no hardware.
+# Self-test: the UCI TLS suite against a simulated device; needs no hardware.
 
 """Check net_tls_test.py without a device: it must go GREEN, RED, and red for the right reason.
 
 Three parts, none of which touches any Ultimate:
 
-1. ER-1 deadlines on the REST route. `RestLink` drives the real `uci.Uci`
+1. The client deadlines on the REST route. `RestLink` drives the real `uci.Uci`
    against fake registers ($DF1B-$DF1F in Python) that stay busy as long as a
    test says. A reply inside its bound is collected; a reply past it is
    ABORTed and the link waits for bit 2; a bit 2 that never clears is a
@@ -27,14 +27,14 @@ Three parts, none of which touches any Ultimate:
    protocol (multi-block replies, an ABORT in PROCESSING) and the result files,
    for Tier 1 without S30 (whose hosts are real). --expect green on the m3
    flavour and --expect red on stock must both exit 0, and swapped, both 1.
-6. adversarial2: a WiFi refusal changes no setting; a scenario selected but run on
-   no route fails the run; a READ answering 00,OK with no data is bounded; and
-   --require-lock refuses outside the session's DeviceLock.
-5. Verdict and setup cases (m3e2e-adversarial1 H-1, M-1, M-5, M-7), through
-   main() the same way: a run whose evidence is missing must FAIL, never pass on
-   SKIPs (no fixture; S32 on REST; only a measurement on stock); a native route
-   that cannot start keeps the REST route's records; WiFi is never switched on
-   without --set-wifi; and a read budget measures idle time, not total time.
+6. Setup and bounds: a WiFi refusal changes no setting; a scenario selected
+   but run on no route fails the run; a READ answering 00,OK with no data is
+   bounded; and --require-lock refuses outside the caller's device lock.
+5. Verdict and setup cases, through main() the same way: a run whose evidence
+   is missing must FAIL, never pass on SKIPs (no fixture; S32 on REST; only a
+   measurement on stock); a native route that cannot start keeps the REST
+   route's records; WiFi is never switched on without --set-wifi; and a read
+   budget measures idle time, not total time.
 
 Usage: net_tls_selftest.py [--quick]   (--quick skips the m3 flavour's 15 s
 handshake-timeout scenario and the 16 KB record)
@@ -131,7 +131,7 @@ class FakeRegisters:
 
 
 def part1() -> bool:
-    section("part 1: ER-1 deadlines over fake registers")
+    section("part 1: client deadlines over fake registers")
     ok = True
     saved = proto.POST_ABORT_MIN
     proto.POST_ABORT_MIN = 1.5
@@ -160,7 +160,7 @@ def part1() -> bool:
                     if got != wanted:
                         raise Failure(f"{got}, expected {wanted}")
                     if took > bound + proto.POST_ABORT_MIN + 1.0:
-                        raise Failure(f"took {took:.2f}s, past the ER-1 deadline")
+                        raise Failure(f"took {took:.2f}s, past the client deadline")
             except Failure:
                 ok = False
         try:
@@ -441,15 +441,15 @@ def part5(world: "World") -> bool:
     ok = True
     t1 = ["--test", "tier1", "--module-minor", "308", "--route", "rest"]
     cases = [
-        ("P2: m3, --expect green, the fixture cannot start -> exit 1",
+        ("m3, --expect green, the fixture cannot start -> exit 1",
          "m3", ["--expect", "green", *t1], {"fixture": False}, 1),
-        ("P3: stock, --expect red, the fixture cannot start -> exit 1",
+        ("stock, --expect red, the fixture cannot start -> exit 1",
          "stock", ["--expect", "red", *t1], {"fixture": False}, 1),
-        ("P7: mutant bundle-accepts-all, --expect green, no fixture -> exit 1",
+        ("mutant bundle-accepts-all, --expect green, no fixture -> exit 1",
          "bundle-accepts-all", ["--expect", "green", *t1], {"fixture": False}, 1),
-        ("P5: stock, --expect green, only S32 on REST (route n/a) -> exit 1",
+        ("stock, --expect green, only S32 on REST (route n/a) -> exit 1",
          "stock", ["--expect", "green", "--test", "S32", "--route", "rest"], {}, 1),
-        ("P6: stock, --expect red, only the S33 measurement -> exit 1",
+        ("stock, --expect red, only the S33 measurement -> exit 1",
          "stock", ["--expect", "red", "--test", "S33", "--route", "rest"], {}, 1),
         ("WiFi Disabled and no --set-wifi: setup refuses, WiFi untouched -> exit 1",
          "m3", ["--expect", "green", "--test", "S1", "--route", "rest", "--module-minor", "308"],
@@ -473,7 +473,7 @@ def part5(world: "World") -> bool:
         except Failure:
             ok = False
     try:
-        with check("M-1: the native agent fails to start: REST records kept, native ERROR, exit 1"):
+        with check("the native agent fails to start: REST records kept, native ERROR, exit 1"):
             code, run, _ = run_main(world, "m3", ["--expect", "green", "--test", "S1",
                                                   "--module-minor", "308"], native_fails=True)
             records = [(o["route"], o["sid"], o["verdict"]) for o in run["scenarios"]]
@@ -487,7 +487,7 @@ def part5(world: "World") -> bool:
     except Failure:
         ok = False
     try:
-        with check("M-7: read_until's budget is idle time: 2000 B over 50 ms READs, budget 0.5 s"):
+        with check("read_until's budget is idle time: 2000 B over 50 ms READs, budget 0.5 s"):
             ctx = suite.Ctx(SlowReads(), SimpleNamespace(), None, None, None, [])
             got, end = ctx.read_until(0, 2000, budget=0.5)
             if len(got) != 2000 or end is not None:
@@ -513,10 +513,10 @@ class EmptyOk(proto.Link):
 
 
 def part6(world: "World") -> bool:
-    section("part 6: adversarial2 cases")
+    section("part 6: setup refusals and bounded reads")
     ok = True
     try:
-        with check("M-2: WiFi off, no --set-wifi: refused before ANY setting is written"):
+        with check("WiFi off, no --set-wifi: refused before ANY setting is written"):
             code, run, double = run_main(world, "m3", ["--expect", "green", "--test", "S1", "--route",
                                                        "rest", "--module-minor", "308"],
                                          wifi="Disabled")
@@ -531,7 +531,7 @@ def part6(world: "World") -> bool:
     except Failure:
         ok = False
     try:
-        with check("M-3: --route native with S19e selected: S19e ran on no route -> exit 1"):
+        with check("--route native with S19e selected: S19e ran on no route -> exit 1"):
             outcomes = [suite.Outcome(suite.BY_NAME["S0"], "native", "PASS"),
                         suite.Outcome(suite.BY_NAME["S1"], "native", "PASS"),
                         suite.Outcome(suite.BY_NAME["S19e"], "native", "N/A")]
@@ -544,7 +544,7 @@ def part6(world: "World") -> bool:
     except Failure:
         ok = False
     try:
-        with check("M-4: READ answering 00,OK with no data: read_until fails, bounded"):
+        with check("READ answering 00,OK with no data: read_until fails, bounded"):
             link = EmptyOk()
             ctx = suite.Ctx(link, SimpleNamespace(), None, None, None, [])
             try:
@@ -557,7 +557,7 @@ def part6(world: "World") -> bool:
     except Failure:
         ok = False
     try:
-        with check("M-5: --require-lock with no session lock: refused, nothing changed"):
+        with check("--require-lock with no session lock: refused, nothing changed"):
             code, run, double = run_main(world, "m3", ["--expect", "green", "--test", "S1", "--route",
                                                        "rest", "--module-minor", "308",
                                                        "--require-lock"])
@@ -567,7 +567,7 @@ def part6(world: "World") -> bool:
     except Failure:
         ok = False
     try:
-        with check("M-5: --require-lock inside this process's own lock (NET_TLS_LOCK_PID) runs -> exit 0"):
+        with check("--require-lock inside this process's own lock (NET_TLS_LOCK_PID) runs -> exit 0"):
             from c64_test_harness.backends.device_lock import DeviceLock  # noqa: PLC0415
             lock = DeviceLock("127.0.0.1")
             if not lock.acquire(timeout=10):
@@ -591,13 +591,13 @@ SLOW_READER_SECONDS = 65.0
 
 
 def part7(world: "World") -> bool:
-    """The bench's S13-over-REST failure, modelled: a client that reads after more than 60 s.
+    """A device run's S13-over-REST failure, modelled: a client that reads after more than 60 s.
 
     On the REST route the device needed about 250 s to read a 16 KB record before
     it wrote (one REST call per byte). A fixture whose per-connection idle
     timeout is shorter than the slowest route gives up and closes, and the
     device's WRITE meets a reset: a fixture failure reported against the
-    firmware (green-20261001T023036Z S13 rest).
+    firmware.
     """
     section("part 7: the fixture outlasts a slow reader (S13 over REST)")
     ok = True

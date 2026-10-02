@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""The Mac side of the M3 TLS suite: a throwaway PKI and TLS servers that log what they saw.
+"""The host side of the UCI TLS suite: a throwaway PKI and TLS servers that log what they saw.
 
-M3-SPEC section 7 "Server fixture on the Mac". Everything the device claims is
+The servers run on this machine. Everything the device claims is
 held against what the server logged for the same connection: the version and
 suite the server negotiated, the SNI it received, the sha256 of the plaintext
 it received, and whether the client ended with close_notify, a bare FIN or a
@@ -50,9 +50,9 @@ FIXTURE_NAME = "m3-fixture.test"
 WRONG_NAME = "wrong-host.test"
 ACCEPT_TIMEOUT = 60.0
 # How long a connection may sit idle before the server gives up on it. It has to
-# outlast the slowest route: over REST every byte is one REST call, and the bench
-# measured about 250 s for the device to read S13's 16 KB record before it wrote
-# (green-20261001T023036Z: at 60 s the server closed and the WRITE met a reset).
+# outlast the slowest route: over REST every byte is one REST call, and a device
+# run measured about 250 s for the device to read S13's 16 KB record before it
+# wrote (at 60 s the server closed and the WRITE met a reset).
 # 600 s covers that with room and still bounds every wait; TlsServer.close() ends
 # whatever is still open, so a finished scenario does not leave threads waiting.
 CONN_TIMEOUT = 600.0
@@ -69,7 +69,7 @@ def payload(seed: int, length: int) -> bytes:
 
 
 def spki_sha256(cert_der: bytes) -> bytes:
-    """SHA-256 of a certificate's SubjectPublicKeyInfo, digest order (1.1, 1.3)."""
+    """SHA-256 of a certificate's SubjectPublicKeyInfo, digest order."""
     cert = x509.load_der_x509_certificate(cert_der)
     spki = cert.public_key().public_bytes(serialization.Encoding.DER,
                                           serialization.PublicFormat.SubjectPublicKeyInfo)

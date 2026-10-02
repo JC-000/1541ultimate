@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""The M3 TLS commands of the UCI network target, as bytes, and two ways to send them.
+"""The TLS commands of the UCI network target, as bytes, and two ways to send them.
 
-M3-SPEC v1 (FROZEN, sha256 c265fdfc...) with errata v1.1 and v1.2 is the
-contract. This module knows the byte layouts of $21-$25 and of the existing
-commands a TLS handle uses ($07, $09, $10, $11), parses the replies, and
-carries every command over a `Link` with the client deadlines of errata ER-1:
+The protocol spec is the contract. This module knows the byte layouts of
+$21-$25 and of the existing commands a TLS handle uses ($07, $09, $10, $11),
+parses the replies, and carries every command over a `Link` with the client
+deadlines:
 
   - B = 45 s from the PUSH for OPEN_TLS / START_TLS, 12 s for every other TLS
-    command, and 45 s (advice, ER-3) for OPEN_TCP;
+    command, and 45 s (advice) for OPEN_TCP;
   - at PUSH + B with no reply, write ABORT ($04 alone) and wait for $DF1C bit 2
     to read 0, up to the later of PUSH + B and ABORT + 12 s;
   - bit 2 still 1 then: the interface is wedged, and the caller resets the C64.
@@ -33,7 +33,7 @@ from uci import (CTRL_ABORT, CTRL_CLR_ERR, CTRL_DATA_ACC, CTRL_PUSH_CMD, MAX_REP
                  REG_COMMAND, ST_ABORT_P, ST_ERROR, ST_STATE_BUSY, ST_STATE_DATA_LAST, ST_STATE_DATA_MORE,
                  ST_STATE_IDLE, ST_STATE_MASK, TARGET_NETWORK, Uci, describe_status)
 
-# -- command codes (network_target.h at esp-tls/m3 bf55063c) ------------------
+# -- command codes (network_target.h) ----------------------------------------
 NET_CMD_IDENTIFY = 0x01
 NET_CMD_OPEN_TCP = 0x07
 NET_CMD_OPEN_UDP = 0x08
@@ -61,7 +61,7 @@ INFO_CAPABILITY_BYTES = 16
 INFO_HANDLE_BYTES = 48
 OPEN_REPLY_BYTES = 8
 
-# -- the deadlines of errata ER-1 (and ER-3's advice for OPEN_TCP) -------------
+# -- the client deadlines (and the advice for OPEN_TCP) ----------------------
 BOUND_OPEN = 45.0
 BOUND_OTHER = 12.0
 BOUND_OPEN_TCP = 45.0
@@ -69,7 +69,7 @@ POST_ABORT_MIN = 12.0
 # A non-TLS command (IDENTIFY, CLOSE of a plain socket) is immediate.
 BOUND_PLAIN = 12.0
 
-# -- what M3 answers, verbatim where the text is fixed (section 2) ---------
+# -- what the firmware answers, verbatim where the text is fixed ------------
 STATUS_OK = b"00,OK"
 STATUS_UNKNOWN_COMMAND = b"21,UNKNOWN COMMAND"
 STATUS_INVALID_PARAMS = b"81,INVALID PARAMS"
@@ -91,9 +91,9 @@ READ_MAX = 1472
 WRITE_MAX = 892
 CA_MAX = 1472
 CA_CHUNK = 889
-HANDLE_RANGE = range(16)   # this firmware's handles (errata ER-9)
+HANDLE_RANGE = range(16)   # this firmware's handles
 
-# The IANA numbers the OPEN reply and INFO carry (section 1.7).
+# The IANA numbers the OPEN reply and INFO carry.
 TLS13 = 0x0304
 TLS12 = 0x0303
 TLS13_SUITES = {0x1301, 0x1302, 0x1303}
@@ -102,7 +102,7 @@ GROUPS = {0x001D: "x25519", 0x0017: "secp256r1", 0x0018: "secp384r1", 0x0019: "s
 
 
 def status_code(status: bytes) -> int | None:
-    """The two-digit code a status line starts with (errata ER-8), or None."""
+    """The two-digit code a status line starts with, or None."""
     if len(status) >= 2 and status[:2].isdigit():
         return int(status[:2])
     return None
@@ -115,7 +115,7 @@ class Result:
     data: bytes
     status: bytes
     elapsed: float
-    # ABORTed at PUSH + B because no reply came in time (ER-1). The reply, if
+    # ABORTed at PUSH + B because no reply came in time. The reply, if
     # it came later, was dropped by the ABORT.
     aborted: bool = False
 
@@ -137,8 +137,8 @@ class Result:
 class LinkLost(Failure):
     """The route can no longer carry commands: wedged, or the agent stopped.
 
-    The caller resets the C64, which is ER-1's (and ER-11's) recovery, and
-    which also closes every TLS session the network target holds (4.5).
+    The caller resets the C64, which is the protocol spec's recovery for a
+    wedge, and which also closes every TLS session the network target holds.
     """
 
 
@@ -153,7 +153,7 @@ class AbortedCommand:
 
 
 def bound_for(command: bytes) -> float:
-    """ER-1's B for this command."""
+    """The client deadline B for this command."""
     code = command[1] if len(command) >= 2 else 0
     if code in (NET_CMD_OPEN_TLS, NET_CMD_START_TLS):
         return BOUND_OPEN
@@ -194,12 +194,12 @@ class Link:
         raise Failure(f"the {self.name} route cannot ABORT a command in flight")
 
     def startup_abort(self) -> float:
-        """ER-2: presence check, $0C, then wait for bit 2 up to 45 s. Seconds taken."""
+        """Startup: presence check, $0C, then wait for bit 2 up to 45 s. Seconds taken."""
         raise NotImplementedError
 
 
 class RestLink(Link):
-    """The registers over REST DMA, with ER-1's deadlines and ABORT."""
+    """The registers over REST DMA, with the client deadlines and ABORT."""
 
     name = "rest"
     can_abort_in_flight = True
@@ -216,7 +216,7 @@ class RestLink(Link):
             if not status & ST_ABORT_P:
                 return status
             if time.monotonic() > deadline:
-                raise LinkLost(f"$DF1C bit 2 still set at the ER-1 deadline: "
+                raise LinkLost(f"$DF1C bit 2 still set at the client deadline: "
                                f"{describe_status(status)}. The interface is wedged")
             time.sleep(self.poll)
 
@@ -246,7 +246,7 @@ class RestLink(Link):
         wait_from = pushed
         wait_bound = bound
         while True:
-            # ER-1: B bounds the first block; each later block gets 12 s from
+            # B bounds the first block; each later block gets 12 s from
             # the data-accept of the block before it.
             while True:
                 status = self.uci.status()
@@ -413,7 +413,7 @@ def start_tls_command(handle: int, trust: int, flags: int = 0, name: str | None 
 
 @dataclass
 class Capability:
-    """TLS_INFO $FF (1.3 with errata ER-15/ER-16)."""
+    """TLS_INFO $FF: the capability record."""
     raw: bytes
 
     @property
@@ -470,7 +470,7 @@ class Capability:
 
 @dataclass
 class OpenReply:
-    """The 8 bytes of a successful OPEN_TLS / START_TLS (1.1)."""
+    """The 8 bytes of a successful OPEN_TLS / START_TLS."""
     raw: bytes
 
     @property
@@ -501,7 +501,7 @@ class OpenReply:
 
 @dataclass
 class HandleInfo:
-    """TLS_INFO for a handle: 48 bytes (1.3)."""
+    """TLS_INFO for a handle: 48 bytes."""
     raw: bytes
 
     @property
@@ -558,7 +558,7 @@ class ReadReply:
 
     @property
     def gone(self) -> bool:
-        """01/05: the handle is closed and untracked; never CLOSE it (1.6)."""
+        """01/05: the handle is closed and untracked; never CLOSE it."""
         return self.header == 0 and status_code(self.status) in (1, 5)
 
 

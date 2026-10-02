@@ -404,11 +404,11 @@ SUITES: Sequence[Suite] = (
     # able to reach it; the scenarios that need that skip where it cannot.
     Suite("e2e", "uci-net-target", "tests/e2e/io/command_interface/net_target_test.py",
           "-H @HOST@ -p @PASS@ -t @TIMEOUT@ --test all", profile=profiles.DEEP),
-    # The M3 TLS suite against a simulated device (GREEN, RED, each mutant caught,
-    # and no verdict without evidence). Needs no device. The rig suite itself,
+    # The UCI TLS suite against a simulated device (GREEN, RED, each mutant caught,
+    # and no verdict without evidence). Needs no device. The device suite itself,
     # net_tls_test.py, is deliberately NOT registered: it is opt-in by name only
     # (it may switch WiFi on with --set-wifi, needs this host as a TLS peer and the
-    # Internet, and is RED by design on every image without M3). See
+    # Internet, and is RED by design on every image without the TLS commands). See
     # tests/lib/registry_test.py NOT_SUITES.
     Suite("e2e", "uci-net-tls-selftest", "tests/e2e/io/command_interface/net_tls_selftest.py",
           "", profile=profiles.DEEP),

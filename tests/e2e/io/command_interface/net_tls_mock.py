@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""A simulated network target, for checking the M3 TLS suite without hardware.
+"""A simulated network target, for checking the UCI TLS suite without hardware.
 
 Two flavours, each a `net_tls_proto.Link`:
 
-  "m3"     answers $21-$25 the way M3-SPEC v1 + errata v1.1/v1.2 say, doing
+  "m3"     answers $21-$25 the way the protocol spec says, doing
            real TLS from this machine with Python's ssl module, so a scenario
            that passes against it has exercised its own oracle end to end;
-  "stock"  the firmware before M3: $21-$25 answer `21,UNKNOWN COMMAND`, and
+  "stock"  the firmware without the TLS commands: $21-$25 answer `21,UNKNOWN COMMAND`, and
            the plain commands ($01, $07, $09, $10, $11) work.
 
 And mutants of "m3", each breaking one rule a scenario claims to guard, so
@@ -119,7 +119,7 @@ class MockDevice(Link):
 
     def abort_in_flight(self, command: bytes, abort_after: float,
                         bound: float | None = None) -> AbortedCommand:
-        # ABORT never shortens a command (1.1): it runs to its end, and only
+        # ABORT never shortens a command: it runs to its end, and only
         # its reply is dropped.
         started = time.monotonic()
         self._dispatch(command)
@@ -135,7 +135,7 @@ class MockDevice(Link):
         return 0.0
 
     def reset(self) -> None:
-        """A C64 reset: every socket closed, CA EMPTY (4.5)."""
+        """A C64 reset: every socket closed, CA EMPTY."""
         for entry in self.handles.values():
             try:
                 entry.sock.close()

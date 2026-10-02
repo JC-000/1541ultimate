@@ -72,9 +72,9 @@ NOT_SUITES: dict[str, str] = {
     "tests/lib/observability/golden_test.py": "tier 4 of the observability suite",
     # Opt-in by name only, never by a profile: it can switch "WiFi Enabled" on
     # (--set-wifi; one-way on the U64), needs this host as a TLS peer and the
-    # Internet, and is RED by design on any image without M3. Run it directly;
+    # Internet, and is RED by design on any image without the TLS commands. Run it directly;
     # net_tls_selftest.py (registered) checks it without a device.
-    "tests/e2e/io/command_interface/net_tls_test.py": "opt-in M3 rig suite, run directly",
+    "tests/e2e/io/command_interface/net_tls_test.py": "opt-in TLS suite on a device, run directly",
 }
 
 # tests/lib/bootstrap.py is the one place that may compute a path into the

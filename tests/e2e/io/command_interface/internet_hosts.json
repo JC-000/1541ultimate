@@ -1,5 +1,5 @@
 {
-  "comment": "M3-SPEC 7.1 (S30): the default real hosts for BUNDLE mode, each VERIFIED in session-0928 castore-work/probe3/result.json (the 385-host probe under the IDF v5.3 top-only rule). The anchor column is a v5.3-rule fact, not a claim about the IDF 6 image. NET_TLS_INTERNET_HOSTS=h1,h2,... replaces this list for a run. A change to this file is a reviewed commit, like the castore anchors.",
+  "comment": "S30: the default real hosts for BUNDLE mode, each verified by a probe of 385 hosts under the IDF v5.3 top-only rule. The anchor column is a v5.3-rule fact, not a claim about the IDF 6 image. NET_TLS_INTERNET_HOSTS=h1,h2,... replaces this list for a run. A change to this file is a reviewed commit, like the CA store anchors.",
   "hosts": [
     {"id": "H1", "host": "www.google.com", "required": true,
      "recorded_top": "CN=GTS Root R4,O=Google Trust Services LLC,C=US",
