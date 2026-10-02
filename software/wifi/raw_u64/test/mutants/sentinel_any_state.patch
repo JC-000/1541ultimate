@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 15:10:19
-+++ b/main/tls_engine.c	2026-09-30 15:10:41
-@@ -522,8 +522,7 @@
+--- a/main/tls_engine.c	2026-10-01 19:59:10
++++ b/main/tls_engine.c	2026-10-01 20:00:50
+@@ -525,8 +525,7 @@
          // A TLS 1.2 ServerHello below the minimum: the 1.2 parser has set tls_version to the server's choice
          r->fail_reason = TLS_FAIL_VERSION_REFUSED;
          r->verify_flags = (uint16_t)s->ssl.tls_version;

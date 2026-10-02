@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 15:10:19
-+++ b/main/tls_engine.c	2026-09-30 15:10:41
-@@ -218,9 +218,6 @@
+--- a/main/tls_engine.c	2026-10-01 19:59:10
++++ b/main/tls_engine.c	2026-10-01 20:00:51
+@@ -221,9 +221,6 @@
  static uint8_t tls_set_clock(uint8_t time_source, uint32_t unix_time)
  {
      time_t floor = tls_build_time();

@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 15:10:19
-+++ b/main/tls_engine.c	2026-09-30 15:10:41
-@@ -363,6 +363,9 @@
+--- a/main/tls_engine.c	2026-10-01 19:59:10
++++ b/main/tls_engine.c	2026-10-01 20:00:51
+@@ -366,6 +366,9 @@
      char hostname[TLS_SNI_MAX_LEN + 1];
  
      *reason = TLS_OPEN_REASON_NONE;

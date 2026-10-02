@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 15:10:19
-+++ b/main/tls_engine.c	2026-09-30 15:10:41
-@@ -539,7 +539,7 @@
+--- a/main/tls_engine.c	2026-10-01 19:59:10
++++ b/main/tls_engine.c	2026-10-01 20:00:50
+@@ -542,7 +542,7 @@
                  r->fail_reason = TLS_FAIL_VERSION_REFUSED;
                  r->verify_flags = (m[4] << 8) | m[5]; // legacy_version: the version it chose
              } else if (!memcmp(tail, "\x44\x4F\x57\x4E\x47\x52\x44", 7) && (tail[7] <= 1)) {

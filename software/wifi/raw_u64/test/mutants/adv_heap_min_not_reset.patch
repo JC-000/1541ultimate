@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 15:10:19
-+++ b/main/tls_engine.c	2026-09-30 15:10:41
-@@ -408,8 +408,6 @@
+--- a/main/tls_engine.c	2026-10-01 19:59:10
++++ b/main/tls_engine.c	2026-10-01 20:00:51
+@@ -411,8 +411,6 @@
  
      if (tls_sessions_open() == 0) {
          // heap_min then reports the peak of this burst of sessions, not of the Wi-Fi start

@@ -1,9 +1,9 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 15:10:19
-+++ b/main/tls_engine.c	2026-09-30 15:10:41
-@@ -182,7 +182,7 @@
+--- a/main/tls_engine.c	2026-10-01 19:59:10
++++ b/main/tls_engine.c	2026-10-01 20:00:49
+@@ -185,7 +185,7 @@
      case TLS_TRUST_PIN:
-         // The key is the identity: chain, dates and name are not checked (U3). The mode comes from trust alone.
+         // The key is the identity: chain, dates and name are not checked. The mode comes from trust alone.
          *flags = 0;
 -        if ((depth == 0) && (!hashed || memcmp(s->stats.spki_sha256, s->pin, TLS_PIN_LEN) != 0)) {
 +        if ((depth == 0) && !hashed) {

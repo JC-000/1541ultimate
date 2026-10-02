@@ -1,7 +1,7 @@
 diff -ru a/main/rpc_dispatch.c b/main/rpc_dispatch.c
---- a/main/rpc_dispatch.c	2026-09-30 11:35:58
-+++ b/main/rpc_dispatch.c	2026-09-30 15:10:41
-@@ -673,9 +673,7 @@
+--- a/main/rpc_dispatch.c	2026-10-01 19:59:10
++++ b/main/rpc_dispatch.c	2026-10-01 20:00:51
+@@ -674,9 +674,7 @@
      case CMD_TLS_STATS:
      case CMD_TLS_CLOSE_ALL:
      case CMD_TLS_SET_CA:

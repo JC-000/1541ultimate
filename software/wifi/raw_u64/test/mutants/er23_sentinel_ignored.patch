@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 15:10:19
-+++ b/main/tls_engine.c	2026-09-30 15:10:41
-@@ -531,6 +531,10 @@
+--- a/main/tls_engine.c	2026-10-01 19:59:10
++++ b/main/tls_engine.c	2026-10-01 20:00:51
+@@ -534,6 +534,10 @@
          // ServerHello mbedTLS reassembled is looked at: only one without supported_versions chose TLS 1.2 or lower
          // (the version refused under REQUIRE_TLS13), and of those only one whose random ends in the RFC 8446 4.1.3
          // sentinel is a downgrade. Everything else, a ServerHello not found included, is fail_reason 0.

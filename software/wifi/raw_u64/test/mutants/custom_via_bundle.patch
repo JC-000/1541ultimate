@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-09-30 15:10:19
-+++ b/main/tls_engine.c	2026-09-30 15:10:41
-@@ -331,6 +331,7 @@
+--- a/main/tls_engine.c	2026-10-01 19:59:10
++++ b/main/tls_engine.c	2026-10-01 20:00:49
+@@ -334,6 +334,7 @@
              s->ca = custom_ca;
              s->ca->refs++;
              mbedtls_ssl_conf_ca_chain(&s->conf, &s->ca->crt, NULL);

@@ -1,14 +1,14 @@
 /*
  * engine_test.c
  *
- * Host test of the ESP32 TLS engine and its RPC handlers (M3-SPEC v1 section 5). It plays the Ultimate:
- * it builds every request byte by byte at the offsets the spec freezes (never from rpc_calls.h, so a
+ * Host test of the ESP32 TLS engine and its RPC handlers. It plays the Ultimate:
+ * it builds every request byte by byte at the protocol spec's offsets (never from rpc_calls.h, so a
  * layout slip on the ESP32 side fails here), runs the real rpc_dispatch.c and tls_engine.c against
- * mbedTLS 4.1.1 built with the ESP32's configuration, and moves the ciphertext to a local server (m3srv).
+ * mbedTLS 4.1.1 built with the ESP32's configuration, and moves the ciphertext to a local server (m3srv.c).
  *
  *   engine_test [CASE...]      runs every case (or the named ones), each in its own process
  * Environment: M3SRV (server binary), PKI (mkpki.sh output), LOGDIR, PORTBASE.
- * BASE_ENGINE builds it against the M2 engine (a846369f), where the TLS task and CLOSE_ALL/SET_CA do not exist:
+ * BASE_ENGINE builds it against the previous engine (a846369f), where the TLS task and CLOSE_ALL/SET_CA do not exist:
  * that build is how the RED runs are made.
  */
 #include <arpa/inet.h>
@@ -28,7 +28,7 @@
 #include "mbedtls/platform_time.h"
 #include "psa/crypto.h"
 
-/* ---- wire constants, from M3-SPEC v1 section 5.2 (not from rpc_calls.h) ---- */
+/* ---- wire constants, from the protocol spec (not from rpc_calls.h) ---- */
 enum { OPEN = 0x30, STEP = 0x31, CLOSE = 0x32, STATS = 0x33, CLOSE_ALL = 0x34, SET_CA = 0x35 };
 enum { BUNDLE = 0, CUSTOM = 1, PIN = 2 };
 enum { HANDSHAKING = 0, ESTABLISHED = 1, CLOSED = 2, FAILED = 3 };
@@ -209,7 +209,7 @@ static int rpc(uint8_t cmd, const void *payload, int len)
     put_request(cmd, payload, len);
     int before = transmitted;
 #ifdef BASE_ENGINE
-    switch (cmd) { // the M2 dispatcher's TLS cases; CLOSE_ALL and SET_CA did not exist (cmd_not_implemented)
+    switch (cmd) { // the previous dispatcher's TLS cases; CLOSE_ALL and SET_CA did not exist (cmd_not_implemented)
     case OPEN: cmd_tls_open(&B); break;
     case STEP: cmd_tls_step(&B); break;
     case CLOSE: cmd_tls_close(&B); break;
@@ -233,7 +233,7 @@ static int rpc(uint8_t cmd, const void *payload, int len)
     return B.size;
 }
 
-/* ---- request builders (offsets from 5.2; the payload starts after the 4-byte header) ---- */
+/* ---- request builders (offsets from the protocol spec; the payload starts after the 4-byte header) ---- */
 static uint8_t g_time_source = 1;
 static uint32_t g_unix_time;
 
@@ -522,7 +522,7 @@ static void client_pattern(uint8_t *p, int n, long off) { for (int i = 0; i < n;
 
 /* ================= cases ================= */
 
-/* 5.1: the TLS task, its queue, the dispatcher's stack */
+/* The TLS task, its queue, the dispatcher's stack */
 static void c_task(void)
 {
     fake_task_t *tls = find_task("TLS"), *disp = find_task("Dispatch Task");
@@ -538,11 +538,11 @@ static void c_task(void)
     CHECK(q2 == 1, "one tls_queue of depth 2 holding buffer pointers");
 }
 
-/* 5.1: a full queue answers at once with ESP_ERR_TIMEOUT, in the command's own reply shape; GET_RANDOM still runs */
+/* A full queue answers at once with ESP_ERR_TIMEOUT, in the command's own reply shape; GET_RANDOM still runs */
 static void c_queue_full(void)
 {
 #ifdef BASE_ENGINE
-    CHECK(0, "the M2 dispatcher has no TLS queue");
+    CHECK(0, "the previous dispatcher has no TLS queue");
 #else
     static command_buf_t held[2];
     for (int i = 0; i < 2; i++) {
@@ -574,7 +574,7 @@ static void c_queue_full(void)
 #endif
 }
 
-/* 5.2 STATS block_max_ms: the longest dispatcher iteration since boot */
+/* STATS block_max_ms: the longest dispatcher iteration since boot */
 static void c_block_max(void)
 {
     stats_r s = tls_stats(0xFF, 0);
@@ -628,7 +628,7 @@ static void c_open_args(void)
     g_time_source = 1;
     stats_r s = tls_stats(0xFF, 0);
     CHECK(s.sessions == 0, "no session opened by a refused OPEN");
-    // A refused OPEN touches nothing, not even an orphan in the slot it names (Q3)
+    // A refused OPEN touches nothing, not even an orphan in the slot it names
     CHECK(tls_open(0, 7, PIN, 0, 0, pin, "m3.test").err == 0, "a session in slot 0");
     CHECK(tls_open(0, 8, 3, 0, 0, pin, "m3.test").err == E_INVALID_ARG, "trust 3 into slot 0 refused");
     CHECK(tls_open(0, 0, PIN, 0, 0, pin, "m3.test").err == E_INVALID_ARG, "tag 0 into slot 0 refused");
@@ -647,7 +647,7 @@ static void c_heap_min(void)
     CHECK(monitor_starts == before + 1, "not restarted with a session open (%d)", monitor_starts - before);
 }
 
-/* 5.1 the entropy gate: reason 1 and no random byte drawn */
+/* The entropy gate: reason 1 and no random byte drawn */
 static void c_no_entropy(void)
 {
     entropy = ENTROPY_NONE;
@@ -659,7 +659,7 @@ static void c_no_entropy(void)
     CHECK(rng_draws == draws, "no random bytes drawn before the gate");
 }
 
-/* 3.5 time: BUNDLE/CUSTOM need a trusted clock (reason 2); PIN does not; time_source 0 is never a clock */
+/* Time: BUNDLE/CUSTOM need a trusted clock (reason 2); PIN does not; time_source 0 is never a clock */
 static void c_no_time(void)
 {
     uint8_t pin[32] = { 1 };
@@ -680,7 +680,7 @@ static void c_no_time(void)
     CHECK(s.time_source == 1, "session time_source NIOS (%u)", s.time_source);
 }
 
-/* 3.2 PIN accept, SPKI in STATS, the ClientHello carries SNI */
+/* PIN accept, SPKI in STATS, the ClientHello carries SNI */
 static void pin_case(const char *crt, const char *key, const char *spkif, const char *ver, uint16_t want_version)
 {
     uint8_t spki[32];
@@ -705,7 +705,7 @@ static void pin_case(const char *crt, const char *key, const char *spkif, const 
 static void c_pin_accept13(void) { pin_case("leaf.chain.pem", "leaf.key", "leaf.spki", "ver=13", 0x0304); }
 static void c_pin_accept12(void) { pin_case("leafrsa.chain.pem", "leafrsa.key", "leafrsa.spki", "ver=12", 0x0303); }
 
-/* 3.2 PIN checks the key only (U3): a name the certificate does not carry still opens */
+/* PIN checks the key only: a name the certificate does not carry still opens */
 static void c_pin_name_ignored(void)
 {
     uint8_t spki[32];
@@ -719,7 +719,7 @@ static void c_pin_name_ignored(void)
     srv_end(2000);
 }
 
-/* Section 2, the U3 exception: in PIN mode mbedTLS still checks extendedKeyUsage, a secondary check -> reason 4 */
+/* The PIN exception: in PIN mode mbedTLS still checks extendedKeyUsage, a secondary check -> reason 4 */
 static void c_pin_eku(void)
 {
     uint8_t spki[32];
@@ -735,7 +735,7 @@ static void c_pin_eku(void)
     srv_end(2000);
 }
 
-/* 3.5: the clock from OPEN is the one certificates are checked against: a far-future unix_time expires the leaf */
+/* The clock from OPEN is the one certificates are checked against: a far-future unix_time expires the leaf */
 static void c_custom_expired(void)
 {
     uint8_t der[2048];
@@ -751,7 +751,7 @@ static void c_custom_expired(void)
     srv_end(2000);
 }
 
-/* 3.2 / 5.2 pin mismatch -> reason 5, including a one-bit-off pin and an all-zero pin (never gated on non-zero) */
+/* Pin mismatch -> reason 5, including a one-bit-off pin and an all-zero pin (never gated on non-zero) */
 static void c_pin_mismatch(void)
 {
     uint8_t good[32], bits[32], zero[32] = { 0 };
@@ -776,7 +776,7 @@ static void c_pin_mismatch(void)
     }
 }
 
-/* 1.1 PIN name handling: SNI with a name; no SNI with NONE (set_hostname(NULL)) */
+/* PIN name handling: SNI with a name; no SNI with NONE (set_hostname(NULL)) */
 static void c_pin_sni(void)
 {
     uint8_t pin[32] = { 9 };
@@ -799,7 +799,7 @@ static void c_pin_sni(void)
     CHECK(log_has("CH sni pin.m3.test") == 1, "SNI sent with a name");
 }
 
-/* 3.3 CUSTOM: the uploaded CA is the only anchor, matched by ca_tag */
+/* CUSTOM: the uploaded CA is the only anchor, matched by ca_tag */
 static void c_custom_accept(void)
 {
     uint8_t der[2048];
@@ -815,7 +815,7 @@ static void c_custom_accept(void)
     srv_end(2000);
 }
 
-/* 5.2 the module's ca_tag check: reason 3 NO_CUSTOM_CA */
+/* The module's ca_tag check: reason 3 NO_CUSTOM_CA */
 static void c_custom_catag(void)
 {
     uint8_t der[2048];
@@ -850,7 +850,7 @@ static void c_custom_untrusted(void)
     srv_end(2000);
 }
 
-/* 5.2: a CA replaced while a CUSTOM session handshakes is not freed under it */
+/* A CA replaced while a CUSTOM session handshakes is not freed under it */
 static void c_custom_ca_replaced(void)
 {
     uint8_t der[2048], der2[2048];
@@ -868,7 +868,7 @@ static void c_custom_ca_replaced(void)
     srv_end(2000);
 }
 
-/* 3.3 upload-time refusals, their precedence, and "on any error the module holds NO CA" */
+/* Upload-time refusals, their precedence, and "on any error the module holds NO CA" */
 static void c_set_ca_rejects(void)
 {
     static const struct { const char *f; int err; int reject; } t[] = {
@@ -898,7 +898,7 @@ static void c_set_ca_rejects(void)
     CHECK(tls_set_ca(der, 0, 91).err == E_INVALID_ARG, "der_len 0 refused");
 }
 
-/* 3.4 BUNDLE through the verify wrapper: accept; unknown root is EXACTLY 0x00000008; a wrong name has CN_MISMATCH */
+/* BUNDLE through the verify wrapper: accept; unknown root is EXACTLY 0x00000008; a wrong name has CN_MISMATCH */
 static void bundle_case(const char *crt, const char *key, int want_state, uint32_t want_flags, uint32_t mask)
 {
     int fd = srv_start("tls", "ver=1213", pki(crt), pki(key), NULL);
@@ -917,7 +917,7 @@ static void c_bundle_accept(void) { bundle_case("leaf.chain.pem", "leaf.key", ES
 static void c_bundle_unknown_root(void) { bundle_case("leafother.chain.pem", "leafother.key", FAILED, 0x08, 0xFFFFFFFF); }
 static void c_bundle_name(void) { bundle_case("leafname.chain.pem", "leafname.key", FAILED, 0x04, 0x04); }
 
-/* 1.7 / 5.2 versions, suites, groups (the negotiated group, never 0), EMS */
+/* Versions, suites, groups (the negotiated group, never 0), EMS */
 static void hs_case(const char *ver, const char *groups, uint16_t want_version, uint16_t want_group, int want_ems,
                     const char *crt, const char *key)
 {
@@ -951,7 +951,7 @@ static void c_hs12_p256(void) { hs_case("ver=12", "groups=0017", 0x0303, 0x0017,
 static void c_hs12_x25519(void) { hs_case("ver=12", "groups=001d", 0x0303, 0x001D, 1, "leafrsa.chain.pem", "leafrsa.key"); }
 static void c_hs12_p521(void) { hs_case("ver=12", "groups=0019", 0x0303, 0x0019, 1, "leafrsa.chain.pem", "leafrsa.key"); }
 
-/* 1.7 the ClientHello: versions, suites exactly, groups exactly, SHA-256+ signatures, EMS, no 1.2 ticket extension */
+/* The ClientHello: versions, suites exactly, groups exactly, SHA-256+ signatures, EMS, no 1.2 ticket extension */
 static void c_client_hello(void)
 {
     uint8_t pin[32] = { 3 };
@@ -988,7 +988,7 @@ static void c_client_hello(void)
     }
 }
 
-/* 1.7 version refusals and the downgrade sentinel (fail_reason 1 and 2), and their neighbours */
+/* Version refusals and the downgrade sentinel (fail_reason 1 and 2), and their neighbours */
 static void raw_case(const char *what, uint8_t opts, int want_reason, uint32_t want_flags, int want_err, int want_alert_in)
 {
     uint8_t pin[32] = { 3 };
@@ -1011,7 +1011,7 @@ static void c_sentinel(void) { raw_case("raw:sh12s", 0, R_DOWNGRADE, 0, -0x6600,
 static void c_sentinel_require13(void) { raw_case("raw:sh12s", REQUIRE_TLS13, R_VERSION, 0x0303, 0, 0xFF); }
 static void c_version_below_12(void) { raw_case("raw:sh11", 0, R_VERSION, 0x0302, -0x6E80, 0xFF); }
 static void c_sh12_bad_suite(void) { raw_case("raw:sh12suite", 0, R_NONE, 0, -0x6600, 0xFF); }
-// ER-23 (errata12adv H-1): an ILLEGAL_PARAMETER from a malformed TLS 1.3 ServerHello is not a downgrade (19) nor,
+// An ILLEGAL_PARAMETER from a malformed TLS 1.3 ServerHello is not a downgrade (19) nor,
 // under REQUIRE_TLS13, a version refusal (18): only the sentinel in a ServerHello without supported_versions is
 static void c_sh13_comp(void) { raw_case("raw:sh13comp", 0, R_NONE, 0, -0x6600, 0xFF); }
 static void c_sh13_comp_require13(void) { raw_case("raw:sh13comp", REQUIRE_TLS13, R_NONE, 0, -0x6600, 0xFF); }
@@ -1022,7 +1022,7 @@ static void c_sh13_sentinel_bytes(void) { raw_case("raw:sh13s", 0, R_NONE, 0, -0
 static void c_alert70(void) { raw_case("raw:alert70", 0, R_NONE, 0, -0x7780, 70); }
 static void c_peer_closed(void) { raw_case("raw:cn", 0, R_PEER_CLOSED, 0, -0x7880, 0xFF); }
 
-/* 1.7 EMS required: handshake_failure (40) and nothing after the ServerHello */
+/* EMS required: handshake_failure (40) and nothing after the ServerHello */
 static void c_no_ems(void)
 {
     uint8_t spki[32];
@@ -1040,7 +1040,7 @@ static void c_no_ems(void)
     CHECK(log_has("HS alert 40") == 1, "the server received alert 40");
 }
 
-/* 5.2: the step that reaches ESTABLISHED returns no plaintext, even with application data behind the Finished */
+/* The step that reaches ESTABLISHED returns no plaintext, even with application data behind the Finished */
 static void c_established_no_pt(void)
 {
     uint8_t spki[32];
@@ -1062,7 +1062,7 @@ static void c_established_no_pt(void)
     srv_end(2000);
 }
 
-/* E1 NO_READ (5.2): (a) with pt_in, (b) input-less, (c) then plain steps return exactly the pending plaintext */
+/* NO_READ: (a) with pt_in, (b) input-less, (c) then plain steps return exactly the pending plaintext */
 static void c_e1_no_read(void)
 {
     uint8_t spki[32];
@@ -1098,7 +1098,7 @@ static void c_e1_no_read(void)
     CHECK(log_has("RX total 10 bad 0") >= 1, "the server got the 10 B written with NO_READ");
 }
 
-/* E2 the warning-alert MUST-FIX: no_renegotiation warnings then data in ONE ct_in, and the queued variant */
+/* Warning alerts: no_renegotiation warnings then data in ONE ct_in, and the queued variant */
 static void e2_case(const char *ver, int queued)
 {
     uint8_t spki[32];
@@ -1133,7 +1133,7 @@ static void c_e2_12(void) { e2_case("ver=12", 0); }
 static void c_e2_12_queued(void) { e2_case("ver=12", 1); }
 static void c_e2_13(void) { e2_case("ver=13", 0); }
 
-/* 5.2 the tag rule: a stale (slot, tag) touches nothing */
+/* The tag rule: a stale (slot, tag) touches nothing */
 static void c_tag_rule(void)
 {
     uint8_t spki[32];
@@ -1169,7 +1169,7 @@ static void c_tag_rule(void)
     srv_end(2000);
 }
 
-/* 5.2 other STEP flag bits -> INVALID_ARG, consuming nothing */
+/* Other STEP flag bits -> INVALID_ARG, consuming nothing */
 static void c_step_flags(void)
 {
     uint8_t pin[32] = { 1 };
@@ -1184,7 +1184,7 @@ static void c_step_flags(void)
     CHECK(s1.ct_in == s0.ct_in && s1.ct_out == s0.ct_out, "nothing consumed or produced");
 }
 
-/* 5.2 CLOSE carries the close_notify record; the server sees it */
+/* CLOSE carries the close_notify record; the server sees it */
 static void c_close_notify(void)
 {
     uint8_t spki[32];
@@ -1210,7 +1210,7 @@ static void c_close_notify(void)
     CHECK(r.err == 0 && r.ct_len == 0, "CLOSE while handshaking: ok, no close_notify (%d B)", r.ct_len);
 }
 
-/* 5.2 CLOSE_ALL frees every session and the CA */
+/* CLOSE_ALL frees every session and the CA */
 static void c_close_all(void)
 {
     uint8_t pin[32] = { 1 }, der[2048];
@@ -1244,7 +1244,7 @@ static void c_fatal_alert(void)
     srv_end(2000);
 }
 
-/* 5.2 alert_out is only an alert sent before any keys: a record that fails its MAC after the handshake makes the
+/* alert_out is only an alert sent before any keys: a record that fails its MAC after the handshake makes the
    engine send an encrypted bad_record_mac, and alert_out stays none */
 static void alert_out_case(const char *ver)
 {
@@ -1266,12 +1266,12 @@ static void alert_out_case(const char *ver)
 static void c_alert_out_12(void) { alert_out_case("ver=12"); }
 static void c_alert_out_13(void) { alert_out_case("ver=13"); }
 
-/* 1.7 KNOWN ISSUE, Mbed-TLS/mbedtls#9543: a HelloRetryRequest with a cookie (RFC 8446 4.2.2), as OpenJDK's JSSE
+/* KNOWN ISSUE, Mbed-TLS/mbedtls#9543: a HelloRetryRequest with a cookie (RFC 8446 4.2.2), as OpenJDK's JSSE
    always sends. The bridge ships stock mbedTLS as ESP-IDF imports it, and stock 4.1.1 refuses the cookie with an
    unsupported_extension alert, so a TLS 1.3 server that needs a HelloRetryRequest and sends a cookie fails. This case
    asserts that stock behaviour on purpose: it goes RED the day the stock library accepts the cookie. Then turn it back
    into the acceptance test (the second ClientHello echoes the cookie byte for byte and offers secp256r1 only; history:
-   esp-tls/m3 8056e128, removed at the user's decision U-E) and drop KNOWN ISSUE from its name. */
+   commit 8056e128, removed with the cookie patch) and drop KNOWN ISSUE from its name. */
 static void c_known_issue_hrr_cookie(void)
 {
     uint8_t pin[32] = { 3 };
@@ -1295,7 +1295,7 @@ static void c_known_issue_hrr_cookie(void)
     CHECK(!log_line("CH2 cookie ", echoed, sizeof(echoed)), "#9543: no second ClientHello ('%s')", echoed);
 }
 
-/* 3.5 SNTP wins over the Nios's time, and SNTP alone is a clock (m3espadv, MEDIUM-1) */
+/* SNTP wins over the Nios's time, and SNTP alone is a clock */
 static void c_sntp_wins(void)
 {
     time_t sntp_now = real_now();

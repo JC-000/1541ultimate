@@ -1,4 +1,4 @@
-/* engine4 host stub: what IDF's esp_crt_bundle.c takes from esp_check.h and esp_compiler.h */
+/* Host stub: what IDF's esp_crt_bundle.c takes from esp_check.h and esp_compiler.h */
 #pragma once
 #include <inttypes.h>
 #include "esp_log.h"
