@@ -119,7 +119,8 @@ static err_t hacked_recv(struct pbuf *p, struct netif *inp)
             return ERR_OK;
         } else {
             ESP_LOGW(TAG, "No buffer to send packet.");
-            return ERR_BUF;
+            pbuf_free(p); // dropped, and reported as handled, as on ESP-IDF 5
+            return ERR_OK;
         }
     } else { // dropped, wrong mac and no broadcast
         pbuf_free(p);
