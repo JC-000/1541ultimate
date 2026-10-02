@@ -1,6 +1,7 @@
 // lwIP's ip4addr_aton (software/lwip/src/core/ipv4/ip4_addr.c at 26a22151): network_target.cc decides what an IPv4
 // literal is with it, so the host tests need the same predicate (127.1, 0x7f.0.0.1 and "1.2.3.4 x" included).
-// The function below is lwIP's, under lwIP's license, reproduced verbatim:
+// The function below is adapted from lwIP's (uint32_t and <ctype.h> calls in place of lwIP's types and macros, its
+// comments dropped; same behaviour, as LWIP_NO_CTYPE_H defaults to 0), under lwIP's license:
 /*
  * Copyright (c) 2001-2004 Swedish Institute of Computer Science.
  * All rights reserved.

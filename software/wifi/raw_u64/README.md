@@ -22,7 +22,7 @@ and then: v6.0.3 ships Mozilla's data of 2025-12-02, with roots Mozilla has sinc
 
 - **Where it comes from.** `cacert.pem` is curl's extract of Mozilla's `certdata.txt`
   (<https://curl.se/ca/cacert.pem>), byte for byte; the data is Mozilla's, under the Mozilla Public
-  License 2.0. `CA_PINS` beside it records the source URL,
+  License 2.0 (<https://mozilla.org/MPL/2.0/>). `CA_PINS` beside it records the source URL,
   the Mozilla date, the file's sha256 (`CA_SHA256`), the `certdata.txt` commit on GitHub it was
   regenerated from as a cross-check (`CA_CERTDATA_REF`), the sha256 of its set of certificates
   (`CA_BUNDLE_SET_SHA256`) and the age limit (`CA_MAX_AGE_DAYS`).

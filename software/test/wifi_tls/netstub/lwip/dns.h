@@ -1,5 +1,5 @@
 // Host stand-in for lwip/dns.h and its address types (IPv4 only, as LWIP_IPV6 is 0 in lwipopts.h).
-// net_tls_test.cc fakes dns_gethostbyname and carries a copy of lwIP's ip4addr_aton.
+// net_tls_test.cc fakes dns_gethostbyname; ip4addr_aton.cc carries an adapted copy of lwIP's ip4addr_aton.
 #ifndef LWIP_DNS_H_NETSTUB
 #define LWIP_DNS_H_NETSTUB
 #include <stdint.h>
