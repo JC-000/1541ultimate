@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-10-01 19:59:10
-+++ b/main/tls_engine.c	2026-10-01 20:00:49
-@@ -339,6 +339,7 @@
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:17
+@@ -332,6 +332,7 @@
          }
  #if CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
          if (p->trust == TLS_TRUST_BUNDLE) {
@@ -9,7 +9,7 @@ diff -ru a/main/tls_engine.c b/main/tls_engine.c
              ret = esp_crt_bundle_attach(&s->conf);
          }
  #endif
-@@ -355,7 +356,9 @@
+@@ -348,7 +349,9 @@
          tls_free(s);
          return ret;
      }

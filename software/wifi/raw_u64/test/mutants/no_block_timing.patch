@@ -1,6 +1,6 @@
 diff -ru a/main/rpc_dispatch.c b/main/rpc_dispatch.c
 --- a/main/rpc_dispatch.c	2026-10-01 19:59:10
-+++ b/main/rpc_dispatch.c	2026-10-01 20:00:51
++++ b/main/rpc_dispatch.c	2026-10-01 20:15:18
 @@ -683,7 +683,7 @@
          break;
      }

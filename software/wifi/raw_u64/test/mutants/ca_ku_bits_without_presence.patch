@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-10-01 19:59:10
-+++ b/main/tls_engine.c	2026-10-01 20:00:50
-@@ -803,7 +803,7 @@
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -786,7 +786,7 @@
      // mbedTLS refuses such a certificate as an issuer. A v1 root has no extensions and is an anchor as it is;
      // a keyUsage extension that is absent passes check_key_usage.
      if (((crt->version >= 3) && (mbedtls_x509_crt_get_ca_istrue(crt) != 1)) ||

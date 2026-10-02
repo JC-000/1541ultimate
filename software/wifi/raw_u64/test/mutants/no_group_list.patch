@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-10-01 19:59:10
-+++ b/main/tls_engine.c	2026-10-01 20:00:50
-@@ -322,7 +322,6 @@
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -315,7 +315,6 @@
          mbedtls_ssl_conf_max_tls_version(&s->conf, MBEDTLS_SSL_VERSION_TLS1_3);
          // The CBC suites are compiled in (wpa_supplicant needs AES-CBC): only this list keeps them out
          mbedtls_ssl_conf_ciphersuites(&s->conf, tls_ciphersuites);

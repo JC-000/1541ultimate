@@ -1,7 +1,7 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-10-01 19:59:10
-+++ b/main/tls_engine.c	2026-10-01 20:00:49
-@@ -254,6 +254,13 @@
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:17
+@@ -247,6 +247,13 @@
      if (slot >= TLS_MAX_SESSIONS) {
          return NULL;
      }
@@ -15,7 +15,7 @@ diff -ru a/main/tls_engine.c b/main/tls_engine.c
      tls_session_t *s = sessions[slot];
      return (s && (s->tag == tag)) ? s : NULL;
  }
-@@ -755,7 +762,7 @@
+@@ -738,7 +745,7 @@
  int tls_close(uint8_t slot, uint16_t tag, uint8_t *out, uint16_t *ct_out_len)
  {
      *ct_out_len = 0;

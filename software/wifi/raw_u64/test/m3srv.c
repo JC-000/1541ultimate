@@ -1,44 +1,6 @@
-/*
- * m3srv.c
- *
- * The server side of the engine host test (engine_test.c). One connection per run.
- *   m3srv PORT tls OPTIONS...   a TLS server (mbedTLS 3.6.0, default configuration)
- *   m3srv PORT raw:WHAT         no TLS library: reads the ClientHello, logs it, answers WHAT by hand
- * Everything it sees goes to stdout, one "KEY value" line each, for the test to check.
- *
- * tls OPTIONS (key=value):
- *   ver=13|12|1213     versions offered (min and max)
- *   groups=a:b         key-exchange groups, IANA hex (e.g. 0017 or 001d:0017)
- *   crt=FILE key=FILE  server certificate chain and key (PEM)
- *   ems=0              TLS 1.2 without the extended master secret extension
- *   ownusage=0         skip the server's check of its own certificate's (extended) key usage, to serve one that
- *                      the client must refuse (the DER sent is unchanged)
- *   run=TOKENS         what to do after the handshake, comma separated, in order:
- *     app:N        one application data record of N bytes of the test pattern
- *     wa:D / fa:D  a warning / fatal alert with description D (encrypted as the session is)
- *     cn           close_notify
- *     rd:N         read N bytes of plaintext and check them against the client pattern
- *     echo         echo plaintext until close_notify or EOF, then log which one it was
- *     drain        read until close_notify or EOF, log which one it was
- *     sleep:MS     sleep
- *     rst          close with SO_LINGER 0
- * raw WHAT:
- *   ch         nothing (the ClientHello audit only)
- *   sh12       a TLS 1.2 ServerHello (legacy_version 0x0303, no supported_versions)
- *   sh12s      the same with the RFC 8446 4.1.3 downgrade sentinel in its random
- *   sh11       a ServerHello for TLS 1.1 (0x0302)
- *   sh12suite  a TLS 1.2 ServerHello choosing a suite the client never offered (a CBC one mbedTLS still has)
- *   sh13comp   a TLS 1.3 ServerHello (supported_versions 0x0304, key_share x25519, the session id echoed, no sentinel)
- *              with legacy_compression_method 1
- *   sh13suite  the same with compression 0 and a suite the client never offered (TLS_AES_128_CCM_8_SHA256)
- *   sh13s      the same with an offered suite and the downgrade sentinel in its random (a 1.3 ServerHello: no downgrade)
- *   alert70    a plaintext fatal protocol_version alert
- *   cn         a plaintext close_notify warning alert
- *   hrrcookie  a TLS 1.3 HelloRetryRequest for secp256r1 carrying a cookie, then the second ClientHello logged as CH2
- *
- * The test pattern: byte i of a direction's plaintext stream is (i * 31 + seed) & 0xFF, seed 7 from the
- * server and 11 from the client.
- */
+/* m3srv.c: the server side of the engine host test (engine_test.c), one connection per run: a TLS server
+ * (mbedTLS 3.6.0, default configuration) or a raw mode that answers the ClientHello by hand. It logs one
+ * "KEY value" line per event to stdout for the test to check. Options and raw answers: README.md. */
 #define MBEDTLS_ALLOW_PRIVATE_ACCESS
 #include <stdio.h>
 #include <stdlib.h>

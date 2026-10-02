@@ -1,13 +1,7 @@
 #!/bin/zsh
-# Builds the engine host test (engine_test.c) and its server (m3srv.c).
-#   build.sh [VARIANT...]     VARIANT = head (this tree, the default) | base (the previous engine at a846369f, for RED runs)
-#                             | mut-NAME (this tree with mutants/NAME.patch applied)
-#                             | at-SHA[+NAME] (the engine at commit SHA, optionally with mutant NAME applied)
-# Inputs, all read-only, from the environment (required):
-#   MB4   mbedTLS 4.1.1 (espressif ce3f3485) built for the host with this bridge's sdkconfig, ASan+UBSan
-#   S4    its source tree; IDF: ESP-IDF v6.0.3 (76f5dedd), for esp_crt_bundle.c and gen_crt_bundle.py
-#   SRV   mbedTLS 3.6.0 with its default configuration (the server side), and S36 its source
-# Output: build/<variant>/engine_test, build/m3srv, build/pki (mkpki.sh).
+# Builds the engine host test and its server: build.sh [head|base|mut-NAME|at-SHA[+NAME]...] (default head).
+# Variants and the required inputs MB4, S4, IDF, SRV, S36: README.md. Output: build/<variant>/engine_test,
+# build/m3srv, build/pki (mkpki.sh).
 set -e
 T=${0:A:h}; RAW=${T:h}; SW=${RAW:h:h}; REPO=${SW:h}
 for e in MB4 S4 IDF SRV S36; do [ -n "${(P)e}" ] || { echo "build.sh: set $e (see the header)" >&2; exit 2; }; done

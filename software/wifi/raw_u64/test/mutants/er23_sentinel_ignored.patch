@@ -1,10 +1,10 @@
 diff -ru a/main/tls_engine.c b/main/tls_engine.c
---- a/main/tls_engine.c	2026-10-01 19:59:10
-+++ b/main/tls_engine.c	2026-10-01 20:00:51
-@@ -534,6 +534,10 @@
-         // ServerHello mbedTLS reassembled is looked at: only one without supported_versions chose TLS 1.2 or lower
-         // (the version refused under REQUIRE_TLS13), and of those only one whose random ends in the RFC 8446 4.1.3
-         // sentinel is a downgrade. Everything else, a ServerHello not found included, is fail_reason 0.
+--- a/main/tls_engine.c	2026-10-01 20:14:48
++++ b/main/tls_engine.c	2026-10-01 20:15:18
+@@ -517,6 +517,10 @@
+         // This one step is all of mbedTLS's TLS 1.3 ServerHello processing (ssl_tls13_client.c:1995-2060), so
+         // ILLEGAL_PARAMETER has many causes. Only a ServerHello without supported_versions chose TLS 1.2 or lower, and
+         // of those only one whose random ends in the RFC 8446 4.1.3 sentinel is a downgrade; all else is fail_reason 0.
 +        if (!(s->opts & TLS_OPT_REQUIRE_TLS13)) {
 +            r->fail_reason = TLS_FAIL_DOWNGRADE;
 +            return;

@@ -1,16 +1,6 @@
-/*
- * engine_test.c
- *
- * Host test of the ESP32 TLS engine and its RPC handlers. It plays the Ultimate:
- * it builds every request byte by byte at the protocol spec's offsets (never from rpc_calls.h, so a
- * layout slip on the ESP32 side fails here), runs the real rpc_dispatch.c and tls_engine.c against
- * mbedTLS 4.1.1 built with the ESP32's configuration, and moves the ciphertext to a local server (m3srv.c).
- *
- *   engine_test [CASE...]      runs every case (or the named ones), each in its own process
- * Environment: M3SRV (server binary), PKI (mkpki.sh output), LOGDIR, PORTBASE.
- * BASE_ENGINE builds it against the previous engine (a846369f), where the TLS task and CLOSE_ALL/SET_CA do not exist:
- * that build is how the RED runs are made.
- */
+/* engine_test.c: host test of the ESP32 TLS engine and its RPC handlers. It plays the Ultimate, building requests at the
+ * protocol spec's offsets (never from rpc_calls.h), against the real rpc_dispatch.c and tls_engine.c and a local server
+ * (m3srv.c). Usage, environment and the BASE_ENGINE build: README.md. */
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -1266,12 +1256,9 @@ static void alert_out_case(const char *ver)
 static void c_alert_out_12(void) { alert_out_case("ver=12"); }
 static void c_alert_out_13(void) { alert_out_case("ver=13"); }
 
-/* KNOWN ISSUE, Mbed-TLS/mbedtls#9543: a HelloRetryRequest with a cookie (RFC 8446 4.2.2), as OpenJDK's JSSE
-   always sends. The bridge ships stock mbedTLS as ESP-IDF imports it, and stock 4.1.1 refuses the cookie with an
-   unsupported_extension alert, so a TLS 1.3 server that needs a HelloRetryRequest and sends a cookie fails. This case
-   asserts that stock behaviour on purpose: it goes RED the day the stock library accepts the cookie. Then turn it back
-   into the acceptance test (the second ClientHello echoes the cookie byte for byte and offers secp256r1 only; history:
-   commit 8056e128, removed with the cookie patch) and drop KNOWN ISSUE from its name. */
+/* KNOWN ISSUE Mbed-TLS/mbedtls#9543: stock mbedTLS 4.1.1 refuses a cookie in a TLS 1.3 HelloRetryRequest (RFC 8446
+   4.2.2), as OpenJDK's JSSE always sends. Asserted on purpose: this goes RED once stock mbedTLS accepts it; then restore
+   the acceptance test from commit 8056e128 and drop KNOWN ISSUE from the name. */
 static void c_known_issue_hrr_cookie(void)
 {
     uint8_t pin[32] = { 3 };
