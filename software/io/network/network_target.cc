@@ -137,10 +137,9 @@ void NetworkTarget :: parse_command(Message *command, Message **reply, Message *
     // client bytes left over from an earlier read.
     discard_read_reply();
 
-    // Every command claims every TLS session, so that
-    // only the session of the latest OPEN_TLS or START_TLS can be unclaimed,
-    // and only until the next command. $25, which frees an unclaimed session,
-    // and $23 $FF, which counts them, leave them as they are.
+    // Every command claims every TLS session, so only the latest OPEN_TLS or START_TLS session can be unclaimed,
+    // and only until the next command. $25 (which frees an unclaimed session) and $23 $FF (which counts them)
+    // leave them as they are.
     uint8_t code = (command->length >= 2) ? command->message[1] : 0;
     bool keeps_claims = (code == NET_CMD_TLS_RELEASE) ||
                         ((code == NET_CMD_TLS_INFO) && (command->length == 3) && (command->message[2] == 0xFF));
@@ -713,11 +712,9 @@ Message *NetworkTarget :: set_status(const char *text)
     return &status_message;
 }
 
-// Byte-exact parsing of OPEN_TLS ($21, fixed = 6) and START_TLS ($24, fixed =
-// 5): the refusals that need nothing but the command, 81 before 82 (1.1 step
-// 1). For OPEN the tail is host [ $00 [ name [ $00 ] ] ]; for START it is
-// [ name ] [ $00 ]. host and name point into the command and are not
-// terminated. NULL when the command is well formed.
+// Byte-exact parsing of OPEN_TLS ($21, fixed = 6) and START_TLS ($24, fixed = 5): the refusals that need only the
+// command, 81 before 82. OPEN's tail is host [ $00 [ name [ $00 ] ] ], START's is [ name ] [ $00 ]; host and name
+// point into the command, unterminated. NULL when the command is well formed.
 Message *NetworkTarget :: tls_parse_open(Message *command, int fixed, bool start, uint8_t *trust, uint8_t *flags,
                                          const uint8_t **pin, const char **host, int *host_len, const char **name,
                                          int *name_len)
@@ -1196,11 +1193,9 @@ int NetworkTarget :: tls_connect(int sock, uint32_t address, uint16_t port, uint
     return 0;
 }
 
-// What every TLS socket gets: non-blocking, TCP_NODELAY, and a send
-// timeout, which lwIP's close also takes as its bound when it runs out of
-// memory for the FIN. OPEN_TLS sets them on its new socket; START_TLS
-// only once steps 1-5 have passed, so that a kept code leaves the socket as
-// it was.
+// What every TLS socket gets: non-blocking, TCP_NODELAY, and a send timeout, which also bounds lwIP's close when it
+// has no memory for the FIN. OPEN_TLS sets them on its new socket; START_TLS only once steps 1-5 have passed, so
+// that a kept code leaves the socket as it was.
 static void tls_socket_options(int sock)
 {
     int on = 1;
@@ -1212,10 +1207,9 @@ static void tls_socket_options(int sock)
     lwip_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
-// Steps 2 to 5 of the refusal order: the module, the table, the CA, and
-// the OPEN RPC, which starts a session on the module under (slot, tag). keep
-// says whether START_TLS leaves the TCP socket as it was. NULL once the module
-// holds the session.
+// Steps 2 to 5 of the refusal order: the module, the table, the CA, and the OPEN RPC, which starts a session on the
+// module under (slot, tag). keep says whether START_TLS leaves the TCP socket as it was. NULL once the module holds
+// the session.
 Message *NetworkTarget :: tls_prepare(TlsSocket *e, uint8_t trust, uint8_t flags, const uint8_t *pin,
                                       const char *name, int name_len, uint32_t total, bool *keep)
 {

@@ -1,10 +1,5 @@
-/*
- * wifi_random.h
- *
- * Hardware random bytes from the WiFi module. Kept apart from wifi_cmd.h so
- * that its users do not see the module's RPC definitions in rpc_calls.h, some
- * of which (CMD_IDENTIFY) clash with the command interface's.
- */
+// wifi_random.h: hardware random bytes from the WiFi module. Apart from wifi_cmd.h so that its users do not see the
+// module's RPC definitions in rpc_calls.h, some of which (CMD_IDENTIFY) clash with the command interface's.
 
 #ifndef WIFI_RANDOM_H_
 #define WIFI_RANDOM_H_
@@ -20,19 +15,15 @@ int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source);
 #define WIFI_RANDOM_INVALID   3 // the answer is not a well formed reply
 #define WIFI_RANDOM_NO_MODULE 4 // the module application is not running
 
-// Checks the size bytes at reply as the module's answer to request sequence
-// for len bytes. Returns 0 and copies the bytes to buf, and the entropy source
-// to source unless it is NULL, only for a well formed answer that carries
-// exactly len bytes from a real source. Returns one of the codes above, or
-// the one below, and touches neither otherwise.
+// Checks the size bytes at reply as the module's answer to request sequence for len bytes. Only for a well formed
+// answer with exactly len bytes from a real source does it return 0 and copy the bytes to buf (and the source to
+// source unless NULL); otherwise it returns one of the codes above or below and touches neither.
 int wifi_random_take_reply(const uint8_t *reply, int size, uint16_t sequence,
                            uint8_t *buf, uint16_t len, uint8_t *source);
 #define WIFI_RANDOM_FOREIGN   5 // not the answer to this request
 
-// The UCI status number for a result of wifi_get_random: 0 (OK, and the bytes
-// go out) for 0 and nothing else, 88 (busy, retry) for WIFI_RANDOM_BUSY, 86
-// (internal error) for WIFI_RANDOM_INVALID, and 87 (no entropy source) for
-// every other value.
+// The UCI status number for a wifi_get_random result: 0 (OK, the bytes go out) for 0 only, 88 (busy, retry) for
+// WIFI_RANDOM_BUSY, 86 (internal error) for WIFI_RANDOM_INVALID, and 87 (no entropy source) for every other value.
 int wifi_random_status(int result);
 
 // Whether a reply to GET_RANDOM may carry data for this result of

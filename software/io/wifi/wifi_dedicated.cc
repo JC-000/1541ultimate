@@ -1,9 +1,5 @@
-/*
- * wifi_dedicated.cc
- *
- * The one waiter for replies on WIFI_DEDICATED_THREAD, and GET_RANDOM, its
- * first user. Not in wifi_cmd.cc, which the updater compiles without wifi.cc.
- */
+// wifi_dedicated.cc: the one waiter for replies on WIFI_DEDICATED_THREAD, and GET_RANDOM, its first user.
+// Not in wifi_cmd.cc, which the updater compiles without wifi.cc.
 
 #include <stddef.h>
 #include "wifi_cmd.h"
@@ -17,12 +13,9 @@ static_assert(WIFI_RANDOM_FOREIGN == DEDICATED_FOREIGN, "codes differ");
 // The log reads esp_err where every reply that has one keeps it.
 static_assert(sizeof(rpc_espcmd_resp) == offsetof(rpc_get_random_resp, source), "rpc_espcmd_resp changed");
 
-// Checks a queued reply against the request, lets take have it if it is the
-// answer, and frees it. A reply queued before the last reset of the buffer
-// pool is dropped unread: the reset put its buffer back in the pool, where it
-// may since have been handed to someone else. The scheduler stays suspended
-// from that check until the buffer is freed, so that no reset, which only
-// tasks do, can come in between. With check false the reply is only released.
+// Checks a queued reply against the request, lets take have it if it is the answer, and frees it. A reply queued
+// before the last buffer pool reset is dropped unread: its buffer may since belong to someone else. The scheduler
+// stays suspended from the check until the free, so no reset (only tasks do one) gets in between. check false: free.
 static int take_dedicated_reply(const dedicated_call_t *call, dedicated_reply_t *reply, bool check, uint16_t sequence)
 {
     int retval = DEDICATED_FOREIGN;
@@ -51,10 +44,9 @@ static int take_dedicated_reply(const dedicated_call_t *call, dedicated_reply_t 
     return retval;
 }
 
-// Unlike the calls in wifi_cmd.cc this neither waits for the module forever
-// nor trusts what comes back: take decides what the answer is. Between calls
-// dedicated_waiting is clear and dedicated_replies is empty, so no reply is
-// left to be taken for the next one.
+// Unlike the calls in wifi_cmd.cc this neither waits for the module forever nor trusts what comes back: take decides
+// what the answer is. Between calls dedicated_waiting is clear and dedicated_replies is empty, so no reply is left
+// over for the next one.
 int wifi_dedicated_call(const dedicated_call_t *call)
 {
     // Without the module application nothing can answer, so fail at once
@@ -175,10 +167,8 @@ static int take_random(const uint8_t *reply, int size, uint16_t sequence, void *
 int wifi_get_random(uint8_t *buf, uint16_t len, uint8_t *source)
 {
     random_call_t args = { buf, len, source };
-    // The reply takes about a millisecond on the wire. It takes much longer
-    // only while the module's single dispatcher is blocked, for instance
-    // handing a scan or connect request to its connector task, which can take
-    // seconds; that is worth a retry rather than a wait.
+    // The reply takes about a millisecond. It takes longer only while the module's single dispatcher is blocked
+    // (handing a scan or connect to its connector task can take seconds); that is worth a retry, not a wait.
     const dedicated_call_t call = { "Get Random", CMD_GET_RANDOM, 200, fill_random, take_random, &args };
     int retval = wifi_dedicated_call(&call);
     // For a C64 program, not sent is busy too: it retries either way.

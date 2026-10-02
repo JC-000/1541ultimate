@@ -1,9 +1,5 @@
-/*
- * wifi_random.cc
- *
- * Checks the WiFi module's answer to a GET_RANDOM request. Free of FreeRTOS and
- * of the UART driver, so that software/test/wifi_random tests what ships.
- */
+// wifi_random.cc: checks the WiFi module's answer to a GET_RANDOM request. Free of FreeRTOS and of the UART driver,
+// so that software/test/wifi_random tests what ships.
 
 #include <stddef.h>
 #include <string.h>

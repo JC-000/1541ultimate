@@ -1,15 +1,6 @@
-/*
- * wifi_tls.h
- *
- * TLS sessions that run on the WiFi module. The module
- * holds the keys and runs the protocol; this side carries the ciphertext
- * between a socket and the module, one step at a time, and the module never
- * speaks unasked. U64 only.
- *
- * Kept apart from wifi_cmd.h, like wifi_random.h, so that its users do not see
- * the module's RPC definitions; wifi_tls.cc asserts that the values repeated
- * here match the wire layout in rpc_calls.h.
- */
+// wifi_tls.h: TLS sessions run on the WiFi module (U64 only). It holds the keys and runs the protocol; this side moves
+// the ciphertext between a socket and the module, one step at a time, and the module never speaks unasked. Apart
+// from wifi_cmd.h like wifi_random.h; wifi_tls.cc asserts the values repeated here match rpc_calls.h's layout.
 
 #ifndef WIFI_TLS_H_
 #define WIFI_TLS_H_
@@ -125,25 +116,9 @@ typedef struct {
     uint8_t spki_sha256[32]; // of the leaf's SubjectPublicKeyInfo, digest order
 } wifi_tls_stats_t;
 
-// One step: the module takes all of ct_in, and pt_in once the session is
-// established, and hands back what it has ready, up to a reply's worth. The
-// caller sets the first block and the module's answer fills the second.
-//
-// The module takes the input all or nothing. When it has no room it answers
-// ESP_ERR_NO_MEM with its output all the same: the call returns AGAIN, hands the
-// output over, and the same input is to be sent again. If that answer also says
-// CLOSED, the peer has closed and the refusal no longer matters: the call
-// returns 0 with state CLOSED and the output, the last plaintext included.
-//
-// A session that fails is an answer, not an error: the call returns 0 with state
-// FAILED, the mbedTLS error in esp_err and the module's reason in fail_reason,
-// alert_in and verify_flags, and ct_out may hold the alert for the server. The
-// module has then freed the session, as it has after CLOSED. REFUSED is for an
-// error in any other state: ESP_ERR_NOT_FOUND means the module holds no session
-// under this slot and tag. Nothing is written to ct_out or pt_out unless the call
-// returns 0 or AGAIN, and plaintext only ever comes from a session that is
-// ESTABLISHED or has just been CLOSED; what a FAILED answer carries is withheld.
-// With NO_READ in flags a step that hands out plaintext is not well formed.
+// One step; the module answers into the second block. Input is taken all or nothing: no room is AGAIN with the output
+// handed over and the same input to resend (0 and CLOSED if the peer closed). FAILED is an answer (0, reasons set,
+// session freed). Outputs only on 0/AGAIN; plaintext only from ESTABLISHED or just CLOSED; with NO_READ it is invalid.
 typedef struct {
     uint8_t flags;        // WIFI_TLS_STEP_*
     const uint8_t *ct_in;
@@ -165,10 +140,8 @@ typedef struct {
     uint32_t verify_flags;
 } wifi_tls_step_t;
 
-// Each returns 0 or one of the codes above, after at most timeout_ms, or
-// earlier with BUSY when cancel says so. esp_err, where there is one, is set to
-// 0 first and to the module's error when it answered with one. reason and
-// reject are set to 0 first, and to what the module says when it refused.
+// Each returns 0 or a code above after at most timeout_ms, or BUSY earlier when cancel says so. esp_err (where there
+// is one), reason and reject are set to 0 first, then to what the module answered when it failed or refused.
 int wifi_tls_open(const wifi_tls_open_t *open, uint32_t timeout_ms, const wifi_tls_cancel_t *cancel, int *esp_err,
                   uint8_t *reason);
 int wifi_tls_step(uint8_t slot, uint16_t tag, wifi_tls_step_t *step, uint32_t timeout_ms,
@@ -182,16 +155,9 @@ int wifi_tls_close_all(int *esp_err, uint32_t timeout_ms);
 int wifi_tls_set_ca(const uint8_t *der, uint16_t der_len, uint16_t ca_tag, int *esp_err, uint8_t *reject,
                     uint32_t timeout_ms, const wifi_tls_cancel_t *cancel);
 
-// The checks the calls above apply to the module's answer to request
-// sequence, apart so that the host can test them. An answer must have exactly
-// the size the module sends: 12 bytes for OPEN, 12 plus the record for CLOSE,
-// 96 for STATS, 8 for CLOSE_ALL, 12 for SET_CA, and for STEP 20 plus the bytes it
-// counts. A refusal may also come as the 8 bytes of a bare rpc_espcmd_resp,
-// which is how a module without TLS answers (ESP_ERR_NOT_SUPPORTED). Each returns
-// 0 for the answer, WIFI_TLS_FOREIGN for a reply to something else, and REFUSED
-// or INVALID otherwise (and AGAIN for a step), and writes its outputs as
-// described above.
-// OPEN's answer names the slot it opened, which must be the one asked for.
+// The answer checks, apart for host tests. Exact sizes: OPEN 12, CLOSE 12 + record, STATS 96, CLOSE_ALL 8, SET_CA 12,
+// STEP 20 + its bytes; a refusal may be a bare 8-byte rpc_espcmd_resp (no TLS: NOT_SUPPORTED). Each returns 0,
+// WIFI_TLS_FOREIGN, REFUSED or INVALID (or AGAIN for a step). OPEN's answer must name the slot asked for.
 int wifi_tls_take_open(const uint8_t *reply, int size, uint16_t sequence, uint8_t slot, int *esp_err,
                        uint8_t *reason);
 int wifi_tls_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_tls_step_t *step);

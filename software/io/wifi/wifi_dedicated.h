@@ -1,15 +1,6 @@
-/*
- * wifi_dedicated.h
- *
- * Requests to the WiFi module that do not trust the module to answer, or to
- * answer only them. Their replies come back through a queue of their own
- * rather than through tasksWaitingForReply, and a caller waits for them with a
- * deadline. One such request is outstanding at a time. GET_RANDOM and the TLS
- * calls go this way.
- *
- * Free of rpc_calls.h and of FreeRTOS, like wifi_random.h, so that the files
- * describing a call can be tested on the host.
- */
+// wifi_dedicated.h: requests to the WiFi module that do not trust it to answer, or to answer only them (GET_RANDOM,
+// the TLS calls). Replies come through their own queue, not tasksWaitingForReply; the caller waits with a deadline,
+// and one request is outstanding at a time. Free of rpc_calls.h and FreeRTOS, so it can be tested on the host.
 
 #ifndef WIFI_DEDICATED_H_
 #define WIFI_DEDICATED_H_
@@ -31,17 +22,14 @@ typedef struct {
     // already, and returns the size of the whole request. It may not fail,
     // so the caller checks the arguments first.
     int (*fill)(uint8_t *request, void *context);
-    // Checks the size bytes at reply as the answer to request sequence and
-    // takes what it needs from it. Returns DEDICATED_FOREIGN for a reply that
-    // is not the answer, which is then skipped. It runs with the scheduler
-    // suspended, so it may neither block nor print.
+    // Checks the size bytes at reply as the answer to request sequence and takes what it needs; returns
+    // DEDICATED_FOREIGN for a reply that is not the answer, which is skipped. Runs with the scheduler suspended,
+    // so it may neither block nor print.
     int (*take)(const uint8_t *reply, int size, uint16_t sequence, void *context);
     void *context;
-    // Optional. With it the wait is cut into slices of at most
-    // DEDICATED_SLICE_MS, and cancel is asked after each one that brought no
-    // answer; true ends the call with DEDICATED_BUSY, and any answer that
-    // arrives after that is dropped by its sequence number. NULL waits the
-    // whole timeout in one go.
+    // Optional: the wait is cut into slices of at most DEDICATED_SLICE_MS and cancel is asked after each one that
+    // brought no answer; true ends the call with DEDICATED_BUSY, and a later answer is dropped by its sequence
+    // number. NULL waits the whole timeout in one go.
     bool (*cancel)(void *cancel_context);
     void *cancel_context;
 } dedicated_call_t;

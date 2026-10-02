@@ -1,10 +1,5 @@
-/*
- * wifi_tls.cc
- *
- * The TLS calls to the WiFi module: what goes into each request and what is
- * taken from each answer. The waiting is wifi_dedicated_call's. Free of
- * FreeRTOS calls, so that the checks can be tested on the host.
- */
+// wifi_tls.cc: the TLS calls to the WiFi module, what goes into each request and what is taken from each answer.
+// The waiting is wifi_dedicated_call's. Free of FreeRTOS calls, so that the checks can be tested on the host.
 
 #include <stddef.h>
 #include <string.h>
@@ -189,10 +184,8 @@ int wifi_tls_take_step(const uint8_t *reply, int size, uint16_t sequence, wifi_t
     }
     bool has_state = result->state <= TLS_STATE_FAILED;
     bool failed = has_state && (result->state == TLS_STATE_FAILED);
-    // Input refused for want of room, output all the same. In a live session
-    // the input goes again. Once the peer has closed, the refusal no longer
-    // matters: the output, the last plaintext included, is taken and the
-    // session reported CLOSED.
+    // Input refused for want of room, output all the same; in a live session the input goes again. Once the peer
+    // has closed the refusal no longer matters: the output, last plaintext included, is taken and CLOSED reported.
     bool no_mem = has_state && (result->esp_err == WIFI_TLS_ESP_NO_MEM);
     bool again = no_mem && ((result->state == TLS_STATE_HANDSHAKING) || (result->state == TLS_STATE_ESTABLISHED));
     bool closed = no_mem && (result->state == TLS_STATE_CLOSED);
@@ -321,10 +314,8 @@ int wifi_tls_take_close_all(const uint8_t *reply, int size, uint16_t sequence, i
     return 0;
 }
 
-// Three answers are well formed: loaded (0, no reject), a parse
-// error (an mbedTLS or PSA code, never ESP_FAIL, no reject) and a refusal of a
-// certificate that parsed (ESP_ERR_INVALID_ARG with reject 1, 3 or 4).
-// Anything else is not.
+// Three answers are well formed: loaded (0, no reject), a parse error (an mbedTLS or PSA code, never ESP_FAIL, no
+// reject) and a refusal of a certificate that parsed (ESP_ERR_INVALID_ARG with reject 1, 3 or 4). Nothing else is.
 int wifi_tls_take_set_ca(const uint8_t *reply, int size, uint16_t sequence, int *esp_err, uint8_t *reject)
 {
     const rpc_tls_set_ca_resp *result = (const rpc_tls_set_ca_resp *)reply;
