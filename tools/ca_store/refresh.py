@@ -48,12 +48,9 @@ CERTDATA_REPO = "mozilla-firefox/firefox"
 CERTDATA_BRANCH = "release"
 CERTDATA_PATH = "security/nss/lib/ckfw/builtins/certdata.txt"
 CERTDATA_COMMITS = 10
-# When curl's file matches an older certdata.txt than the newest on the release branch: how old
-# (by its commit date) that newest revision may be for curl's file still to be taken. Mozilla's
-# changes reach `release` weeks after they are committed, and curl has shipped each 17 to 36
-# days after its commit date, so in practice a newer revision is already older than this when
-# it arrives, and only the newest revision is ever taken. That refuses every rollback; the cost
-# is a red run when `release` moves between curl's daily run and ours, healed the next week.
+# How old (by commit date) the newest certdata.txt on `release` may be for curl's file to match an older one.
+# Newer revisions arrive older than this, so only the newest is ever taken: no rollback, at the cost of a
+# red run, healed the next week, when `release` moves between curl's daily run and ours.
 GRACE = datetime.timedelta(days=14)
 MK_CA_BUNDLE_COMMIT = "d48f2f4ec867783e611beeb2ad53fbabcb94aa6f"
 MK_CA_BUNDLE_SHA256 = "8e278f4982210b37e4f9a048bd6ed23df41e4a054085bd73f8242628f03d09ca"

@@ -1,9 +1,6 @@
-# The Mozilla root store the ESP32 bridge trusts for TLS: cacert.pem beside this file, as curl
-# extracts it from Mozilla's certdata.txt. software/wifi/raw_u64/sdkconfig points
-# CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH at it, and ESP-IDF builds the device's bundle from
-# it alone. Every configure of that build runs `python3 tools/ca_store/ca_store.py check`, which
-# fails the build when cacert.pem does not match these pins. Only tools/ca_store/refresh.py
-# changes cacert.pem and this file. See software/wifi/raw_u64/README.md.
+# The ESP32 bridge's TLS root store: cacert.pem beside this file (curl's extract of Mozilla's certdata.txt), the
+# only input of the bundle (sdkconfig CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH). Every configure runs
+# `tools/ca_store/ca_store.py check`, which fails the build on a mismatch; only refresh.py changes the two.
 CA_SOURCE_URL=https://curl.se/ca/cacert.pem
 # The "Certificate data from Mozilla as of:" line of cacert.pem, in UTC as ISO 8601.
 CA_MOZILLA_DATE=2026-09-25T03:12:01Z
@@ -11,10 +8,9 @@ CA_SHA256=a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
 # The certdata.txt, on GitHub, that cacert.pem was regenerated from with curl's mk-ca-bundle.pl
 # to check it byte for byte: a second origin besides curl.se.
 CA_CERTDATA_REF=mozilla-firefox/firefox@f6dd0159931e536991eaaa02d839bdffb92c3f22
-# The sha256 over the sorted DER encodings of every certificate in cacert.pem: the set the
-# bundle is built from. `check` fails when that set changes and this does not, and refresh.py,
-# which moves it, bumps IDENT_MINOR of every project that attaches the bundle, since the updater
-# reflashes a module only for a new version.
+# sha256 over the sorted DER of every certificate in cacert.pem (the bundle's set): `check` fails when the set
+# changes and this does not. refresh.py, which moves it, bumps IDENT_MINOR of every project attaching the
+# bundle, since the updater reflashes a module only for a new version.
 CA_BUNDLE_SET_SHA256=4e8015669428e25eef4dc88b4c7240a2466f9c9d84227fa7a7691d3904cf1aeb
 # The ESP32 build warns when CA_MOZILLA_DATE is older than this, and a release build
 # (RELEASE=1 in the environment of the configure step) fails.
