@@ -320,7 +320,7 @@ def describe_mismatch(actual: bytes, expected: bytes) -> str:
     return f"{size}the shorter one is a prefix of the other" if size else "identical"
 
 
-def describe_datagrams(arrived: List[bytes], expected: bytes) -> str:
+def describe_datagrams(arrived: list[bytes], expected: bytes) -> str:
     """What reached the peer, against the one datagram that should have.
 
     A payload that left as several datagrams is the defect a chunked write
@@ -338,7 +338,7 @@ def describe_datagrams(arrived: List[bytes], expected: bytes) -> str:
                else f"concatenated: {describe_mismatch(joined, expected)}"))
 
 
-def send_count(transaction) -> Optional[int]:
+def send_count(transaction) -> int | None:
     """How many bytes a write reported sending, from its two-byte reply.
 
     None when the reply is not two bytes, which is a finding of its own: a
@@ -363,7 +363,7 @@ def require_implemented(transaction, what: str) -> None:
                       f"a payload larger than one command still leaves as several datagrams")
 
 
-def require_nothing_sent(after: List[bytes], what: str) -> None:
+def require_nothing_sent(after: list[bytes], what: str) -> None:
     """Nothing reached the wire, which is the other half of every refusal here.
 
     A status of 81 with a datagram behind it is worse than no status at all, so
@@ -375,7 +375,7 @@ def require_nothing_sent(after: List[bytes], what: str) -> None:
                       f"that reached the wire are a message the client never wrote")
 
 
-def require_payload_open(started, premature: List[bytes], taken: int, total: int) -> None:
+def require_payload_open(started, premature: list[bytes], taken: int, total: int) -> None:
     """The accumulation a case needs is in progress and nothing has been sent.
 
     Every case that disturbs a payload part way through needs one part way
@@ -580,7 +580,7 @@ class Peer:
             raise Failure("the device's UDP source address is not known yet")
         self.udp.sendto(payload, self.udp_peer)
 
-    def collect_udp(self, settle: float = DELIVERY_SETTLE_SECONDS) -> List[bytes]:
+    def collect_udp(self, settle: float = DELIVERY_SETTLE_SECONDS) -> list[bytes]:
         """Every datagram the device sent here, over one settle window.
 
         The only method in this class that watches the device emitting rather
@@ -597,7 +597,7 @@ class Peer:
         """
         if self.udp_peer is None:
             raise Failure("the device's UDP source address is not known yet")
-        datagrams: List[bytes] = []
+        datagrams: list[bytes] = []
         deadline = time.time() + settle
         while True:
             remaining = deadline - time.time()
@@ -609,7 +609,7 @@ class Peer:
                 # datagram of an unexpected length is reported at its length
                 # rather than silently cut to the expected one.
                 datagrams.append(self.udp.recv(2048))
-            except socket.timeout:
+            except TimeoutError:
                 return datagrams
 
     def accept_tcp(self) -> socket.socket:
@@ -1836,8 +1836,8 @@ def run_chunked_write_refuses_bad_chunks(net: Net, peer: Peer) -> bool:
             wrong_handle = net.write_chunk(other, half, SMALL_WRITE,
                                            pattern(SMALL_WRITE, 3)[half:])
             after_handle = peer.collect_udp()
-            with check(f"a chunk naming another open socket while a payload is in progress "
-                       f"is refused, and sends nothing"):
+            with check("a chunk naming another open socket while a payload is in progress "
+                       "is refused, and sends nothing"):
                 detail(f"payload opened on socket {handle}, continued on socket {other}: "
                        f"status {wrong_handle.status_text!r}, reply {wrong_handle.data!r}, "
                        f"datagrams {[len(d) for d in after_handle]}")
@@ -2009,8 +2009,8 @@ def run_chunked_write_refuses_offset_ahead(net: Net, peer: Peer) -> bool:
         opened_early = peer.collect_udp()
         completing = net.write_chunk(handle, half, SMALL_WRITE, fresh[half:])
         arrived = peer.collect_udp()
-        with check(f"a chunk at exactly the offset the accumulation reached completes the "
-                   f"payload, and it arrives as one datagram"):
+        with check("a chunk at exactly the offset the accumulation reached completes the "
+                   "payload, and it arrives as one datagram"):
             detail(f"status {completing.status_text!r}, reply {completing.data!r}, datagrams "
                    f"{[len(d) for d in arrived]}")
             require_payload_open(opened, opened_early, half, SMALL_WRITE)
