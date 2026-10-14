@@ -139,6 +139,8 @@ struct RpcCall {
     uint8_t flags;
     int ct_in_len;
     int pt_in_len;
+    bytes pt_in;         // a STEP's plaintext in, and its ciphertext out
+    bytes ct_out;
     wifi_tls_open_t open;
     std::string sni;
     bytes pin;

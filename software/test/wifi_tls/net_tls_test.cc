@@ -1081,6 +1081,49 @@ static void test_write(void)
           "write: after the peer's close_notify -> $FFFF + 12,SEND ERROR: EPIPE (sticky)");
 }
 
+// $16 on a TLS handle: the chunks are collected as for any socket, and the whole payload then goes through the
+// session as one write. The first chunk sends nothing, and the plaintext never reaches the TCP socket.
+static Res chunk16(int h, uint16_t offset, uint16_t total, const bytes &data)
+{
+    return run(cat(B({ 0x03, 0x16, h, offset & 0xFF, offset >> 8, total & 0xFF, total >> 8 }), data));
+}
+
+static void test_write_chunk(void)
+{
+    printf("WRITE_SOCKET_CHUNK on a TLS handle\n");
+    fresh();
+    int h = open_ok(2, "10.1.2.3", PIN());
+    bytes data = expected(21, 1200);
+    bytes first(data.begin(), data.begin() + 600);
+    bytes second(data.begin() + 600, data.end());
+    int sends = sock(h).send_calls;
+    size_t tx = sock(h).tx.size();
+    world_module.calls.clear();
+
+    Res r = chunk16(h, 0, 1200, first);
+    check(r.status == "00,OK" && r.data.empty(), "chunk: the first chunk -> an empty reply, 00,OK (%s, %d B)",
+          r.status.c_str(), (int)r.data.size());
+    check(steps_logged() == 0 && sock(h).send_calls == sends && sock(h).tx.size() == tx,
+          "chunk: the first chunk causes no STEP and no send");
+
+    r = chunk16(h, 600, 1200, second);
+    check(header(r) == 1200 && r.data.size() == 2 && r.status == "00,OK",
+          "chunk: the last chunk -> header 1200, 00,OK (%s)", r.status.c_str());
+    bytes pt, ct;
+    for (size_t i = 0; i < world_module.calls.size(); i++) {
+        const RpcCall &c = world_module.calls[i];
+        if (c.cmd == 0x31) {
+            pt.insert(pt.end(), c.pt_in.begin(), c.pt_in.end());
+            ct.insert(ct.end(), c.ct_out.begin(), c.ct_out.end());
+        }
+    }
+    check(pt == data, "chunk: the STEPs' plaintext in is the 1200 B, in order (%d B)", (int)pt.size());
+    check(!ct.empty() && sock(h).tx.size() == tx + ct.size() &&
+              bytes(sock(h).tx.begin() + tx, sock(h).tx.end()) == ct,
+          "chunk: the socket got the ciphertext out of the STEPs, and nothing else");
+    check(sock(h).srv.got == data, "chunk: the server received the 1200 B (%d)", (int)sock(h).srv.got.size());
+}
+
 static void test_close(void)
 {
     printf("CLOSE on a TLS handle\n");
@@ -1716,6 +1759,7 @@ int main(int argc, char **argv)
     test_start_tls();
     test_read();
     test_write();
+    test_write_chunk();
     test_close();
     test_latch();
     test_claims();

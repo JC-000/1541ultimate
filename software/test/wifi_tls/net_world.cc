@@ -745,6 +745,9 @@ int wifi_tls_step(uint8_t slot, uint16_t tag, wifi_tls_step_t *st, uint32_t time
     c.flags = st->flags;
     c.ct_in_len = st->ct_in_len;
     c.pt_in_len = st->pt_in_len;
+    if (st->pt_in_len) {
+        c.pt_in.assign(st->pt_in, st->pt_in + st->pt_in_len);
+    }
 
     Forced f = Forced();
     bool forced = !m.forced.empty();
@@ -818,6 +821,7 @@ int wifi_tls_step(uint8_t slot, uint16_t tag, wifi_tls_step_t *st, uint32_t time
     memcpy(st->ct_out, s.out.data(), ct);
     s.out.erase(s.out.begin(), s.out.begin() + ct);
     st->ct_out_len = ct;
+    c.ct_out.assign(st->ct_out, st->ct_out + ct);
     size_t pt = 0;
     if ((s.state == WIFI_TLS_ESTABLISHED) && !(st->flags & WIFI_TLS_STEP_NO_READ)) {
         size_t room = 1024 - ct;
