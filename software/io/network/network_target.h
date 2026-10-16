@@ -97,6 +97,7 @@ class NetworkTarget : public CommandTarget {
 
     bool track_socket(int socketnr);
     void untrack_socket(int socketnr);
+    bool is_datagram_socket(int socketnr);
     bool owns_socket(int socketnr);
     void close_all_sockets(void);
 
