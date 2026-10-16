@@ -40,7 +40,7 @@ In this file, you need to set the location of your Xilinx ISE toolchain.
 
 Building targets
 ================
-ALL targets can be built by just typing 'make' in the root of the repository.
+ALL targets can be built by just typing 'make' in the root of the repository (see the U64E-II note below).
 
 In order to build for U2 only, use the 'u2_rv' target in the top level makefile. This will build the FPGAs as well
 as the RiscV based software, including all updaters. 
@@ -55,6 +55,8 @@ For the U2+L, you can build the 'u2pl' target.
 The U64 firmware can be built by typing 'make u64'.
 
 The U64E-II firmware can be built by typing 'make u64ii'
+Its control module firmware (software/u64ctrl) needs ESP-IDF 6, so 'make' and 'make u64ii' stop there
+unless IDF_PATH is an ESP-IDF 6; software/u64ctrl/README.md shows how to build it and then 'make u64ii_no_esp'.
 
 ==> When using the top level makefile, the results are copied into the root of the project.
 
