@@ -96,7 +96,7 @@ uint32_t entropy_epoch(void)
 
 entropy_source_t entropy_source(void)
 {
-    return radio_running ? ENTROPY_RADIO : ENTROPY_NONE;
+    return ENTROPY_RADIO; /* MUTANT: ignores the radio state */
 }
 
 esp_netif_t *my_sta_netif = NULL;
