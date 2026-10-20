@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# E2E: Verifies UCI network target socket reads: length handling and datagram delivery.
+# E2E: Verifies UCI network target socket reads (length handling, datagram delivery) and OPEN_UDP_LOCAL.
 
-"""End-to-end check of the UCI network target's READ_SOCKET command.
+"""End-to-end check of the UCI network target's READ_SOCKET and OPEN_UDP_LOCAL commands.
 
 Regression guard for GideonZ/1541ultimate#802, reported as "a maxlen above 512
 silently returns no data". Everything here was measured on real hardware
@@ -144,6 +144,8 @@ OVERRUN_LIMIT = REPLY_QUEUE_BYTES + 128
 # that is already queued and does not wait for one in flight.
 DELIVERY_SETTLE_SECONDS = 0.4
 PEER_TIMEOUT_SECONDS = 10.0
+# How long one WRITE of write_reaches_peer is given before it is sent again.
+WRITE_WAIT_SECONDS = 3.0
 # How often a lost probe datagram is resent before the socket is judged
 # unreachable.
 PROBE_ATTEMPTS = 3
@@ -1201,6 +1203,31 @@ def drain_udp(sock: socket.socket) -> None:
         sock.setblocking(True)
 
 
+def write_reaches_peer(net: Net, peer: Peer, handle: int, payload: bytes) -> tuple[str, int]:
+    """WRITE `payload` until the host sees it, and return the source it came from.
+
+    Datagrams from the device can be lost, the first one more often than the
+    rest while the device resolves the host's address, so a lost one is sent
+    again rather than counted against the firmware, as learn_udp_peer does.
+    """
+    for attempt in range(PROBE_ATTEMPTS):
+        drain_udp(peer.udp)
+        sent = net.write(handle, payload)
+        if sent.status_text != STATUS_OK:
+            raise Failure(f"expected {STATUS_OK!r}, got {sent.status_text!r}")
+        peer.udp.settimeout(WRITE_WAIT_SECONDS)
+        try:
+            data, address = peer.udp.recvfrom(2048)
+        except TimeoutError:
+            detail(f"write {attempt + 1} of {PROBE_ATTEMPTS} did not arrive "
+                   f"within {WRITE_WAIT_SECONDS:.0f}s")
+            continue
+        if data != payload:
+            raise Failure(f"peer received {len(data)} bytes that differ from the write")
+        return address
+    raise Failure(f"the written datagram never reached the peer in {PROBE_ATTEMPTS} attempts")
+
+
 def run_udp_local_fixed_port_echo(net: Net, peer: Peer) -> bool:
     """A datagram sent to the device's fixed port arrives, and replies leave from it.
 
@@ -1212,8 +1239,8 @@ def run_udp_local_fixed_port_echo(net: Net, peer: Peer) -> bool:
     port = fresh_port()
     device_ip = net.ip_address()
     with check("GET_IPADDR gives the device's address"):
-        if not device_ip:
-            raise Failure("the device reported no IPv4 address")
+        if not device_ip or device_ip == "0.0.0.0":
+            raise Failure(f"the device reported no usable IPv4 address ({device_ip!r})")
         detail(f"device {device_ip}")
     drain_udp(peer.udp)
     handle, bound = net.open_udp_local(peer.ip, peer.udp_port, port)
@@ -1242,19 +1269,9 @@ def run_udp_local_fixed_port_echo(net: Net, peer: Peer) -> bool:
                               f"bytes that were sent")
 
         outgoing = pattern(SMALL_READ, seed=6)
-        drain_udp(peer.udp)
         with check("a WRITE leaves from the fixed port"):
-            sent = net.write(handle, outgoing)
-            if sent.status_text != STATUS_OK:
-                raise Failure(f"expected {STATUS_OK!r}, got {sent.status_text!r}")
-            peer.udp.settimeout(PEER_TIMEOUT_SECONDS)
-            try:
-                data, address = peer.udp.recvfrom(2048)
-            except TimeoutError:
-                raise Failure("the written datagram never reached the peer") from None
+            address = write_reaches_peer(net, peer, handle, outgoing)
             detail(f"source {address[0]}:{address[1]}")
-            if data != outgoing:
-                raise Failure(f"peer received {len(data)} bytes that differ from the write")
             if address[1] != port:
                 raise Failure(f"the datagram came from port {address[1]}, not {port}")
     finally:
@@ -1302,21 +1319,15 @@ def run_udp_local_port_in_use(net: Net, peer: Peer) -> bool:
         with check("a second open on the same port answers 89 with no data"):
             second = net.try_open_udp_local(peer.ip, peer.udp_port, port)
             detail(f"status {second.status_text!r}, data {second.data!r}")
+            if second.status_text == STATUS_OK and len(second.data) == 3:
+                handles.append(second.data[0])
             if second.status_text != STATUS_PORT_IN_USE or second.data:
                 raise Failure(f"expected {STATUS_PORT_IN_USE!r} and no data, got "
                               f"{second.status_text!r} with {second.data!r}")
         with check("the socket that owns the port still works"):
-            drain_udp(peer.udp)
-            sent = net.write(first, b"STILL HERE")
-            if sent.status_text != STATUS_OK:
-                raise Failure(f"expected {STATUS_OK!r}, got {sent.status_text!r}")
-            peer.udp.settimeout(PEER_TIMEOUT_SECONDS)
-            try:
-                data, address = peer.udp.recvfrom(2048)
-            except TimeoutError:
-                raise Failure("the owner's datagram never reached the peer") from None
-            if data != b"STILL HERE" or address[1] != port:
-                raise Failure(f"got {data!r} from port {address[1]}")
+            address = write_reaches_peer(net, peer, first, b"STILL HERE")
+            if address[1] != port:
+                raise Failure(f"the owner's datagram came from port {address[1]}, not {port}")
 
         with check("a port taken by a plain OPEN_UDP answers 89"):
             plain = net.open_udp(peer.ip, peer.udp_port)
@@ -1324,6 +1335,8 @@ def run_udp_local_port_in_use(net: Net, peer: Peer) -> bool:
             _, plain_source = peer.learn_udp_peer(net, plain)
             taken = net.try_open_udp_local(peer.ip, peer.udp_port, plain_source)
             detail(f"port {plain_source}: {taken.status_text!r}")
+            if taken.status_text == STATUS_OK and len(taken.data) == 3:
+                handles.append(taken.data[0])
             if taken.status_text != STATUS_PORT_IN_USE:
                 raise Failure(f"expected {STATUS_PORT_IN_USE!r}, got {taken.status_text!r}")
 
@@ -1340,6 +1353,8 @@ def run_udp_local_port_in_use(net: Net, peer: Peer) -> bool:
         with check("refused opens leak no descriptor"):
             for _ in range(REFUSED_OPENS):
                 refused = net.try_open_udp_local(peer.ip, peer.udp_port, port)
+                if refused.status_text == STATUS_OK and len(refused.data) == 3:
+                    handles.append(refused.data[0])
                 if refused.status_text != STATUS_PORT_IN_USE:
                     raise Failure(f"expected {STATUS_PORT_IN_USE!r}, got {refused.status_text!r}")
             other, _ = net.open_udp_local(peer.ip, peer.udp_port, port + 1)
@@ -1353,6 +1368,7 @@ def run_udp_local_tcp_port_not_a_clash(net: Net, peer: Peer) -> bool:
     """UDP and TCP ports are separate: a TCP socket's port is free for UDP."""
     section("udp-local-tcp-port-not-a-clash")
     handles: list[int] = []
+    conn = None
     try:
         tcp = net.open_tcp(peer.ip, peer.tcp_port)
         handles.append(tcp)
@@ -1366,11 +1382,13 @@ def run_udp_local_tcp_port_not_a_clash(net: Net, peer: Peer) -> bool:
                 raise Failure(f"asked for port {tcp_port}, the reply says {bound}")
     finally:
         close_quietly(net, handles)
+        if conn is not None:
+            conn.close()
     return True
 
 
 def run_udp_local_bad_params(net: Net, peer: Peer) -> bool:
-    """Malformed commands are refused and leave nothing bound."""
+    """Malformed commands are refused and leave nothing bound; the edges of the grammar open."""
     section("udp-local-bad-params")
     port = fresh_port()
     remote = peer.udp_port
@@ -1384,12 +1402,27 @@ def run_udp_local_bad_params(net: Net, peer: Peer) -> bool:
          net.open_udp_local_command(b"a" * 254 + b"\x00", remote, port), STATUS_INVALID_PARAMS),
         ("remote port 0", net.open_udp_local_command(host + b"\x00", 0, port),
          STATUS_OUT_OF_RANGE),
+        # The grammar is checked before the remote port.
+        ("empty host and remote port 0", net.open_udp_local_command(b"\x00", 0, port),
+         STATUS_INVALID_PARAMS),
+        # Accepted forms: the host may end without a NUL, and 253 bytes is the longest.
+        ("host without a trailing NUL", net.open_udp_local_command(host, remote, port),
+         STATUS_OK),
+        ("host of 253 bytes",
+         net.open_udp_local_command(host.ljust(253) + b"\x00", remote, port), STATUS_OK),
     ]
     for name, command, expected in cases:
         with check(f"{name} answers {expected.decode()}"):
             result = net.uci.transact(command)
             detail(f"status {result.status_text!r}, data {result.data!r}")
-            if result.status_text != expected or result.data:
+            if result.status_text == STATUS_OK and result.data:
+                # Whether or not it was expected, nothing may stay bound.
+                close_quietly(net, [result.data[0]])
+            if expected == STATUS_OK:
+                if result.status_text != STATUS_OK or len(result.data) != 3:
+                    raise Failure(f"expected {STATUS_OK!r} and 3 bytes, got "
+                                  f"{result.status_text!r} with {result.data!r}")
+            elif result.status_text != expected or result.data:
                 raise Failure(f"expected {expected!r} and no data, got "
                               f"{result.status_text!r} with {result.data!r}")
     with check("none of them left the port bound"):
@@ -1730,7 +1763,11 @@ def main() -> int:
                 run_multi_block_state_does_not_leak, net, peer)
 
             def reset_and_reopen(route=route):
-                """Reset the C64 and hand back a driver that reaches the target."""
+                """Reset the C64 and hand back a driver that reaches the target.
+
+                Also replaces `net` for the scenarios that follow, because a
+                native reset ends the agent the old one wraps.
+                """
                 nonlocal native_started, net
                 computer.machine.reset(force=True)
                 if route == "native":
