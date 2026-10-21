@@ -26,8 +26,9 @@ void start_dispatch(QueueHandle_t queue);
 void send_button_event(uint8_t button);
 void send_keepalive();
 
-#define IDENT_STRING "ESP32 WiFi Bridge V1.19"
+#define IDENT_STRING "ESP32 WiFi Bridge V1.20"
 #define IDENT_MAJOR   1
+// 1.20: built with ESP-IDF 6.0.3; the recovery code uses PSA Crypto (mbedTLS 4).
 // 1.19: a recovery also tries the my_hotspot access point after the stored ones.
 // 1.18: recovers the firmware over Wi-Fi when the switch is held down for three
 // seconds while off, and stores the recovery server the menu sets.
@@ -38,7 +39,7 @@ void send_keepalive();
 // when this is higher than what the module reports, so a module change that
 // does not bump it is silently never installed, and an older release never
 // replaces a newer module.
-#define IDENT_MINOR   19
+#define IDENT_MINOR   20
 #define MULTITHREADED 0
 #define DISPATCHER_STACK 3072
 
