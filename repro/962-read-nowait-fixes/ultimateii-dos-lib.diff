@@ -1,0 +1,67 @@
+diff --git a/src/samples/ultimateterm.c b/src/samples/ultimateterm.c
+index 4a27369..51b2b41 100644
+--- a/src/samples/ultimateterm.c
++++ b/src/samples/ultimateterm.c
+@@ -46,6 +46,7 @@ void blank_vicII(void);
+ #include <conio.h>
+ #include <peekpoke.h>
+ #include <unistd.h>
++#include <time.h>
+ #include "../lib/ultimate_lib.h"
+ #include "screen_utility.h"
+ 
+@@ -170,6 +171,7 @@ void dos_commands(void);
+ void showdir(char *);
+ void send_dos(char *);
+ unsigned char handle_telnet_iac();
++int telnet_nextbyte(void);
+ void send_char_ansi(unsigned char c);
+ 
+ char *version = "2.7";
+@@ -1432,9 +1434,24 @@ void SendTelnetParameters()
+ 	send_char(1);                                     // echo
+ }
+ 
++// One byte of a telnet command. The rest of the command can still be on the
++// wire when the IAC arrives, and a READ then returns no data (-1), so poll until
++// the byte comes, the connection closes (0) or 2 seconds pass. -1 = no byte.
++int telnet_nextbyte(void) {
++	clock_t until = clock() + 2 * CLOCKS_PER_SEC;
++	int count;
++
++	do {
++		count = uii_socketread(socketnr, 1);
++		if (count > 0) return uii_data[2];
++		if (count == 0) return -1;                     // closed: the main loop sees it on its next READ
++	} while (clock() < until);
++	return -1;
++}
++
+ unsigned char handle_telnet_iac() {
+ 	
+-	int datacount;
++	int b;
+ 	unsigned char verb;           // telnet parameters
+ 	unsigned char opt;
+ 
+@@ -1444,16 +1461,16 @@ unsigned char handle_telnet_iac() {
+ 		SendTelnetParameters();                         // Start off with negotiating preferred parameters
+ 	}
+ 
+-	datacount = uii_socketread(socketnr, 1);   // TODO check for closed connection
+-	verb = uii_data[2];                                // receive negotiation verb character
++	if ((b = telnet_nextbyte()) < 0) return 0;
++	verb = b;                                          // receive negotiation verb character
+ 
+ 	if ((verb == NVT_IAC) && telnet_binary)
+ 	{
+ 		return 1;                                  // Received two NVT_IACs in a row so treat as single 255 data in calling function
+ 	}
+ 
+-	datacount = uii_socketread(socketnr, 1);   // TODO check for closed connection
+-	opt = uii_data[2];                               // receive negotiation option character
++	if ((b = telnet_nextbyte()) < 0) return 0;
++	opt = b;                                         // receive negotiation option character
+ 
+ 	switch (verb) {                                  // evaluate negotiation verb character
+ 		case NVT_WILL:                                      // if negotiation verb character is 251 (will)or

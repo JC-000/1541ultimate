@@ -1,0 +1,46 @@
+diff --git a/src/main.c b/src/main.c
+index cf133fe..f646729 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -649,7 +649,7 @@ static void link(void)
+     unsigned long last_ping = 0, last_heard = 0, now, data_t0 = 0, data_t1 = 0;
+     unsigned long w_max = 0, last_line = 0;
+     unsigned int interval = 10;                 /* PINGs per second */
+-    unsigned char burst = 0, c, n, line = 0, named = peername[0] != '?';
++    unsigned char burst = 0, c, n, line = 0, named = peername[0] != '?', await = 0;
+     r_max = rd_fast = rd_slow = rd_empty = 0;
+ 
+     header("LINK TEST");
+@@ -688,10 +688,12 @@ static void link(void)
+             make(T_PING, seq++, now);
+             sock_send(sock, HDR);
+             ++sent;
++            await = 1;
+             if (t_write > w_max) w_max = t_write;
+         }
+         /* everything that is waiting (up to 8): reading less than arrives makes a
+-           queue, and the round trip grows with it. An empty UCI read waits 40 ms. */
++           queue, and the round trip grows with it. An empty UCI read returns at
++           once or waits up to 40 ms, depending on the firmware. */
+         for (n = 0; n < 8; ++n) {
+             if (!sock_recv(sock)) {
+                 if (rx_any) continue;           /* one that does not count: more may wait */
+@@ -725,6 +727,7 @@ static void link(void)
+                 break;
+             case T_PONG:
+                 ++pongs;
++                await = 0;
+                 memcpy(&rtt, rx + 5, 4);
+                 rtt = now - rtt;
+                 rtt_last = rtt;
+@@ -744,6 +747,10 @@ static void link(void)
+         /* the screen: one line at a time, at most 12 a second (sprintf with longs is
+            slow on a 6502; a message that arrives meanwhile waits) */
+         if (now - last_line < cps / 12) continue;
++        /* not while a PONG is due (50 ms after the PING): it would wait for the
++           line, and the round trip would measure the screen. At least 4 lines a
++           second, so a fast PING rate or a lost PONG does not stop the screen */
++        if (await && now - last_ping < cps / 20 && now - last_line < cps / 4) continue;
+         last_line = now;
+         switch (line) {
+         case 0:

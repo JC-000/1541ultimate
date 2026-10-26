@@ -1,0 +1,46 @@
+diff --git a/tests/hardware/ucitest.c b/tests/hardware/ucitest.c
+index 69a9fea..7167b88 100644
+--- a/tests/hardware/ucitest.c
++++ b/tests/hardware/ucitest.c
+@@ -25,6 +25,7 @@
+ 
+ #include <stdio.h>
+ #include <string.h>
++#include <time.h>
+ #include <ultimate.h>
+ 
+ #include "cycles.h"
+@@ -1360,6 +1361,7 @@ after_write:
+             uint16_t sent = 0;
+             uint16_t total;
+             uint8_t  tries;
++            clock_t  until;
+ 
+             printf("# peer=%s:%u\n", net_peer, (unsigned)NET_PEER_PORT);
+ 
+@@ -1380,18 +1382,19 @@ after_write:
+                 /*
+                  * **A read does not wait for the wire**, so this polls - and
+                  * the polling is the behaviour being pinned rather than an
+-                 * accident of the test. The bound is small on purpose: an idle
+-                 * read costs about 42 ms and the harness gives the whole
+-                 * program about 26 seconds, so a generous-looking loop here is
+-                 * what times the run out.
++                 * accident of the test. The bound is time, not tries: an idle
++                 * read costs about 42 ms on 3.12a-3.15 and a few ms where the
++                 * read does not wait, and the harness gives the whole program
++                 * about 26 seconds. Two seconds is about what 40 tries gave at 42 ms.
+                  */
+                 got = 0;
+-                for (tries = 0; tries < 40; ++tries) {
++                until = clock() + 2 * CLOCKS_PER_SEC;
++                do {
+                     err = ultimate_net_read(handle, net_buf, sizeof(net_buf),
+                                             &got);
+                     if (err != ULTIMATE_OK || got != 0)
+                         break;
+-                }
++                } while (clock() < until);
+                 check("net-read-gets-something-back", ULTIMATE_OK, err);
+                 check("net-read-returned-bytes", 1, got != 0 ? 1 : 0);
+ 
