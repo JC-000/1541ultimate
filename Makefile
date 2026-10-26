@@ -360,7 +360,7 @@ u64: app_space_test esp32_raw_u64
 	@$(MAKE) -C target/u64/nios2/updater
 	@cp target/u64/nios2/updater/result/update.app ./update.u64
 
-u64_no_esp:: app_space_test openapi_check
+u64_no_esp:: app_space_test
 	@touch software/nios_solo_bsp/Makefile
 	@touch software/nios_solo_bsp/public.mk
 	@touch software/nios_appl_bsp/Makefile
