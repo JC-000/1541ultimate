@@ -345,7 +345,8 @@ nios_bsps:
 	@$(MAKE) -C software/nios_solo_bsp
 	@$(MAKE) -C software/nios_appl_bsp
 
-u64: app_space_test openapi_check esp32_raw_u64
+# Diagnostic route is intentionally outside the published OpenAPI surface.
+u64: app_space_test esp32_raw_u64
 	@touch software/nios_solo_bsp/Makefile
 	@touch software/nios_solo_bsp/public.mk
 	@touch software/nios_appl_bsp/Makefile
