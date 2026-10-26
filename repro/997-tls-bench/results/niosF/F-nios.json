@@ -1,0 +1,512 @@
+{
+  "idle": [
+    {
+      "start_wall": 1793027846.099,
+      "end_wall": 1793027849.385,
+      "elapsed_s": 3.286,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1246.4,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793027849.39,
+      "end_wall": 1793027852.631,
+      "elapsed_s": 3.242,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1263.5,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793027852.636,
+      "end_wall": 1793027855.87,
+      "elapsed_s": 3.234,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1266.4,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793027855.874,
+      "end_wall": 1793027859.115,
+      "elapsed_s": 3.24,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1264.1,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793027859.117,
+      "end_wall": 1793027862.397,
+      "elapsed_s": 3.28,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1248.7,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793027862.402,
+      "end_wall": 1793027865.622,
+      "elapsed_s": 3.221,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1271.8,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793027865.625,
+      "end_wall": 1793027868.88,
+      "elapsed_s": 3.255,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1258.4,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793027868.882,
+      "end_wall": 1793027872.196,
+      "elapsed_s": 3.314,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1235.9,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793027872.2,
+      "end_wall": 1793027875.441,
+      "elapsed_s": 3.24,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1264.2,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793027875.445,
+      "end_wall": 1793027878.731,
+      "elapsed_s": 3.286,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1246.5,
+      "error": null,
+      "phase": "idle"
+    }
+  ],
+  "busy": [
+    {
+      "start_wall": 1793027878.762,
+      "end_wall": 1793027885.508,
+      "elapsed_s": 6.746,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 607.2,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027885.511,
+      "end_wall": 1793027892.147,
+      "elapsed_s": 6.636,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 617.2,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027892.151,
+      "end_wall": 1793027899.797,
+      "elapsed_s": 7.646,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 535.7,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027899.802,
+      "end_wall": 1793027907.567,
+      "elapsed_s": 7.764,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 527.5,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027907.572,
+      "end_wall": 1793027913.937,
+      "elapsed_s": 6.364,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 643.6,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027913.942,
+      "end_wall": 1793027920.456,
+      "elapsed_s": 6.514,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 628.8,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027920.462,
+      "end_wall": 1793027927.016,
+      "elapsed_s": 6.554,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 624.9,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027927.021,
+      "end_wall": 1793027933.746,
+      "elapsed_s": 6.725,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 609.1,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027933.75,
+      "end_wall": 1793027940.261,
+      "elapsed_s": 6.511,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 629.1,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027940.266,
+      "end_wall": 1793027946.711,
+      "elapsed_s": 6.445,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 635.5,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027946.713,
+      "end_wall": 1793027954.415,
+      "elapsed_s": 7.703,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 531.8,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027954.421,
+      "end_wall": 1793027960.575,
+      "elapsed_s": 6.154,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 665.6,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027960.581,
+      "end_wall": 1793027967.295,
+      "elapsed_s": 6.714,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 610.1,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027967.301,
+      "end_wall": 1793027973.785,
+      "elapsed_s": 6.484,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 631.7,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027973.79,
+      "end_wall": 1793027980.319,
+      "elapsed_s": 6.529,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 627.3,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027980.325,
+      "end_wall": 1793027987.059,
+      "elapsed_s": 6.734,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 608.2,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027987.065,
+      "end_wall": 1793027993.849,
+      "elapsed_s": 6.784,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 603.7,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793027993.851,
+      "end_wall": 1793028000.424,
+      "elapsed_s": 6.572,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 623.2,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793028000.429,
+      "end_wall": 1793028008.264,
+      "elapsed_s": 7.834,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 522.8,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793028008.267,
+      "end_wall": 1793028016.118,
+      "elapsed_s": 7.851,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 521.7,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793028016.124,
+      "end_wall": 1793028023.383,
+      "elapsed_s": 7.259,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 564.3,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793028023.388,
+      "end_wall": 1793028030.083,
+      "elapsed_s": 6.695,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 611.8,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793028030.088,
+      "end_wall": 1793028037.033,
+      "elapsed_s": 6.944,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 589.8,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793028037.039,
+      "end_wall": 1793028043.453,
+      "elapsed_s": 6.414,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 638.6,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793028043.457,
+      "end_wall": 1793028051.147,
+      "elapsed_s": 7.69,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 532.6,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793028051.15,
+      "end_wall": 1793028058.722,
+      "elapsed_s": 7.572,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 540.9,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793028058.727,
+      "end_wall": 1793028065.297,
+      "elapsed_s": 6.57,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 623.5,
+      "error": null,
+      "phase": "busy"
+    }
+  ],
+  "run": {
+    "state": "complete",
+    "error": 0,
+    "verify_flags": 0,
+    "tcp_ms": 10,
+    "setup_ms": 10,
+    "handshake_ms": 47850,
+    "transfer_ms": 7175,
+    "bytes": 262144,
+    "plain_tcp_ms": 5,
+    "plain_transfer_ms": 260,
+    "plain_bytes": 262144,
+    "heap_before": 5250756,
+    "heap_after": 5263776,
+    "global_min_heap": 5002712,
+    "stack_free_words": 7233,
+    "entropy": "deterministic_test_only",
+    "tls": "1.2 ECDHE-ECDSA CHACHA20-POLY1305",
+    "errors": []
+  },
+  "summary": {
+    "idle": {
+      "count": 10,
+      "failures": 0,
+      "kib_s": {
+        "min": 1235.9,
+        "median": 1260.95,
+        "p95": 1266.4,
+        "max": 1271.8
+      }
+    },
+    "busy": {
+      "count": 27,
+      "failures": 0,
+      "kib_s": {
+        "min": 521.7,
+        "median": 610.1,
+        "p95": 638.6,
+        "max": 665.6
+      }
+    }
+  },
+  "load": {
+    "build": "nios",
+    "puts": 3,
+    "runs_started": 3,
+    "busy_answers": 0,
+    "final_run": {
+      "state": "complete",
+      "error": 0,
+      "verify_flags": 0,
+      "tcp_ms": 10,
+      "setup_ms": 10,
+      "handshake_ms": 47850,
+      "transfer_ms": 7175,
+      "bytes": 262144,
+      "plain_tcp_ms": 5,
+      "plain_transfer_ms": 260,
+      "plain_bytes": 262144,
+      "heap_before": 5250756,
+      "heap_after": 5263776,
+      "global_min_heap": 5002712,
+      "stack_free_words": 7233,
+      "entropy": "deterministic_test_only",
+      "tls": "1.2 ECDHE-ECDSA CHACHA20-POLY1305",
+      "errors": []
+    },
+    "runs_started_needed": 3,
+    "load_ok": true
+  },
+  "window": {
+    "busy_end_wall": 1793028065.301527,
+    "busy_seconds": 180.0
+  },
+  "file": {
+    "path": "/USB1/tlsbench/ftp4m.bin",
+    "bytes": 4194304,
+    "sha256": "b8626699ffb3a708614a2184b939bcefad35c39befea4dd88497936da89f5df5"
+  },
+  "config_readback": {
+    "U64 Specific Settings / Turbo Control": "Manual",
+    "U64 Specific Settings / CPU Speed": "48",
+    "U64 Specific Settings / System Mode": "NTSC",
+    "WiFi settings / WiFi Enabled": "Enabled",
+    "U64 Specific Settings / Badline Timing": "Enabled",
+    "Network Settings / SNTP Enable": "Enabled",
+    "C64 and Cartridge Settings / Command Interface": "Enabled"
+  },
+  "meta": {
+    "build": "nios",
+    "host": "<DEVICE_IP>",
+    "label": "",
+    "started": 1793028092.909536
+  },
+  "config_set_record": {
+    "profile": "turbo",
+    "items": [
+      {
+        "category": "WiFi settings",
+        "item": "WiFi Enabled",
+        "want": "Enabled",
+        "got": "Enabled",
+        "ok": true
+      },
+      {
+        "category": "Network Settings",
+        "item": "SNTP Enable",
+        "want": "Enabled",
+        "got": "Enabled",
+        "ok": true
+      },
+      {
+        "category": "C64 and Cartridge Settings",
+        "item": "Command Interface",
+        "want": "Enabled",
+        "got": "Enabled",
+        "ok": true
+      },
+      {
+        "category": "U64 Specific Settings",
+        "item": "Turbo Control",
+        "want": "Manual",
+        "got": "Manual",
+        "ok": true
+      },
+      {
+        "category": "U64 Specific Settings",
+        "item": "CPU Speed",
+        "want": "48",
+        "got": "48",
+        "ok": true
+      }
+    ],
+    "system_mode": "NTSC",
+    "phi2_hz": 1022727.0
+  }
+}

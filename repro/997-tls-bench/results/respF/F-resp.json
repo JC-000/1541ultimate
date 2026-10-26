@@ -1,0 +1,708 @@
+{
+  "idle": [
+    {
+      "start_wall": 1793044342.782,
+      "end_wall": 1793044346.083,
+      "elapsed_s": 3.301,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1240.7,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793044346.085,
+      "end_wall": 1793044349.362,
+      "elapsed_s": 3.277,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1250.1,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793044349.367,
+      "end_wall": 1793044352.634,
+      "elapsed_s": 3.267,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1253.8,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793044352.636,
+      "end_wall": 1793044355.895,
+      "elapsed_s": 3.259,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1256.8,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793044355.897,
+      "end_wall": 1793044359.152,
+      "elapsed_s": 3.255,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1258.3,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793044359.158,
+      "end_wall": 1793044362.452,
+      "elapsed_s": 3.294,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1243.5,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793044362.454,
+      "end_wall": 1793044365.731,
+      "elapsed_s": 3.277,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1249.8,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793044365.735,
+      "end_wall": 1793044369.058,
+      "elapsed_s": 3.323,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1232.7,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793044369.062,
+      "end_wall": 1793044372.309,
+      "elapsed_s": 3.247,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1261.5,
+      "error": null,
+      "phase": "idle"
+    },
+    {
+      "start_wall": 1793044372.313,
+      "end_wall": 1793044375.587,
+      "elapsed_s": 3.273,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1251.3,
+      "error": null,
+      "phase": "idle"
+    }
+  ],
+  "busy": [
+    {
+      "start_wall": 1793044375.634,
+      "end_wall": 1793044379.526,
+      "elapsed_s": 3.892,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1052.3,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044379.531,
+      "end_wall": 1793044383.394,
+      "elapsed_s": 3.863,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1060.4,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044383.398,
+      "end_wall": 1793044387.822,
+      "elapsed_s": 4.424,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 925.9,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044387.826,
+      "end_wall": 1793044391.533,
+      "elapsed_s": 3.707,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1105.0,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044391.539,
+      "end_wall": 1793044395.458,
+      "elapsed_s": 3.92,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1044.9,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044395.46,
+      "end_wall": 1793044399.756,
+      "elapsed_s": 4.295,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 953.6,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044399.758,
+      "end_wall": 1793044403.627,
+      "elapsed_s": 3.869,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1058.5,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044403.629,
+      "end_wall": 1793044407.765,
+      "elapsed_s": 4.136,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 990.3,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044407.767,
+      "end_wall": 1793044411.965,
+      "elapsed_s": 4.198,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 975.7,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044411.967,
+      "end_wall": 1793044415.73,
+      "elapsed_s": 3.762,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1088.7,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044415.732,
+      "end_wall": 1793044419.855,
+      "elapsed_s": 4.124,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 993.2,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044419.857,
+      "end_wall": 1793044423.986,
+      "elapsed_s": 4.129,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 992.1,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044423.991,
+      "end_wall": 1793044428.034,
+      "elapsed_s": 4.043,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1013.2,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044428.039,
+      "end_wall": 1793044432.055,
+      "elapsed_s": 4.016,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1019.9,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044432.061,
+      "end_wall": 1793044436.32,
+      "elapsed_s": 4.26,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 961.5,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044436.325,
+      "end_wall": 1793044440.119,
+      "elapsed_s": 3.794,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1079.6,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044440.122,
+      "end_wall": 1793044444.203,
+      "elapsed_s": 4.081,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1003.6,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044444.207,
+      "end_wall": 1793044448.32,
+      "elapsed_s": 4.113,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 995.9,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044448.326,
+      "end_wall": 1793044452.266,
+      "elapsed_s": 3.94,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1039.5,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044452.271,
+      "end_wall": 1793044456.253,
+      "elapsed_s": 3.982,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1028.8,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044456.258,
+      "end_wall": 1793044460.431,
+      "elapsed_s": 4.173,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 981.5,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044460.436,
+      "end_wall": 1793044464.382,
+      "elapsed_s": 3.946,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1038.0,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044464.387,
+      "end_wall": 1793044468.363,
+      "elapsed_s": 3.976,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1030.1,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044468.367,
+      "end_wall": 1793044472.742,
+      "elapsed_s": 4.375,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 936.3,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044472.746,
+      "end_wall": 1793044476.532,
+      "elapsed_s": 3.786,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1081.8,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044476.536,
+      "end_wall": 1793044480.553,
+      "elapsed_s": 4.016,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1019.8,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044480.559,
+      "end_wall": 1793044484.712,
+      "elapsed_s": 4.154,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 986.1,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044484.718,
+      "end_wall": 1793044488.65,
+      "elapsed_s": 3.932,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1041.8,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044488.653,
+      "end_wall": 1793044492.546,
+      "elapsed_s": 3.894,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1052.0,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044492.551,
+      "end_wall": 1793044496.807,
+      "elapsed_s": 4.256,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 962.4,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044496.809,
+      "end_wall": 1793044500.558,
+      "elapsed_s": 3.749,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1092.5,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044500.56,
+      "end_wall": 1793044504.568,
+      "elapsed_s": 4.008,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1021.8,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044504.57,
+      "end_wall": 1793044508.637,
+      "elapsed_s": 4.066,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1007.3,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044508.642,
+      "end_wall": 1793044512.558,
+      "elapsed_s": 3.916,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1046.0,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044512.562,
+      "end_wall": 1793044516.605,
+      "elapsed_s": 4.043,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1013.2,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044516.609,
+      "end_wall": 1793044520.763,
+      "elapsed_s": 4.154,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 986.0,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044520.769,
+      "end_wall": 1793044524.75,
+      "elapsed_s": 3.982,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1028.7,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044524.755,
+      "end_wall": 1793044528.651,
+      "elapsed_s": 3.896,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1051.4,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044528.657,
+      "end_wall": 1793044533.053,
+      "elapsed_s": 4.396,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 931.8,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044533.056,
+      "end_wall": 1793044536.894,
+      "elapsed_s": 3.839,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1067.0,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044536.899,
+      "end_wall": 1793044540.928,
+      "elapsed_s": 4.029,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1016.6,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044540.933,
+      "end_wall": 1793044545.192,
+      "elapsed_s": 4.259,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 961.7,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044545.197,
+      "end_wall": 1793044548.993,
+      "elapsed_s": 3.796,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1078.9,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044548.998,
+      "end_wall": 1793044553.075,
+      "elapsed_s": 4.077,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1004.7,
+      "error": null,
+      "phase": "busy"
+    },
+    {
+      "start_wall": 1793044553.08,
+      "end_wall": 1793044557.157,
+      "elapsed_s": 4.077,
+      "bytes": 4194304,
+      "sha_ok": true,
+      "kib_s": 1004.6,
+      "error": null,
+      "phase": "busy"
+    }
+  ],
+  "run": {
+    "state": "complete",
+    "error": 0,
+    "verify_flags": 0,
+    "tcp_ms": 15,
+    "setup_ms": 0,
+    "handshake_ms": 1600,
+    "transfer_ms": 3420,
+    "bytes": 262144,
+    "plain_tcp_ms": 5,
+    "plain_transfer_ms": 260,
+    "plain_bytes": 262144,
+    "heap_before": 5218276,
+    "heap_after": 5278476,
+    "global_min_heap": 5217320,
+    "stack_free_words": 3203,
+    "open_total_ms": 1615,
+    "stats_rpc_ms": 5,
+    "tls_version": 771,
+    "tls_suite": 52393,
+    "tls_group": 23,
+    "status": "",
+    "entropy": "ESP32 hardware RNG (Wi-Fi radio on)",
+    "tls": "ESP32 offload (module TLS), session checked 1.2 ECDHE-ECDSA CHACHA20-POLY1305 secp256r1",
+    "time": "SNTP UTC",
+    "client": "Nios II/f, FreeRTOS task, NetworkTarget commands (ESP32 offload)",
+    "errors": []
+  },
+  "summary": {
+    "idle": {
+      "count": 10,
+      "failures": 0,
+      "kib_s": {
+        "min": 1232.7,
+        "median": 1250.6999999999998,
+        "p95": 1258.3,
+        "max": 1261.5
+      }
+    },
+    "busy": {
+      "count": 45,
+      "failures": 0,
+      "kib_s": {
+        "min": 925.9,
+        "median": 1019.8,
+        "p95": 1081.8,
+        "max": 1105.0
+      }
+    }
+  },
+  "load": {
+    "build": "nios",
+    "puts": 53,
+    "runs_started": 30,
+    "busy_answers": 23,
+    "final_run": {
+      "state": "complete",
+      "error": 0,
+      "verify_flags": 0,
+      "tcp_ms": 15,
+      "setup_ms": 0,
+      "handshake_ms": 1600,
+      "transfer_ms": 3420,
+      "bytes": 262144,
+      "plain_tcp_ms": 5,
+      "plain_transfer_ms": 260,
+      "plain_bytes": 262144,
+      "heap_before": 5218276,
+      "heap_after": 5278476,
+      "global_min_heap": 5217320,
+      "stack_free_words": 3203,
+      "open_total_ms": 1615,
+      "stats_rpc_ms": 5,
+      "tls_version": 771,
+      "tls_suite": 52393,
+      "tls_group": 23,
+      "status": "",
+      "entropy": "ESP32 hardware RNG (Wi-Fi radio on)",
+      "tls": "ESP32 offload (module TLS), session checked 1.2 ECDHE-ECDSA CHACHA20-POLY1305 secp256r1",
+      "time": "SNTP UTC",
+      "client": "Nios II/f, FreeRTOS task, NetworkTarget commands (ESP32 offload)",
+      "errors": []
+    },
+    "runs_started_needed": 3,
+    "load_ok": true
+  },
+  "window": {
+    "busy_end_wall": 1793044557.161925,
+    "busy_seconds": 180.0
+  },
+  "file": {
+    "path": "/USB1/tlsbench/ftp4m.bin",
+    "bytes": 4194304,
+    "sha256": "b8626699ffb3a708614a2184b939bcefad35c39befea4dd88497936da89f5df5"
+  },
+  "config_readback": {
+    "U64 Specific Settings / Turbo Control": "Manual",
+    "U64 Specific Settings / CPU Speed": "48",
+    "U64 Specific Settings / System Mode": "NTSC",
+    "WiFi settings / WiFi Enabled": "Enabled",
+    "U64 Specific Settings / Badline Timing": "Enabled",
+    "Network Settings / SNTP Enable": "Enabled",
+    "C64 and Cartridge Settings / Command Interface": "Enabled"
+  },
+  "meta": {
+    "build": "nios",
+    "host": "<DEVICE_IP>",
+    "label": "",
+    "started": 1793044558.316145
+  },
+  "config_set_record": {
+    "profile": "turbo",
+    "items": [
+      {
+        "category": "WiFi settings",
+        "item": "WiFi Enabled",
+        "want": "Enabled",
+        "got": "Enabled",
+        "ok": true
+      },
+      {
+        "category": "Network Settings",
+        "item": "SNTP Enable",
+        "want": "Enabled",
+        "got": "Enabled",
+        "ok": true
+      },
+      {
+        "category": "C64 and Cartridge Settings",
+        "item": "Command Interface",
+        "want": "Enabled",
+        "got": "Enabled",
+        "ok": true
+      },
+      {
+        "category": "U64 Specific Settings",
+        "item": "Turbo Control",
+        "want": "Manual",
+        "got": "Manual",
+        "ok": true
+      },
+      {
+        "category": "U64 Specific Settings",
+        "item": "CPU Speed",
+        "want": "48",
+        "got": "48",
+        "ok": true
+      }
+    ],
+    "system_mode": "NTSC",
+    "phi2_hz": 1022727.0
+  }
+}

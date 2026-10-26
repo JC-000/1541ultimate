@@ -1,0 +1,2879 @@
+{
+  "idle": [
+    {
+      "elapsed_ms": 10.563,
+      "error": null,
+      "t_wall": 1793044138.326,
+      "since_start_ms": 11,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.959,
+      "error": null,
+      "t_wall": 1793044138.835,
+      "since_start_ms": 520,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.815,
+      "error": null,
+      "t_wall": 1793044139.325,
+      "since_start_ms": 1010,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.233,
+      "error": null,
+      "t_wall": 1793044139.835,
+      "since_start_ms": 1520,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.656,
+      "error": null,
+      "t_wall": 1793044140.326,
+      "since_start_ms": 2011,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.562,
+      "error": null,
+      "t_wall": 1793044140.83,
+      "since_start_ms": 2515,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.012,
+      "error": null,
+      "t_wall": 1793044141.326,
+      "since_start_ms": 3011,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.178,
+      "error": null,
+      "t_wall": 1793044141.834,
+      "since_start_ms": 3519,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.061,
+      "error": null,
+      "t_wall": 1793044142.335,
+      "since_start_ms": 4020,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.438,
+      "error": null,
+      "t_wall": 1793044142.828,
+      "since_start_ms": 4513,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.084,
+      "error": null,
+      "t_wall": 1793044143.329,
+      "since_start_ms": 5014,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.125,
+      "error": null,
+      "t_wall": 1793044143.829,
+      "since_start_ms": 5514,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.979,
+      "error": null,
+      "t_wall": 1793044144.325,
+      "since_start_ms": 6010,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.776,
+      "error": null,
+      "t_wall": 1793044144.831,
+      "since_start_ms": 6516,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.833,
+      "error": null,
+      "t_wall": 1793044145.326,
+      "since_start_ms": 7011,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.108,
+      "error": null,
+      "t_wall": 1793044145.826,
+      "since_start_ms": 7511,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.167,
+      "error": null,
+      "t_wall": 1793044146.332,
+      "since_start_ms": 8017,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.376,
+      "error": null,
+      "t_wall": 1793044146.835,
+      "since_start_ms": 8520,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.47,
+      "error": null,
+      "t_wall": 1793044147.334,
+      "since_start_ms": 9019,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.598,
+      "error": null,
+      "t_wall": 1793044147.831,
+      "since_start_ms": 9516,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.551,
+      "error": null,
+      "t_wall": 1793044148.325,
+      "since_start_ms": 10010,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.264,
+      "error": null,
+      "t_wall": 1793044148.826,
+      "since_start_ms": 10511,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.81,
+      "error": null,
+      "t_wall": 1793044149.335,
+      "since_start_ms": 11020,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.93,
+      "error": null,
+      "t_wall": 1793044149.832,
+      "since_start_ms": 11517,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.753,
+      "error": null,
+      "t_wall": 1793044150.334,
+      "since_start_ms": 12019,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.894,
+      "error": null,
+      "t_wall": 1793044150.835,
+      "since_start_ms": 12520,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.707,
+      "error": null,
+      "t_wall": 1793044151.326,
+      "since_start_ms": 13011,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.155,
+      "error": null,
+      "t_wall": 1793044151.828,
+      "since_start_ms": 13514,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 10.07,
+      "error": null,
+      "t_wall": 1793044152.33,
+      "since_start_ms": 14015,
+      "phase": "idle"
+    },
+    {
+      "elapsed_ms": 9.789,
+      "error": null,
+      "t_wall": 1793044152.834,
+      "since_start_ms": 14519,
+      "phase": "idle"
+    }
+  ],
+  "busy": [
+    {
+      "elapsed_ms": 14.532,
+      "error": null,
+      "t_wall": 1793044153.355,
+      "since_start_ms": 15,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.585,
+      "error": null,
+      "t_wall": 1793044153.852,
+      "since_start_ms": 512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.714,
+      "error": null,
+      "t_wall": 1793044154.36,
+      "since_start_ms": 1020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.886,
+      "error": null,
+      "t_wall": 1793044154.86,
+      "since_start_ms": 1520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.537,
+      "error": null,
+      "t_wall": 1793044155.362,
+      "since_start_ms": 2022,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.632,
+      "error": null,
+      "t_wall": 1793044155.855,
+      "since_start_ms": 2515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.34,
+      "error": null,
+      "t_wall": 1793044156.353,
+      "since_start_ms": 3012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.433,
+      "error": null,
+      "t_wall": 1793044156.863,
+      "since_start_ms": 3522,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 24.005,
+      "error": null,
+      "t_wall": 1793044157.375,
+      "since_start_ms": 4034,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.607,
+      "error": null,
+      "t_wall": 1793044157.858,
+      "since_start_ms": 4517,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.847,
+      "error": null,
+      "t_wall": 1793044158.358,
+      "since_start_ms": 5017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.686,
+      "error": null,
+      "t_wall": 1793044158.853,
+      "since_start_ms": 5512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.688,
+      "error": null,
+      "t_wall": 1793044159.356,
+      "since_start_ms": 6015,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.491,
+      "error": null,
+      "t_wall": 1793044159.863,
+      "since_start_ms": 6522,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.117,
+      "error": null,
+      "t_wall": 1793044160.353,
+      "since_start_ms": 7012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.588,
+      "error": null,
+      "t_wall": 1793044160.852,
+      "since_start_ms": 7512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.262,
+      "error": null,
+      "t_wall": 1793044161.357,
+      "since_start_ms": 8016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 22.095,
+      "error": null,
+      "t_wall": 1793044161.865,
+      "since_start_ms": 8524,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.584,
+      "error": null,
+      "t_wall": 1793044162.36,
+      "since_start_ms": 9020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.586,
+      "error": null,
+      "t_wall": 1793044162.85,
+      "since_start_ms": 9510,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.63,
+      "error": null,
+      "t_wall": 1793044163.36,
+      "since_start_ms": 10020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.359,
+      "error": null,
+      "t_wall": 1793044163.854,
+      "since_start_ms": 10513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.494,
+      "error": null,
+      "t_wall": 1793044164.358,
+      "since_start_ms": 11017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.05,
+      "error": null,
+      "t_wall": 1793044164.857,
+      "since_start_ms": 11517,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.598,
+      "error": null,
+      "t_wall": 1793044165.362,
+      "since_start_ms": 12021,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.189,
+      "error": null,
+      "t_wall": 1793044165.853,
+      "since_start_ms": 12512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.44,
+      "error": null,
+      "t_wall": 1793044166.358,
+      "since_start_ms": 13018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.803,
+      "error": null,
+      "t_wall": 1793044166.86,
+      "since_start_ms": 13520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.289,
+      "error": null,
+      "t_wall": 1793044167.354,
+      "since_start_ms": 14014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.759,
+      "error": null,
+      "t_wall": 1793044167.857,
+      "since_start_ms": 14516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.588,
+      "error": null,
+      "t_wall": 1793044168.352,
+      "since_start_ms": 15011,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.157,
+      "error": null,
+      "t_wall": 1793044168.862,
+      "since_start_ms": 15521,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.615,
+      "error": null,
+      "t_wall": 1793044169.361,
+      "since_start_ms": 16020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.189,
+      "error": null,
+      "t_wall": 1793044169.856,
+      "since_start_ms": 16516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.335,
+      "error": null,
+      "t_wall": 1793044170.358,
+      "since_start_ms": 17018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.27,
+      "error": null,
+      "t_wall": 1793044170.857,
+      "since_start_ms": 17517,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.935,
+      "error": null,
+      "t_wall": 1793044171.356,
+      "since_start_ms": 18016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.464,
+      "error": null,
+      "t_wall": 1793044171.851,
+      "since_start_ms": 18511,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.823,
+      "error": null,
+      "t_wall": 1793044172.354,
+      "since_start_ms": 19013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.725,
+      "error": null,
+      "t_wall": 1793044172.854,
+      "since_start_ms": 19514,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.747,
+      "error": null,
+      "t_wall": 1793044173.358,
+      "since_start_ms": 20018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.752,
+      "error": null,
+      "t_wall": 1793044173.856,
+      "since_start_ms": 20515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.891,
+      "error": null,
+      "t_wall": 1793044174.36,
+      "since_start_ms": 21019,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.834,
+      "error": null,
+      "t_wall": 1793044174.856,
+      "since_start_ms": 21516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.766,
+      "error": null,
+      "t_wall": 1793044175.362,
+      "since_start_ms": 22022,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 29.973,
+      "error": null,
+      "t_wall": 1793044175.872,
+      "since_start_ms": 22531,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.052,
+      "error": null,
+      "t_wall": 1793044176.357,
+      "since_start_ms": 23016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.524,
+      "error": null,
+      "t_wall": 1793044176.86,
+      "since_start_ms": 23520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.623,
+      "error": null,
+      "t_wall": 1793044177.351,
+      "since_start_ms": 24010,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.453,
+      "error": null,
+      "t_wall": 1793044177.853,
+      "since_start_ms": 24512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.734,
+      "error": null,
+      "t_wall": 1793044178.362,
+      "since_start_ms": 25022,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.378,
+      "error": null,
+      "t_wall": 1793044178.857,
+      "since_start_ms": 25516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.526,
+      "error": null,
+      "t_wall": 1793044179.356,
+      "since_start_ms": 26015,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.06,
+      "error": null,
+      "t_wall": 1793044179.862,
+      "since_start_ms": 26521,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 21.22,
+      "error": null,
+      "t_wall": 1793044180.366,
+      "since_start_ms": 27026,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 8.967,
+      "error": null,
+      "t_wall": 1793044180.858,
+      "since_start_ms": 27517,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.646,
+      "error": null,
+      "t_wall": 1793044181.36,
+      "since_start_ms": 28020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.01,
+      "error": null,
+      "t_wall": 1793044181.855,
+      "since_start_ms": 28515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.221,
+      "error": null,
+      "t_wall": 1793044182.354,
+      "since_start_ms": 29013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.522,
+      "error": null,
+      "t_wall": 1793044182.859,
+      "since_start_ms": 29518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.683,
+      "error": null,
+      "t_wall": 1793044183.365,
+      "since_start_ms": 30025,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.779,
+      "error": null,
+      "t_wall": 1793044183.862,
+      "since_start_ms": 30521,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.87,
+      "error": null,
+      "t_wall": 1793044184.354,
+      "since_start_ms": 31013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.482,
+      "error": null,
+      "t_wall": 1793044184.856,
+      "since_start_ms": 31516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.675,
+      "error": null,
+      "t_wall": 1793044185.36,
+      "since_start_ms": 32020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.823,
+      "error": null,
+      "t_wall": 1793044185.854,
+      "since_start_ms": 32513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.715,
+      "error": null,
+      "t_wall": 1793044186.359,
+      "since_start_ms": 33019,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.77,
+      "error": null,
+      "t_wall": 1793044186.854,
+      "since_start_ms": 33513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.703,
+      "error": null,
+      "t_wall": 1793044187.364,
+      "since_start_ms": 34024,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.997,
+      "error": null,
+      "t_wall": 1793044187.86,
+      "since_start_ms": 34520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.624,
+      "error": null,
+      "t_wall": 1793044188.358,
+      "since_start_ms": 35017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.274,
+      "error": null,
+      "t_wall": 1793044188.862,
+      "since_start_ms": 35521,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.98,
+      "error": null,
+      "t_wall": 1793044189.352,
+      "since_start_ms": 36012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.739,
+      "error": null,
+      "t_wall": 1793044189.86,
+      "since_start_ms": 36520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.739,
+      "error": null,
+      "t_wall": 1793044190.357,
+      "since_start_ms": 37016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.775,
+      "error": null,
+      "t_wall": 1793044190.859,
+      "since_start_ms": 37518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.517,
+      "error": null,
+      "t_wall": 1793044191.35,
+      "since_start_ms": 38010,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.727,
+      "error": null,
+      "t_wall": 1793044191.857,
+      "since_start_ms": 38516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.511,
+      "error": null,
+      "t_wall": 1793044192.362,
+      "since_start_ms": 39021,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 15.209,
+      "error": null,
+      "t_wall": 1793044192.857,
+      "since_start_ms": 39517,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.132,
+      "error": null,
+      "t_wall": 1793044193.362,
+      "since_start_ms": 40021,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.305,
+      "error": null,
+      "t_wall": 1793044193.861,
+      "since_start_ms": 40520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 22.985,
+      "error": null,
+      "t_wall": 1793044194.371,
+      "since_start_ms": 41031,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.59,
+      "error": null,
+      "t_wall": 1793044194.857,
+      "since_start_ms": 41516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.9,
+      "error": null,
+      "t_wall": 1793044195.352,
+      "since_start_ms": 42011,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.103,
+      "error": null,
+      "t_wall": 1793044195.855,
+      "since_start_ms": 42514,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.819,
+      "error": null,
+      "t_wall": 1793044196.351,
+      "since_start_ms": 43011,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.988,
+      "error": null,
+      "t_wall": 1793044196.854,
+      "since_start_ms": 43514,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.372,
+      "error": null,
+      "t_wall": 1793044197.362,
+      "since_start_ms": 44021,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.393,
+      "error": null,
+      "t_wall": 1793044197.851,
+      "since_start_ms": 44511,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.049,
+      "error": null,
+      "t_wall": 1793044198.363,
+      "since_start_ms": 45022,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 21.59,
+      "error": null,
+      "t_wall": 1793044198.867,
+      "since_start_ms": 45527,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.015,
+      "error": null,
+      "t_wall": 1793044199.353,
+      "since_start_ms": 46013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.816,
+      "error": null,
+      "t_wall": 1793044199.86,
+      "since_start_ms": 46520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.457,
+      "error": null,
+      "t_wall": 1793044200.357,
+      "since_start_ms": 47017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.663,
+      "error": null,
+      "t_wall": 1793044200.856,
+      "since_start_ms": 47516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.868,
+      "error": null,
+      "t_wall": 1793044201.354,
+      "since_start_ms": 48013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.667,
+      "error": null,
+      "t_wall": 1793044201.856,
+      "since_start_ms": 48516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.849,
+      "error": null,
+      "t_wall": 1793044202.361,
+      "since_start_ms": 49021,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.638,
+      "error": null,
+      "t_wall": 1793044202.856,
+      "since_start_ms": 49516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.482,
+      "error": null,
+      "t_wall": 1793044203.354,
+      "since_start_ms": 50013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.611,
+      "error": null,
+      "t_wall": 1793044203.859,
+      "since_start_ms": 50518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.719,
+      "error": null,
+      "t_wall": 1793044204.353,
+      "since_start_ms": 51013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.131,
+      "error": null,
+      "t_wall": 1793044204.86,
+      "since_start_ms": 51519,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.721,
+      "error": null,
+      "t_wall": 1793044205.36,
+      "since_start_ms": 52020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 15.776,
+      "error": null,
+      "t_wall": 1793044205.862,
+      "since_start_ms": 52521,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.47,
+      "error": null,
+      "t_wall": 1793044206.364,
+      "since_start_ms": 53024,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.397,
+      "error": null,
+      "t_wall": 1793044206.863,
+      "since_start_ms": 53522,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.632,
+      "error": null,
+      "t_wall": 1793044207.36,
+      "since_start_ms": 54019,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.18,
+      "error": null,
+      "t_wall": 1793044207.856,
+      "since_start_ms": 54515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.67,
+      "error": null,
+      "t_wall": 1793044208.358,
+      "since_start_ms": 55017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.577,
+      "error": null,
+      "t_wall": 1793044208.86,
+      "since_start_ms": 55519,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.916,
+      "error": null,
+      "t_wall": 1793044209.358,
+      "since_start_ms": 56017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.938,
+      "error": null,
+      "t_wall": 1793044209.854,
+      "since_start_ms": 56513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.396,
+      "error": null,
+      "t_wall": 1793044210.361,
+      "since_start_ms": 57021,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.177,
+      "error": null,
+      "t_wall": 1793044210.861,
+      "since_start_ms": 57521,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.337,
+      "error": null,
+      "t_wall": 1793044211.358,
+      "since_start_ms": 58017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.3,
+      "error": null,
+      "t_wall": 1793044211.86,
+      "since_start_ms": 58519,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.873,
+      "error": null,
+      "t_wall": 1793044212.363,
+      "since_start_ms": 59022,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 22.782,
+      "error": null,
+      "t_wall": 1793044212.87,
+      "since_start_ms": 59530,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.798,
+      "error": null,
+      "t_wall": 1793044213.36,
+      "since_start_ms": 60020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.714,
+      "error": null,
+      "t_wall": 1793044213.86,
+      "since_start_ms": 60519,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.714,
+      "error": null,
+      "t_wall": 1793044214.359,
+      "since_start_ms": 61018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.785,
+      "error": null,
+      "t_wall": 1793044214.86,
+      "since_start_ms": 61520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.728,
+      "error": null,
+      "t_wall": 1793044215.357,
+      "since_start_ms": 62016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.445,
+      "error": null,
+      "t_wall": 1793044215.856,
+      "since_start_ms": 62515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.965,
+      "error": null,
+      "t_wall": 1793044216.356,
+      "since_start_ms": 63015,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.573,
+      "error": null,
+      "t_wall": 1793044216.853,
+      "since_start_ms": 63513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 19.769,
+      "error": null,
+      "t_wall": 1793044217.367,
+      "since_start_ms": 64026,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.005,
+      "error": null,
+      "t_wall": 1793044217.855,
+      "since_start_ms": 64515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.018,
+      "error": null,
+      "t_wall": 1793044218.36,
+      "since_start_ms": 65019,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.14,
+      "error": null,
+      "t_wall": 1793044218.861,
+      "since_start_ms": 65520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.99,
+      "error": null,
+      "t_wall": 1793044219.354,
+      "since_start_ms": 66013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.281,
+      "error": null,
+      "t_wall": 1793044219.855,
+      "since_start_ms": 66514,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.762,
+      "error": null,
+      "t_wall": 1793044220.356,
+      "since_start_ms": 67015,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.741,
+      "error": null,
+      "t_wall": 1793044220.861,
+      "since_start_ms": 67520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.56,
+      "error": null,
+      "t_wall": 1793044221.361,
+      "since_start_ms": 68020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 23.106,
+      "error": null,
+      "t_wall": 1793044221.866,
+      "since_start_ms": 68526,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.695,
+      "error": null,
+      "t_wall": 1793044222.355,
+      "since_start_ms": 69014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.414,
+      "error": null,
+      "t_wall": 1793044222.852,
+      "since_start_ms": 69511,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.37,
+      "error": null,
+      "t_wall": 1793044223.35,
+      "since_start_ms": 70010,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.88,
+      "error": null,
+      "t_wall": 1793044223.861,
+      "since_start_ms": 70520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.481,
+      "error": null,
+      "t_wall": 1793044224.357,
+      "since_start_ms": 71017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.099,
+      "error": null,
+      "t_wall": 1793044224.856,
+      "since_start_ms": 71515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.632,
+      "error": null,
+      "t_wall": 1793044225.351,
+      "since_start_ms": 72011,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.487,
+      "error": null,
+      "t_wall": 1793044225.859,
+      "since_start_ms": 72518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.072,
+      "error": null,
+      "t_wall": 1793044226.362,
+      "since_start_ms": 73021,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.81,
+      "error": null,
+      "t_wall": 1793044226.851,
+      "since_start_ms": 73510,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.492,
+      "error": null,
+      "t_wall": 1793044227.36,
+      "since_start_ms": 74020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.312,
+      "error": null,
+      "t_wall": 1793044227.86,
+      "since_start_ms": 74519,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.467,
+      "error": null,
+      "t_wall": 1793044228.358,
+      "since_start_ms": 75018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.111,
+      "error": null,
+      "t_wall": 1793044228.864,
+      "since_start_ms": 75523,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.089,
+      "error": null,
+      "t_wall": 1793044229.364,
+      "since_start_ms": 76023,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.326,
+      "error": null,
+      "t_wall": 1793044229.855,
+      "since_start_ms": 76515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.369,
+      "error": null,
+      "t_wall": 1793044230.355,
+      "since_start_ms": 77015,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.839,
+      "error": null,
+      "t_wall": 1793044230.856,
+      "since_start_ms": 77516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 17.066,
+      "error": null,
+      "t_wall": 1793044231.359,
+      "since_start_ms": 78018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.129,
+      "error": null,
+      "t_wall": 1793044231.861,
+      "since_start_ms": 78520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.862,
+      "error": null,
+      "t_wall": 1793044232.36,
+      "since_start_ms": 79019,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.592,
+      "error": null,
+      "t_wall": 1793044232.851,
+      "since_start_ms": 79510,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.978,
+      "error": null,
+      "t_wall": 1793044233.36,
+      "since_start_ms": 80020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.183,
+      "error": null,
+      "t_wall": 1793044233.86,
+      "since_start_ms": 80520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.192,
+      "error": null,
+      "t_wall": 1793044234.36,
+      "since_start_ms": 81020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.261,
+      "error": null,
+      "t_wall": 1793044234.855,
+      "since_start_ms": 81515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.948,
+      "error": null,
+      "t_wall": 1793044235.36,
+      "since_start_ms": 82020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 22.753,
+      "error": null,
+      "t_wall": 1793044235.871,
+      "since_start_ms": 82530,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 15.999,
+      "error": null,
+      "t_wall": 1793044236.366,
+      "since_start_ms": 83025,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.771,
+      "error": null,
+      "t_wall": 1793044236.854,
+      "since_start_ms": 83513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.25,
+      "error": null,
+      "t_wall": 1793044237.356,
+      "since_start_ms": 84015,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.74,
+      "error": null,
+      "t_wall": 1793044237.854,
+      "since_start_ms": 84514,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.607,
+      "error": null,
+      "t_wall": 1793044238.36,
+      "since_start_ms": 85020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.166,
+      "error": null,
+      "t_wall": 1793044238.861,
+      "since_start_ms": 85520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.758,
+      "error": null,
+      "t_wall": 1793044239.355,
+      "since_start_ms": 86014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.876,
+      "error": null,
+      "t_wall": 1793044239.858,
+      "since_start_ms": 86518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 21.51,
+      "error": null,
+      "t_wall": 1793044240.37,
+      "since_start_ms": 87029,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.267,
+      "error": null,
+      "t_wall": 1793044240.858,
+      "since_start_ms": 87518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.855,
+      "error": null,
+      "t_wall": 1793044241.354,
+      "since_start_ms": 88014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.082,
+      "error": null,
+      "t_wall": 1793044241.861,
+      "since_start_ms": 88520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.14,
+      "error": null,
+      "t_wall": 1793044242.36,
+      "since_start_ms": 89019,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.512,
+      "error": null,
+      "t_wall": 1793044242.856,
+      "since_start_ms": 89516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 15.688,
+      "error": null,
+      "t_wall": 1793044243.362,
+      "since_start_ms": 90022,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.973,
+      "error": null,
+      "t_wall": 1793044243.86,
+      "since_start_ms": 90519,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.413,
+      "error": null,
+      "t_wall": 1793044244.356,
+      "since_start_ms": 91016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.544,
+      "error": null,
+      "t_wall": 1793044244.861,
+      "since_start_ms": 91520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.169,
+      "error": null,
+      "t_wall": 1793044245.358,
+      "since_start_ms": 92017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.472,
+      "error": null,
+      "t_wall": 1793044245.856,
+      "since_start_ms": 92515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.135,
+      "error": null,
+      "t_wall": 1793044246.36,
+      "since_start_ms": 93019,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.519,
+      "error": null,
+      "t_wall": 1793044246.853,
+      "since_start_ms": 93512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.735,
+      "error": null,
+      "t_wall": 1793044247.355,
+      "since_start_ms": 94014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.014,
+      "error": null,
+      "t_wall": 1793044247.865,
+      "since_start_ms": 94524,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.223,
+      "error": null,
+      "t_wall": 1793044248.357,
+      "since_start_ms": 95016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.114,
+      "error": null,
+      "t_wall": 1793044248.853,
+      "since_start_ms": 95513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.709,
+      "error": null,
+      "t_wall": 1793044249.355,
+      "since_start_ms": 96014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.481,
+      "error": null,
+      "t_wall": 1793044249.858,
+      "since_start_ms": 96517,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.913,
+      "error": null,
+      "t_wall": 1793044250.359,
+      "since_start_ms": 97019,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.456,
+      "error": null,
+      "t_wall": 1793044250.86,
+      "since_start_ms": 97519,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.662,
+      "error": null,
+      "t_wall": 1793044251.352,
+      "since_start_ms": 98011,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.064,
+      "error": null,
+      "t_wall": 1793044251.853,
+      "since_start_ms": 98513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.644,
+      "error": null,
+      "t_wall": 1793044252.355,
+      "since_start_ms": 99014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.835,
+      "error": null,
+      "t_wall": 1793044252.857,
+      "since_start_ms": 99516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.821,
+      "error": null,
+      "t_wall": 1793044253.355,
+      "since_start_ms": 100014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.023,
+      "error": null,
+      "t_wall": 1793044253.859,
+      "since_start_ms": 100518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 21.046,
+      "error": null,
+      "t_wall": 1793044254.365,
+      "since_start_ms": 101025,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.565,
+      "error": null,
+      "t_wall": 1793044254.851,
+      "since_start_ms": 101510,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.286,
+      "error": null,
+      "t_wall": 1793044255.361,
+      "since_start_ms": 102020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.531,
+      "error": null,
+      "t_wall": 1793044255.854,
+      "since_start_ms": 102513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.019,
+      "error": null,
+      "t_wall": 1793044256.358,
+      "since_start_ms": 103017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.553,
+      "error": null,
+      "t_wall": 1793044256.854,
+      "since_start_ms": 103513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.586,
+      "error": null,
+      "t_wall": 1793044257.354,
+      "since_start_ms": 104013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.679,
+      "error": null,
+      "t_wall": 1793044257.861,
+      "since_start_ms": 104520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.961,
+      "error": null,
+      "t_wall": 1793044258.362,
+      "since_start_ms": 105022,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 24.795,
+      "error": null,
+      "t_wall": 1793044258.866,
+      "since_start_ms": 105525,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.122,
+      "error": null,
+      "t_wall": 1793044259.351,
+      "since_start_ms": 106010,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.016,
+      "error": null,
+      "t_wall": 1793044259.85,
+      "since_start_ms": 106509,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.637,
+      "error": null,
+      "t_wall": 1793044260.36,
+      "since_start_ms": 107020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.913,
+      "error": null,
+      "t_wall": 1793044260.852,
+      "since_start_ms": 107511,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.566,
+      "error": null,
+      "t_wall": 1793044261.359,
+      "since_start_ms": 108019,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.078,
+      "error": null,
+      "t_wall": 1793044261.864,
+      "since_start_ms": 108523,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.9,
+      "error": null,
+      "t_wall": 1793044262.355,
+      "since_start_ms": 109014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.263,
+      "error": null,
+      "t_wall": 1793044262.858,
+      "since_start_ms": 109518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 23.632,
+      "error": null,
+      "t_wall": 1793044263.374,
+      "since_start_ms": 110034,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.502,
+      "error": null,
+      "t_wall": 1793044263.853,
+      "since_start_ms": 110512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.511,
+      "error": null,
+      "t_wall": 1793044264.36,
+      "since_start_ms": 111019,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.947,
+      "error": null,
+      "t_wall": 1793044264.859,
+      "since_start_ms": 111518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.002,
+      "error": null,
+      "t_wall": 1793044265.358,
+      "since_start_ms": 112017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.697,
+      "error": null,
+      "t_wall": 1793044265.854,
+      "since_start_ms": 112513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.596,
+      "error": null,
+      "t_wall": 1793044266.364,
+      "since_start_ms": 113023,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.379,
+      "error": null,
+      "t_wall": 1793044266.856,
+      "since_start_ms": 113515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.185,
+      "error": null,
+      "t_wall": 1793044267.357,
+      "since_start_ms": 114016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.775,
+      "error": null,
+      "t_wall": 1793044267.854,
+      "since_start_ms": 114513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.554,
+      "error": null,
+      "t_wall": 1793044268.351,
+      "since_start_ms": 115010,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.077,
+      "error": null,
+      "t_wall": 1793044268.861,
+      "since_start_ms": 115520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.027,
+      "error": null,
+      "t_wall": 1793044269.361,
+      "since_start_ms": 116020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.803,
+      "error": null,
+      "t_wall": 1793044269.854,
+      "since_start_ms": 116513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.483,
+      "error": null,
+      "t_wall": 1793044270.359,
+      "since_start_ms": 117018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.368,
+      "error": null,
+      "t_wall": 1793044270.862,
+      "since_start_ms": 117521,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.546,
+      "error": null,
+      "t_wall": 1793044271.364,
+      "since_start_ms": 118023,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.61,
+      "error": null,
+      "t_wall": 1793044271.856,
+      "since_start_ms": 118516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.619,
+      "error": null,
+      "t_wall": 1793044272.363,
+      "since_start_ms": 119022,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 18.653,
+      "error": null,
+      "t_wall": 1793044272.867,
+      "since_start_ms": 119526,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.786,
+      "error": null,
+      "t_wall": 1793044273.354,
+      "since_start_ms": 120013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.496,
+      "error": null,
+      "t_wall": 1793044273.855,
+      "since_start_ms": 120514,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.631,
+      "error": null,
+      "t_wall": 1793044274.359,
+      "since_start_ms": 121018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.245,
+      "error": null,
+      "t_wall": 1793044274.852,
+      "since_start_ms": 121511,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.179,
+      "error": null,
+      "t_wall": 1793044275.363,
+      "since_start_ms": 122022,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.069,
+      "error": null,
+      "t_wall": 1793044275.864,
+      "since_start_ms": 122523,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.532,
+      "error": null,
+      "t_wall": 1793044276.357,
+      "since_start_ms": 123016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.07,
+      "error": null,
+      "t_wall": 1793044276.864,
+      "since_start_ms": 123523,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 22.616,
+      "error": null,
+      "t_wall": 1793044277.365,
+      "since_start_ms": 124024,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.144,
+      "error": null,
+      "t_wall": 1793044277.856,
+      "since_start_ms": 124515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.737,
+      "error": null,
+      "t_wall": 1793044278.354,
+      "since_start_ms": 125014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.738,
+      "error": null,
+      "t_wall": 1793044278.854,
+      "since_start_ms": 125513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.432,
+      "error": null,
+      "t_wall": 1793044279.361,
+      "since_start_ms": 126020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.46,
+      "error": null,
+      "t_wall": 1793044279.863,
+      "since_start_ms": 126523,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.861,
+      "error": null,
+      "t_wall": 1793044280.353,
+      "since_start_ms": 127012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.243,
+      "error": null,
+      "t_wall": 1793044280.862,
+      "since_start_ms": 127521,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.743,
+      "error": null,
+      "t_wall": 1793044281.353,
+      "since_start_ms": 128012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 22.036,
+      "error": null,
+      "t_wall": 1793044281.87,
+      "since_start_ms": 128529,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.954,
+      "error": null,
+      "t_wall": 1793044282.361,
+      "since_start_ms": 129020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.808,
+      "error": null,
+      "t_wall": 1793044282.851,
+      "since_start_ms": 129510,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.277,
+      "error": null,
+      "t_wall": 1793044283.354,
+      "since_start_ms": 130014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.83,
+      "error": null,
+      "t_wall": 1793044283.853,
+      "since_start_ms": 130512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.429,
+      "error": null,
+      "t_wall": 1793044284.354,
+      "since_start_ms": 131013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.858,
+      "error": null,
+      "t_wall": 1793044284.858,
+      "since_start_ms": 131517,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.745,
+      "error": null,
+      "t_wall": 1793044285.352,
+      "since_start_ms": 132012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.517,
+      "error": null,
+      "t_wall": 1793044285.856,
+      "since_start_ms": 132515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 23.097,
+      "error": null,
+      "t_wall": 1793044286.364,
+      "since_start_ms": 133024,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.505,
+      "error": null,
+      "t_wall": 1793044286.852,
+      "since_start_ms": 133511,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.588,
+      "error": null,
+      "t_wall": 1793044287.355,
+      "since_start_ms": 134014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.754,
+      "error": null,
+      "t_wall": 1793044287.852,
+      "since_start_ms": 134511,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.634,
+      "error": null,
+      "t_wall": 1793044288.352,
+      "since_start_ms": 135012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.809,
+      "error": null,
+      "t_wall": 1793044288.853,
+      "since_start_ms": 135512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.051,
+      "error": null,
+      "t_wall": 1793044289.359,
+      "since_start_ms": 136018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 16.719,
+      "error": null,
+      "t_wall": 1793044289.863,
+      "since_start_ms": 136523,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.646,
+      "error": null,
+      "t_wall": 1793044290.363,
+      "since_start_ms": 137023,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.705,
+      "error": null,
+      "t_wall": 1793044290.86,
+      "since_start_ms": 137519,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.12,
+      "error": null,
+      "t_wall": 1793044291.361,
+      "since_start_ms": 138020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.619,
+      "error": null,
+      "t_wall": 1793044291.853,
+      "since_start_ms": 138513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.52,
+      "error": null,
+      "t_wall": 1793044292.353,
+      "since_start_ms": 139012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.596,
+      "error": null,
+      "t_wall": 1793044292.851,
+      "since_start_ms": 139510,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.328,
+      "error": null,
+      "t_wall": 1793044293.358,
+      "since_start_ms": 140018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.756,
+      "error": null,
+      "t_wall": 1793044293.853,
+      "since_start_ms": 140512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.842,
+      "error": null,
+      "t_wall": 1793044294.354,
+      "since_start_ms": 141013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.862,
+      "error": null,
+      "t_wall": 1793044294.858,
+      "since_start_ms": 141518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.392,
+      "error": null,
+      "t_wall": 1793044295.355,
+      "since_start_ms": 142014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 22.687,
+      "error": null,
+      "t_wall": 1793044295.866,
+      "since_start_ms": 142526,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.684,
+      "error": null,
+      "t_wall": 1793044296.356,
+      "since_start_ms": 143015,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.897,
+      "error": null,
+      "t_wall": 1793044296.861,
+      "since_start_ms": 143520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.88,
+      "error": null,
+      "t_wall": 1793044297.36,
+      "since_start_ms": 144019,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.009,
+      "error": null,
+      "t_wall": 1793044297.862,
+      "since_start_ms": 144521,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.259,
+      "error": null,
+      "t_wall": 1793044298.356,
+      "since_start_ms": 145016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.917,
+      "error": null,
+      "t_wall": 1793044298.853,
+      "since_start_ms": 145512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.733,
+      "error": null,
+      "t_wall": 1793044299.353,
+      "since_start_ms": 146012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.794,
+      "error": null,
+      "t_wall": 1793044299.856,
+      "since_start_ms": 146515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 23.289,
+      "error": null,
+      "t_wall": 1793044300.374,
+      "since_start_ms": 147033,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 17.664,
+      "error": null,
+      "t_wall": 1793044300.859,
+      "since_start_ms": 147518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.167,
+      "error": null,
+      "t_wall": 1793044301.361,
+      "since_start_ms": 148020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.259,
+      "error": null,
+      "t_wall": 1793044301.86,
+      "since_start_ms": 148520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.195,
+      "error": null,
+      "t_wall": 1793044302.355,
+      "since_start_ms": 149014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.794,
+      "error": null,
+      "t_wall": 1793044302.856,
+      "since_start_ms": 149515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.592,
+      "error": null,
+      "t_wall": 1793044303.36,
+      "since_start_ms": 150020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.962,
+      "error": null,
+      "t_wall": 1793044303.863,
+      "since_start_ms": 150522,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.352,
+      "error": null,
+      "t_wall": 1793044304.355,
+      "since_start_ms": 151014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 22.614,
+      "error": null,
+      "t_wall": 1793044304.874,
+      "since_start_ms": 151533,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.648,
+      "error": null,
+      "t_wall": 1793044305.353,
+      "since_start_ms": 152012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.731,
+      "error": null,
+      "t_wall": 1793044305.86,
+      "since_start_ms": 152519,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.646,
+      "error": null,
+      "t_wall": 1793044306.354,
+      "since_start_ms": 153013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.647,
+      "error": null,
+      "t_wall": 1793044306.861,
+      "since_start_ms": 153520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.727,
+      "error": null,
+      "t_wall": 1793044307.355,
+      "since_start_ms": 154014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.658,
+      "error": null,
+      "t_wall": 1793044307.857,
+      "since_start_ms": 154516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.04,
+      "error": null,
+      "t_wall": 1793044308.352,
+      "since_start_ms": 155012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.988,
+      "error": null,
+      "t_wall": 1793044308.862,
+      "since_start_ms": 155521,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 23.947,
+      "error": null,
+      "t_wall": 1793044309.369,
+      "since_start_ms": 156028,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.494,
+      "error": null,
+      "t_wall": 1793044309.856,
+      "since_start_ms": 156515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.661,
+      "error": null,
+      "t_wall": 1793044310.357,
+      "since_start_ms": 157016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.149,
+      "error": null,
+      "t_wall": 1793044310.852,
+      "since_start_ms": 157511,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.029,
+      "error": null,
+      "t_wall": 1793044311.361,
+      "since_start_ms": 158020,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.746,
+      "error": null,
+      "t_wall": 1793044311.863,
+      "since_start_ms": 158522,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.375,
+      "error": null,
+      "t_wall": 1793044312.357,
+      "since_start_ms": 159016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.56,
+      "error": null,
+      "t_wall": 1793044312.852,
+      "since_start_ms": 159512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.693,
+      "error": null,
+      "t_wall": 1793044313.363,
+      "since_start_ms": 160022,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.947,
+      "error": null,
+      "t_wall": 1793044313.863,
+      "since_start_ms": 160522,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.928,
+      "error": null,
+      "t_wall": 1793044314.358,
+      "since_start_ms": 161017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.976,
+      "error": null,
+      "t_wall": 1793044314.854,
+      "since_start_ms": 161513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.974,
+      "error": null,
+      "t_wall": 1793044315.356,
+      "since_start_ms": 162015,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.007,
+      "error": null,
+      "t_wall": 1793044315.857,
+      "since_start_ms": 162517,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.935,
+      "error": null,
+      "t_wall": 1793044316.358,
+      "since_start_ms": 163017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.65,
+      "error": null,
+      "t_wall": 1793044316.852,
+      "since_start_ms": 163511,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.493,
+      "error": null,
+      "t_wall": 1793044317.352,
+      "since_start_ms": 164011,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.494,
+      "error": null,
+      "t_wall": 1793044317.857,
+      "since_start_ms": 164516,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.385,
+      "error": null,
+      "t_wall": 1793044318.365,
+      "since_start_ms": 165024,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 23.41,
+      "error": null,
+      "t_wall": 1793044318.865,
+      "since_start_ms": 165524,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.587,
+      "error": null,
+      "t_wall": 1793044319.351,
+      "since_start_ms": 166010,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.252,
+      "error": null,
+      "t_wall": 1793044319.856,
+      "since_start_ms": 166515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.713,
+      "error": null,
+      "t_wall": 1793044320.358,
+      "since_start_ms": 167017,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.481,
+      "error": null,
+      "t_wall": 1793044320.858,
+      "since_start_ms": 167517,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.527,
+      "error": null,
+      "t_wall": 1793044321.353,
+      "since_start_ms": 168013,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.836,
+      "error": null,
+      "t_wall": 1793044321.862,
+      "since_start_ms": 168521,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.593,
+      "error": null,
+      "t_wall": 1793044322.353,
+      "since_start_ms": 169012,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.056,
+      "error": null,
+      "t_wall": 1793044322.861,
+      "since_start_ms": 169520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 20.421,
+      "error": null,
+      "t_wall": 1793044323.365,
+      "since_start_ms": 170024,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.285,
+      "error": null,
+      "t_wall": 1793044323.853,
+      "since_start_ms": 170512,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.031,
+      "error": null,
+      "t_wall": 1793044324.351,
+      "since_start_ms": 171010,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.245,
+      "error": null,
+      "t_wall": 1793044324.854,
+      "since_start_ms": 171513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.303,
+      "error": null,
+      "t_wall": 1793044325.359,
+      "since_start_ms": 172018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 15.895,
+      "error": null,
+      "t_wall": 1793044325.867,
+      "since_start_ms": 172526,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 10.668,
+      "error": null,
+      "t_wall": 1793044326.357,
+      "since_start_ms": 173016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.211,
+      "error": null,
+      "t_wall": 1793044326.859,
+      "since_start_ms": 173518,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 11.652,
+      "error": null,
+      "t_wall": 1793044327.362,
+      "since_start_ms": 174021,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 21.21,
+      "error": null,
+      "t_wall": 1793044327.863,
+      "since_start_ms": 174522,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.885,
+      "error": null,
+      "t_wall": 1793044328.359,
+      "since_start_ms": 175018,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.815,
+      "error": null,
+      "t_wall": 1793044328.861,
+      "since_start_ms": 175520,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.256,
+      "error": null,
+      "t_wall": 1793044329.357,
+      "since_start_ms": 176016,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.382,
+      "error": null,
+      "t_wall": 1793044329.856,
+      "since_start_ms": 176515,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 14.226,
+      "error": null,
+      "t_wall": 1793044330.365,
+      "since_start_ms": 177024,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.744,
+      "error": null,
+      "t_wall": 1793044330.854,
+      "since_start_ms": 177513,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.641,
+      "error": null,
+      "t_wall": 1793044331.351,
+      "since_start_ms": 178010,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 13.35,
+      "error": null,
+      "t_wall": 1793044331.855,
+      "since_start_ms": 178514,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 12.092,
+      "error": null,
+      "t_wall": 1793044332.355,
+      "since_start_ms": 179014,
+      "phase": "busy"
+    },
+    {
+      "elapsed_ms": 9.467,
+      "error": null,
+      "t_wall": 1793044332.854,
+      "since_start_ms": 179514,
+      "phase": "busy"
+    }
+  ],
+  "run": {
+    "state": "complete",
+    "error": 0,
+    "verify_flags": 0,
+    "tcp_ms": 5,
+    "setup_ms": 0,
+    "handshake_ms": 1560,
+    "transfer_ms": 2315,
+    "bytes": 262144,
+    "plain_tcp_ms": 0,
+    "plain_transfer_ms": 265,
+    "plain_bytes": 262144,
+    "heap_before": 5278476,
+    "heap_after": 5278476,
+    "global_min_heap": 5217556,
+    "stack_free_words": 3239,
+    "open_total_ms": 1565,
+    "stats_rpc_ms": 0,
+    "tls_version": 771,
+    "tls_suite": 52393,
+    "tls_group": 23,
+    "status": "",
+    "entropy": "ESP32 hardware RNG (Wi-Fi radio on)",
+    "tls": "ESP32 offload (module TLS), session checked 1.2 ECDHE-ECDSA CHACHA20-POLY1305 secp256r1",
+    "time": "SNTP UTC",
+    "client": "Nios II/f, FreeRTOS task, NetworkTarget commands (ESP32 offload)",
+    "errors": []
+  },
+  "summary": {
+    "idle": {
+      "count": 30,
+      "failures": 0,
+      "median_ms": 10.0365,
+      "p95_ms": 10.562,
+      "max_ms": 10.598
+    },
+    "busy": {
+      "count": 360,
+      "failures": 0,
+      "median_ms": 10.782499999999999,
+      "p95_ms": 21.51,
+      "max_ms": 29.973
+    }
+  },
+  "load": {
+    "build": "nios",
+    "puts": 71,
+    "runs_started": 40,
+    "busy_answers": 31,
+    "final_run": {
+      "state": "complete",
+      "error": 0,
+      "verify_flags": 0,
+      "tcp_ms": 5,
+      "setup_ms": 0,
+      "handshake_ms": 1560,
+      "transfer_ms": 2315,
+      "bytes": 262144,
+      "plain_tcp_ms": 0,
+      "plain_transfer_ms": 265,
+      "plain_bytes": 262144,
+      "heap_before": 5278476,
+      "heap_after": 5278476,
+      "global_min_heap": 5217556,
+      "stack_free_words": 3239,
+      "open_total_ms": 1565,
+      "stats_rpc_ms": 0,
+      "tls_version": 771,
+      "tls_suite": 52393,
+      "tls_group": 23,
+      "status": "",
+      "entropy": "ESP32 hardware RNG (Wi-Fi radio on)",
+      "tls": "ESP32 offload (module TLS), session checked 1.2 ECDHE-ECDSA CHACHA20-POLY1305 secp256r1",
+      "time": "SNTP UTC",
+      "client": "Nios II/f, FreeRTOS task, NetworkTarget commands (ESP32 offload)",
+      "errors": []
+    },
+    "runs_started_needed": 3,
+    "load_ok": true
+  },
+  "window": {
+    "busy_end_wall": 1793044333.350346,
+    "busy_seconds": 180.0,
+    "interval_s": 0.5,
+    "probe_timeout_s": 5
+  },
+  "config_readback": {
+    "U64 Specific Settings / Turbo Control": "Manual",
+    "U64 Specific Settings / CPU Speed": "48",
+    "U64 Specific Settings / System Mode": "NTSC",
+    "WiFi settings / WiFi Enabled": "Enabled",
+    "U64 Specific Settings / Badline Timing": "Enabled",
+    "Network Settings / SNTP Enable": "Enabled",
+    "C64 and Cartridge Settings / Command Interface": "Enabled"
+  },
+  "meta": {
+    "build": "nios",
+    "host": "<DEVICE_IP>",
+    "label": "",
+    "started": 1793044337.567873
+  },
+  "config_set_record": {
+    "profile": "turbo",
+    "items": [
+      {
+        "category": "WiFi settings",
+        "item": "WiFi Enabled",
+        "want": "Enabled",
+        "got": "Enabled",
+        "ok": true
+      },
+      {
+        "category": "Network Settings",
+        "item": "SNTP Enable",
+        "want": "Enabled",
+        "got": "Enabled",
+        "ok": true
+      },
+      {
+        "category": "C64 and Cartridge Settings",
+        "item": "Command Interface",
+        "want": "Enabled",
+        "got": "Enabled",
+        "ok": true
+      },
+      {
+        "category": "U64 Specific Settings",
+        "item": "Turbo Control",
+        "want": "Manual",
+        "got": "Manual",
+        "ok": true
+      },
+      {
+        "category": "U64 Specific Settings",
+        "item": "CPU Speed",
+        "want": "48",
+        "got": "48",
+        "ok": true
+      }
+    ],
+    "system_mode": "NTSC",
+    "phi2_hz": 1022727.0
+  }
+}

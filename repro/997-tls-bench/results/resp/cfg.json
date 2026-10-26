@@ -1,0 +1,42 @@
+{
+ "profile": "turbo",
+ "items": [
+  {
+   "category": "WiFi settings",
+   "item": "WiFi Enabled",
+   "want": "Enabled",
+   "got": "Enabled",
+   "ok": true
+  },
+  {
+   "category": "Network Settings",
+   "item": "SNTP Enable",
+   "want": "Enabled",
+   "got": "Enabled",
+   "ok": true
+  },
+  {
+   "category": "C64 and Cartridge Settings",
+   "item": "Command Interface",
+   "want": "Enabled",
+   "got": "Enabled",
+   "ok": true
+  },
+  {
+   "category": "U64 Specific Settings",
+   "item": "Turbo Control",
+   "want": "Manual",
+   "got": "Manual",
+   "ok": true
+  },
+  {
+   "category": "U64 Specific Settings",
+   "item": "CPU Speed",
+   "want": "48",
+   "got": "48",
+   "ok": true
+  }
+ ],
+ "system_mode": "NTSC",
+ "phi2_hz": 1022727.0
+}

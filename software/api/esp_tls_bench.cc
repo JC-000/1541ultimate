@@ -22,7 +22,8 @@ extern NetworkTarget net; // network_target.cc
 
 // READ_CHUNK is the buffer of the fixture's loop (buffer[1024]); the checks run on a buffer of that size.
 enum { BENCH_BYTES = 256 * 1024, BENCH_PORT = 18443, PLAIN_PORT = 18444, READ_CHUNK = 1024, BENCH_STACK_WORDS = 4096, DEADLINE_S = 180 };
-#define BENCH_PEER "10.43.23.182"
+// The host that runs the two peer servers (server.py :18443, plain_server.py :18444). Set it before building.
+#define BENCH_PEER "192.0.2.10"
 #define BENCH_NAME "bench.local"
 
 struct BenchResult {
