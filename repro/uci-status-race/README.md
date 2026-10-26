@@ -17,12 +17,24 @@ duration of the read, so if the C64 side captures the byte at the clock edge whe
 state bits can resolve to its old or new value on its own: 10 can read as 11 or 00. Single-bit transitions cannot be misread
 this way.
 
+A second, separate effect: bits 7 and 6 (data available, status available) are registered one FPGA clock after the state
+changes ([:128-137](https://github.com/GideonZ/1541ultimate/blob/4ac0608ee2c679b0fba353e76ee984531983bb17/fpga/io/command_interface/vhdl_source/command_protocol.vhd#L128-L137) against :219-225). So for one clock a
+perfectly clean read can show state 1x with DATA_AV and STAT_AV still 0. This is inferred from the RTL; the probe counts it
+separately (LAG) but we have not yet looked at its rate.
+
+## Workaround for clients
+
+Do not act on the first sample that shows state 1x. Re-read until two consecutive reads agree on bits 7-4 (mask $F0:
+DATA_AV, STAT_AV and the two state bits) and decide on that. Discarding one read is not enough, because the lag and the torn
+read can both show up on the read after it. `probe-recheck.prg` does exactly this in `wait_reply`.
+
 ## What we measured, and what is inferred
 
 Measured on one machine: U64 Elite, core 1.50, FPGA 126, firmware 3.15a built from master 4ac0608ee plus unrelated changes;
 CPU Turbo Manual 48 MHz, NTSC; Command Interface enabled; replies from a host on the LAN.
 
-- A benchmark PRG that also does TLS reads, patched to re-read $DF1C when a block that must be the last said 11. Series
+- A benchmark PRG that also does TLS reads, patched (an earlier variant than the probe here: it re-read $DF1C three times when
+  a block that must be the last said 11, and treated it as last when the first re-read said 10). Series
   of 40 runs (each run: one 256 KiB TLS transfer and one plain-TCP transfer, 484 READ commands in all), 13 series: about
   251,700 last blocks, 8 events, 3 of them in the plain-TCP leg. Rate 3.2e-5 per last block (Poisson 95% interval
   1.4e-5 to 6.3e-5), which is about 1.5% of runs. Later series gave more events (15 in 18 series, 5 plain).
@@ -48,6 +60,8 @@ CPU Turbo Manual 48 MHz, NTSC; Command Interface enabled; replies from a host on
 2. Put the host's address and the run length into a PRG. Two prebuilt PRGs are in `prebuilt/` (sha256 below):
    `probe-recheck.prg` logs a misread and carries on; `probe-hang.prg` counts it and then believes it like an ordinary
    client, so the run ends with ERR 11 (timeout waiting for a reply).
+   Both count the same things from the first sample; `recheck` additionally confirms the sample it acts on with two
+   agreeing reads of $F0.
 
        python3 host/mkcfg.py prebuilt/probe-recheck.prg probe.prg --host 192.0.2.10 --port 18444 --size 262144 --conns 40
        python3 host/mkcfg.py prebuilt/probe-hang.prg probe-hang.prg --host 192.0.2.10 --conns 40
@@ -64,6 +78,7 @@ CPU Turbo Manual 48 MHz, NTSC; Command Interface enabled; replies from a host on
        LAST BLOCKS=001C70
        RACE EVENTS=0001
        ACTED=0001 STILL=0000
+       LAG (BITS 7/6)=0000
        DIS=0001 MISM=0000
 
    or dump the 192 bytes at $C000 with any tool and run `python3 host/decode.py dump.bin` (or `decode.py --device HOST`,
@@ -78,6 +93,7 @@ CPU Turbo Manual 48 MHz, NTSC; Command Interface enabled; replies from a host on
 | READS, LAST BLOCKS | READ commands issued; blocks that were the last of their reply (shorter than 895 bytes, which includes the replies to OPEN, WRITE and CLOSE) |
 | RACE EVENTS | last blocks whose first sample said 11. This is the race |
 | ACTED | events where the first re-read said 10 (the register never held 11). STILL = re-read said 11 again: not the race, report it |
+| LAG | blocks whose first sample had DATA_AV and STAT_AV both clear although the block carried bytes: the one-clock lag of bits 7/6. Counted separately from the race |
 | DIS | blocks whose first sample differs from a read after the drain, in any state. Any state change between the two samples counts, not only the race, so DIS is at least RACE EVENTS |
 | MISM | payload bytes that differ from their stream offset (the sender sends byte i = i & 255). Should be 0 |
 
@@ -92,8 +108,8 @@ we needed on the order of 250,000 last blocks (about 13 series of 40 runs) to se
 
 A "more" block always holds 895 data bytes (893 plus the 2-byte header in the first block of a READ), so after a block is
 drained, a block shorter than that must be the last of its reply. If the sample that ended the wait for it said 11, that is
-a misread. The probe then reads $DF1C three times, counts and logs the event, and (recheck build) continues as if the
-block was last. The wait sample and the decision sample are the same read, which is exactly what a client that decides
+a misread. The probe then reads $DF1C three times and counts and logs the event. In the recheck build the sample the
+client acts on was already confirmed by two agreeing reads of $F0, so the block is taken as last. The wait sample and the decision sample are the same read, which is exactly what a client that decides
 more/last from the first "reply ready" sample does.
 
 ## Build and test
@@ -103,7 +119,7 @@ more/last from the first "reply ready" sample does.
     python3 selftest.py            # or: python3 selftest.py --build
 
 `selftest.py` runs the PRGs in a small 6502 simulator against a mock Command Interface that can be told to read 11 on the
-first sample of a last block. It checks the bookkeeping, the byte check and the two build variants. It tests the PRG, not
+first sample of a last block. It checks the bookkeeping, the byte check and the two build variants and an injected one-read lag of bits 7/6. It tests the PRG, not
 the hardware, and does not show that the race exists.
 
 ## Files
