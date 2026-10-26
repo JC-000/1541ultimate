@@ -1,12 +1,4 @@
 {
-  "firmware": {
-    "product": "Ultimate 64 Elite",
-    "firmware_version": "3.15a",
-    "git_commit_hash": "482970ae7",
-    "fpga_version": "126",
-    "core_version": "1.50",
-    "errors": []
-  },
   "peer": "<PEER_IP>:18443",
   "payload_bytes": 262144,
   "warmup": {

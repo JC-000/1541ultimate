@@ -12,11 +12,11 @@ Contents:
 | `set-barry-peer.sh` | the peer-address change on top of Barry's tree (two `inet_addr` literals) |
 | `scripts/tlsb.py` | shared helpers (harness client, device lock, summary maths) |
 | `scripts/tlsb_cfg.py` | SET the device settings a series needs, read each back, record |
-| `scripts/tls_bench_nios.py` | series A and A-matched (Barry's collector logic on the harness) |
+| `scripts/tls_bench_nios.py` | series A and A-matched: our port to the harness of Barry's `tools/tls_bench_collect.py` (same PUT, 0.25 s poll, 2 s gap), extended with reporting fields |
 | `scripts/service_impact.py` | series L (REST latency) and F (FTP throughput) under TLS load, plus `stage` |
 | `scripts/peers.sh` | starts and stops Barry's two peer servers and an optional packet capture |
 | `scripts/capture_phase.py`, `scripts/test_capture_phase.py` | phase clock from a capture (optional) and its synthetic-pcap selftest |
-| `results/{nios,niosF,resp,respF}/` | the result JSONs of the 2026-10-26 run, addresses and identifiers replaced by placeholders |
+| `results/{nios,niosF,resp,respF}/` | the result JSONs of the 2026-10-26 run; the per-run `firmware` block (hostname, serial, MACs) is removed, addresses are placeholders |
 
 ## What each side measures
 
@@ -26,17 +26,17 @@ Both images answer `PUT /v1/machine:tls_bench` (starts a FreeRTOS task on the Ni
 
 **Responder side** (`software/api/esp_tls_bench.cc` on this branch): the task calls the product's own command target (`extern NetworkTarget net`, `network_target.cc:18`) through its public `parse_command()` / `get_more_data()` with the byte-exact commands a C64 sends, minus the UCI: `$22 TRUST_CA` (the 408-byte CA, every run, untimed), one `$23 $FF` STATS RPC timed alone (`stats_rpc_ms`), `$21 OPEN_TLS` (`tls_prepare`, module OPEN RPC, resolve, socket, connect, `tls_handshake`, STATS RPC, reply), `$23 h` TLS_INFO, `$11` WRITE `B`, `$10` READ 1024 repeatedly, and a final READ that must end `01,CONNECTION CLOSED BY HOST`. All TLS crypto runs on the ESP32 module, reached over the UART RPC. The plain leg is Barry's `run_plain` copied line for line.
 
-Where each timer starts and stops (Barry's lines from `tls_bench.cc` at `74f0112e4`; ours from `esp_tls_bench.cc` and `network_target_tls.cc` on this branch):
+Where each timer starts and stops (Barry's lines from `tls_bench.cc` at `74f0112e4`; ours from `esp_tls_bench.cc` and `network_target_tls.cc` at the tip of this branch. The kit commit adds one comment line near the top of `esp_tls_bench.cc`, so at `4aa801506` every `esp_tls_bench.cc` line after `:25` is one lower):
 
 | field | Barry | responder |
 |---|---|---|
 | `tcp_ms` | `:184` .. `:200` (socket create, two setsockopt, `lwip_connect`) | derived: `open_total_ms - handshake_ms`. Covers everything in OPEN_TLS before the handshake window: SNTP read, module OPEN RPC over the UART, resolve, socket, connect. Larger than Barry's by the OPEN RPC. |
 | `setup_ms` | `:204` .. `:227` (CA parse, DRBG seed, config, `ssl_setup`, hostname, `set_bio`) | 0. The module holds the session setup; the CA upload is once per boot and untimed. Folded into `tcp_ms`. |
-| `handshake_ms` | `:231` .. `:239`, right after `mbedtls_ssl_handshake` returns | `e->handshake_ms`: `network_target_tls.cc:720` (first line of `tls_handshake`, after TCP connect and module OPEN) .. `:827` (after the post-handshake STATS RPC), read back with TLS_INFO (`esp_tls_bench.cc:193-199`). Includes every step RPC over the UART, the socket traffic of the handshake flights, and one STATS RPC. |
-| `open_total_ms` | n/a | `esp_tls_bench.cc:181` .. `:183` around the whole `$21` `parse_command` |
-| `transfer_ms` | `:257` (right after `ssl_write('B')` returns) .. `:274` (last byte checked into `buffer[1024]`) | `esp_tls_bench.cc:212` (right after the WRITE `B` command returns) .. `:233` (last byte checked into `buffer[1024]`). Same points. Inside: per READ one `parse_command`, one `tls_read` (an `lwip_recv` plus one `wifi_tls_step` RPC per up to 1024 B), a memcpy and the byte check. |
-| `plain_tcp_ms` | `:127` .. `:133` | `esp_tls_bench.cc:94` .. `:100` (same code) |
-| `plain_transfer_ms` | `:138` .. `:155` | `esp_tls_bench.cc:105` .. `:122` (same code) |
+| `handshake_ms` | `:231` .. `:239`, right after `mbedtls_ssl_handshake` returns | `e->handshake_ms`: `network_target_tls.cc:720` (first line of `tls_handshake`, after TCP connect and module OPEN) .. `:827` (after the post-handshake STATS RPC), read back with TLS_INFO (`esp_tls_bench.cc:209`). Includes every step RPC over the UART, the socket traffic of the handshake flights, and one STATS RPC. |
+| `open_total_ms` | n/a | `esp_tls_bench.cc:190` .. `:192` around the whole `$21` `parse_command` |
+| `transfer_ms` | `:257` (right after `ssl_write('B')` returns) .. `:274` (last byte checked into `buffer[1024]`) | `esp_tls_bench.cc:230` (right after the WRITE `B` command returns) .. `:252` (last byte checked into `buffer[1024]`). Same points. Inside: per READ one `parse_command`, one `tls_read` (an `lwip_recv` plus one `wifi_tls_step` RPC per up to 1024 B), a memcpy and the byte check. |
+| `plain_tcp_ms` | `:127` .. `:133` | `esp_tls_bench.cc:101` .. `:107` (same code) |
+| `plain_transfer_ms` | `:138` .. `:155` | `esp_tls_bench.cc:112` .. `:129` (same code) |
 
 To compare connection cost, use `tcp_ms + setup_ms + handshake_ms` for Barry and `open_total_ms` for the responder. The responder's `tcp_ms` alone and `setup_ms` are not comparable to Barry's.
 
@@ -52,7 +52,7 @@ The responder fails a run unless the session is TLS 1.2 (0x0303), suite 0xCCA9 (
 6. Entropy and time: the module uses the ESP32 hardware RNG (it needs the Wi-Fi radio on), time comes from SNTP and must be at least 2025-01-01 or OPEN answers `92,NO TRUSTED TIME`. Barry's fixture uses deterministic entropy and the RTC. Not expected to move the figures; not measured.
 7. `verify_flags` is always 0 on the responder: a failed verification is a refused OPEN (error -102, text in `status`).
 8. The responder task drives the global `net` that the C64's UCI uses, from a second task, with no locking. That is only safe with the C64 idle. See the run rules.
-9. #997 does not send `close_notify` back when the peer closes: `tls_end` (`network_target_tls.cc:1291-1292`) closes the entry without one. Barry's fixture sends it (`tls_bench.cc:276`). It is not inside either timed window. Expect `SSLEOFError` lines in the peer's TLS log for every responder run; they are not failures.
+9. #997 does not send `close_notify` back when the peer closes: `tls_end` (`network_target_tls.cc:1291-1292`) closes the entry without one. Barry's fixture sends it (`tls_bench.cc:280`). It is not inside either timed window. Expect `SSLEOFError` lines in the peer's TLS log for every responder run; they are not failures.
 
 ## Build both images
 
@@ -103,7 +103,7 @@ sh scripts/peers.sh stop runs/nios   # writes sha256.txt (peer scripts, pcap) an
 
 Set by `scripts/tlsb_cfg.py set turbo` and read back (exit 1 if any read-back differs); the record goes into every result JSON:
 
-- Turbo Control `Manual`, CPU Speed `48` (the `turbo` profile)
+- Turbo Control `Manual`, CPU Speed `48` (the `turbo` profile). The profile is ours: Barry's fixture never specified a CPU speed, so this is a choice made for the comparison, applied identically to both images.
 - WiFi Enabled `Enabled` (the ESP32 needs the radio for its entropy; the Nios series runs with the same setting so both carry the same load), traffic still goes over the wire
 - SNTP Enable `Enabled` (the responder's CUSTOM-CA trust needs trusted time; Barry's side uses the RTC, which must be 2025 or later)
 - Command Interface `Enabled`
@@ -132,7 +132,7 @@ mkdir -p $RUN
 python3 -I tlsb_cfg.py set turbo --out $RUN/cfg.json
 sh peers.sh start $RUN
 
-# 1. Barry's method (A): PUT, poll GET every 0.25 s, 12 runs; about 10 min on the Nios image, 2 min on the responder
+# 1. Barry's method (A), as our port of his tools/tls_bench_collect.py: PUT, poll GET every 0.25 s, 2 s gap, 12 runs; about 10 min on the Nios image, 2 min on the responder
 python3 -I tls_bench_nios.py run --runs 12 --cfg $RUN/cfg.json --out $RUN/A.json
 
 # 2. Matched (A-matched): the device is silent until the peers logged the run, then one GET (2 s retries)
