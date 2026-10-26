@@ -27,6 +27,7 @@ def decode(m):
            "last blocks %d" % le(m[0x15:0x18]),
            "events     %d   (last block whose first sample said 11)" % le(m[0x18:0x1A]),
            "  re-read said 10: %d   still 11: %d" % (le(m[0x1A:0x1C]), le(m[0x1C:0x1E])),
+           "first sample had DATA_AV and STAT_AV clear on a block with bytes (bits 7/6 lag): %d" % le(m[0x24:0x26]),
            "first-sample vs post-drain state differ: %d" % le(m[0x1E:0x20]),
            "payload mismatches: %d" % le(m[0x20:0x22])]
     n = min(m[0x23] // 8, 16)

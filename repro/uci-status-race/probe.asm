@@ -5,11 +5,14 @@
 ; must be the last one of its reply (a "more" block is always full). If that block's sample said Data More (11),
 ; that is a misread: $DF1C is re-read three times, the event is counted and logged.
 ;
-;   ACT = 1 (probe-recheck.prg): if the first re-read says Data Last (10) the block is treated as last and
-;           the run continues.
+;   ACT = 1 (probe-recheck.prg): the sample the client acts on is confirmed: re-read until two consecutive reads
+;           agree on bits 7-4 ($F0: DATA_AV, STAT_AV, state). A torn 11 and the one-clock lag of bits 7/6
+;           are both filtered out and the run continues.
 ;   ACT = 0 (probe-hang.prg): the event is counted, then the misread is believed like an ordinary client would:
 ;           DATA_ACC, then wait for another block, which never comes. The wait times out (ERR = 11, DONE = $EE).
 ;
+; Both builds count the same things from the very first sample. A second effect is counted separately (LAG): bits 7/6
+; follow the state one FPGA clock late, so a clean read can show state 1x with DATA_AV and STAT_AV still clear.
 ; Build: 64tass -a -D ACT=1 probe.asm -o probe-recheck.prg ; 64tass -a -D ACT=0 probe.asm -o probe-hang.prg
 ; Configure with host/mkcfg.py (it patches the config block at $0810 inside the PRG file).
 ; UCI rules followed: the status queue ($DF1F) is read only while STAT_AV is set, each byte consumed once.
@@ -36,6 +39,7 @@ DIS     = $C01E         ; 16 bit blocks whose first sample differs from a read a
 MISM    = $C020         ; 16 bit payload bytes that did not equal their stream offset & $FF
 SIG     = $C022         ; $E1 once initialised
 LOGY    = $C023         ; byte offset of the next log entry
+LAG     = $C024         ; 16 bit blocks whose first sample had DATA_AV and STAT_AV both clear although the block carried bytes
 LOG     = $C040         ; 16 entries x 8: sample, re-read 1, 2, 3, block bytes lo, hi, READS lo, mid
 
 E_OPEN  = 2
@@ -58,7 +62,7 @@ cl      = $FD           ; command length (2)
 rx0     = $20           ; payload bytes received, 24 bit (also the expected byte)
 rx1     = $21
 rx2     = $22
-zstat   = $2C           ; first sample of $DF1C in the current reply block
+zstat   = $2C           ; sample the client acts on: ACT=1 two consecutive reads agreeing on $F0, ACT=0 the first
 rdflag  = $2D           ; 0 generic reply, 1 READ reply (2 byte header, then byte-checked payload)
 hs      = $2E           ; header bytes still to skip
 gotf    = $2F           ; first data byte of the reply seen
@@ -76,6 +80,8 @@ w0      = $3A
 w1      = $3B
 w2      = $3C
 hh      = $3D           ; handle
+zraw    = $3F           ; the very first sample of the reply block, before any re-read
+zs1     = $40
 py      = $3E
 
 inc16   .macro
@@ -302,12 +308,21 @@ ux_block
         lda CTRL                ; the state after the drain
         and #$30
         sta post
-        lda zstat
+        lda zraw
         and #$30
         cmp post
         beq ux_same
         #inc16 DIS
 ux_same
+        lda zraw                ; state 1x with DATA_AV and STAT_AV clear on a block that did carry bytes: bits 7/6 lag
+        and #$C0
+        bne ux_nolag
+        lda bb0
+        ora bb1
+        ora sidx
+        beq ux_nolag
+        #inc16 LAG
+ux_nolag
         lda bb1                 ; a block of 895 bytes or more can be a "more" block, a shorter one is the last
         cmp #$03
         bcc ux_short
@@ -322,12 +337,11 @@ ux_short
         bne ux_lb
         inc LASTBLK+2
 ux_lb
-        lda zstat
+        lda zraw
         and #$30
         cmp #$30
         bne ux_decide
         jsr race_event
-        bcs ux_last
 ux_decide
         lda zstat
         and #$30
@@ -347,7 +361,7 @@ ux_last
 ux_ret
         rts
 
-; A last block whose first sample said 11. Re-read, count, log. C set when the run should go on as "last".
+; A last block whose first sample said 11. Re-read, count, log. (ACT=1: zstat is already the agreed sample.)
 race_event
         lda CTRL
         sta r1
@@ -359,7 +373,7 @@ race_event
         ldy LOGY
         cpy #128
         bcs re_nolog
-        lda zstat
+        lda zraw
         sta LOG,y
         iny
         lda r1
@@ -394,11 +408,7 @@ re_nolog
         rts
 re_last
         #inc16 ACTED
-        .if ACT
-        sec
-        .else
         clc
-        .endif
         rts
 
 ; release: hand back anything pending and clear a stale error until the interface is Idle
@@ -422,7 +432,7 @@ rel_ok
         clc
         rts
 
-; wait_reply: until state is Data Last / Data More; the first such sample stays in zstat
+; wait_reply: until state is Data Last / Data More; the first such sample is kept in zraw
 wait_reply
         lda #$00
         sta w0
@@ -448,6 +458,21 @@ wr_loop
         sec
         rts
 wr_ok
+        lda zstat
+        sta zraw
+        .if ACT
+        and #$F0                ; confirm: two consecutive reads must agree on DATA_AV, STAT_AV and the state
+        sta zs1
+wr_conf
+        lda CTRL
+        sta zstat
+        and #$F0
+        cmp zs1
+        beq wr_done
+        sta zs1
+        jmp wr_conf
+wr_done
+        .endif
         clc
         rts
 
@@ -530,6 +555,9 @@ print_report
         #pv s_still, STILL, 2
         lda #$0D
         jsr CHROUT
+        #pv s_lag, LAG, 2
+        lda #$0D
+        jsr CHROUT
         #pv s_dis, DIS, 2
         #pv s_mism, MISM, 2
         lda #$0D
@@ -597,5 +625,6 @@ s_last  .text "LAST BLOCKS=", 0
 s_events .text "RACE EVENTS=", 0
 s_acted .text "ACTED=", 0
 s_still .text " STILL=", 0
+s_lag   .text "LAG (BITS 7/6)=", 0
 s_dis   .text "DIS=", 0
 s_mism  .text " MISM=", 0
