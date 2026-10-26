@@ -19,15 +19,17 @@ sys.path.insert(0, os.path.join(HERE, "host"))
 import sim6502 as sim   # noqa: E402
 import mkcfg            # noqa: E402
 
-DONE, ERR, CONNS, READS, LASTBLK, EVENTS, ACTED, STILL, DIS, MISM, SIG, LOGY, LAG = (
-    0xC002, 0xC003, 0xC010, 0xC012, 0xC015, 0xC018, 0xC01A, 0xC01C, 0xC01E, 0xC020, 0xC022, 0xC023, 0xC024)
+DONE, ERR, CONNS, READS, LASTBLK, EVENTS, ACTED, STILL, DIS, MISM, SIG, LOGY, LAG, FFCNT = (
+    0xC002, 0xC003, 0xC010, 0xC012, 0xC015, 0xC018, 0xC01A, 0xC01C, 0xC01E, 0xC020, 0xC022, 0xC023, 0xC024, 0xC026)
 
 
 class SkewUci(sim.MockUci):
-    def __init__(self, *a, skew_every=0, lag_every=0, **k):
+    def __init__(self, *a, skew_every=0, lag_every=0, ff_first=False, flap=False, **k):
         super().__init__(*a, **k)
         self.skew_every, self.n, self.skew_next = skew_every, 0, False
         self.lag_every, self.ln, self.lag_next = lag_every, 0, False
+        self.ff_arm, self.ff_next = ff_first, False
+        self.flap, self.fl = flap, 0
 
     def _accept(self):
         before = self.state
@@ -41,8 +43,19 @@ class SkewUci(sim.MockUci):
             if self.ln % self.lag_every == 0:
                 self.lag_next = True
 
+    def write(self, a, v):
+        if a == 0xDF1C and v & 1 and self.ff_arm:
+            self.ff_arm, self.ff_next = False, True
+        super().write(a, v)
+
     def read(self, a):
         v = super().read(a)
+        if a == 0xDF1C and self.flap and self.state in (2, 3):
+            self.fl ^= 0x40
+            return v ^ self.fl
+        if a == 0xDF1C and self.ff_next:
+            self.ff_next = False
+            return 0xFF
         if a == 0xDF1C and self.skew_next and self.state == 2:
             self.skew_next = False
             return (v & ~0x30) | 0x30
@@ -111,6 +124,19 @@ def main():
     print("lag of bits 7/6, recheck build: %d blocks, run completed, no payload loss" % w(r, LAG, 2))
     r = run(hang, SkewUci(payload=20000, lag_every=3), 20000, 3)
     print("lag of bits 7/6, hang build: DONE=%02X ERR=%d LAG=%d MISM=%d" % (r[DONE], r[ERR], w(r, LAG, 2), w(r, MISM, 2)))
+
+    # first poll of the first command reads $FF: counted apart, never an event. The recheck build waits it out and
+    # finishes; the hang build believes it (in this mock the reply has already arrived, so it can time out)
+    r = run(recheck, SkewUci(payload=20000, ff_first=True), 20000, 2)
+    assert r[DONE] == 0x5A and w(r, FFCNT, 2) == 1 and w(r, EVENTS, 2) == 0 and w(r, MISM, 2) == 0
+    r = run(hang, SkewUci(payload=20000, ff_first=True), 20000, 2)
+    assert w(r, FFCNT, 2) == 1 and w(r, EVENTS, 2) == 0
+    print("$FF first sample: counted in FFCNT, no event; recheck build finishes")
+
+    # a $DF1C that never settles: the recheck build gives up after 8 reads with ERR 14 instead of looping
+    r = run(recheck, SkewUci(payload=20000, flap=True), 20000, 1)
+    assert r[DONE] == 0xEE and r[ERR] == 14
+    print("unstable $DF1C: recheck build stops with ERR=14")
 
     # injected skew, hang build: the first event is believed, the reply never comes, the wait times out
     r = run(hang, SkewUci(payload=20000, skew_every=3), 20000, 3)

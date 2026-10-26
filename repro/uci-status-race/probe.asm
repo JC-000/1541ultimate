@@ -39,6 +39,7 @@ DIS     = $C01E         ; 16 bit blocks whose first sample differs from a read a
 MISM    = $C020         ; 16 bit payload bytes that did not equal their stream offset & $FF
 SIG     = $C022         ; $E1 once initialised
 LOGY    = $C023         ; byte offset of the next log entry
+FFCNT   = $C026         ; 16 bit replies whose first "ready" sample was $FF (not a state; counted apart from the race)
 LAG     = $C024         ; 16 bit blocks whose first sample had DATA_AV and STAT_AV both clear although the block carried bytes
 LOG     = $C040         ; 16 entries x 8: sample, re-read 1, 2, 3, block bytes lo, hi, READS lo, mid
 
@@ -48,6 +49,7 @@ E_READ  = 5
 E_CLOSE = 7
 E_TMO   = 11
 E_BUSY  = 13
+E_CONF  = 14            ; $DF1C never settled: no two consecutive reads agreed within 8 tries
 
 CTRL    = $DF1C
 CMDREG  = $DF1D
@@ -338,6 +340,8 @@ ux_short
         inc LASTBLK+2
 ux_lb
         lda zraw
+        cmp #$FF                ; $FF is no state: counted in FFCNT, not an event
+        beq ux_decide
         and #$30
         cmp #$30
         bne ux_decide
@@ -460,17 +464,34 @@ wr_loop
 wr_ok
         lda zstat
         sta zraw
+        cmp #$FF
+        bne wr_nff
+        #inc16 FFCNT
+wr_nff
         .if ACT
         and #$F0                ; confirm: two consecutive reads must agree on DATA_AV, STAT_AV and the state
         sta zs1
+        ldx #$08                ; bounded: at most 8 disagreeing reads
 wr_conf
         lda CTRL
         sta zstat
         and #$F0
         cmp zs1
-        beq wr_done
+        beq wr_agree
         sta zs1
-        jmp wr_conf
+        dex
+        bne wr_conf
+        lda #E_CONF
+        sta ERR
+        sec
+        rts
+wr_agree
+        and #$30                ; two agreeing reads that are not a ready state ($FF, busy): back to waiting
+        cmp #$20
+        beq wr_done
+        cmp #$30
+        beq wr_done
+        jmp wr_loop
 wr_done
         .endif
         clc
@@ -558,6 +579,9 @@ print_report
         #pv s_lag, LAG, 2
         lda #$0D
         jsr CHROUT
+        #pv s_ff, FFCNT, 2
+        lda #$0D
+        jsr CHROUT
         #pv s_dis, DIS, 2
         #pv s_mism, MISM, 2
         lda #$0D
@@ -625,6 +649,7 @@ s_last  .text "LAST BLOCKS=", 0
 s_events .text "RACE EVENTS=", 0
 s_acted .text "ACTED=", 0
 s_still .text " STILL=", 0
+s_ff    .text "FF FIRST SAMPLES=", 0
 s_lag   .text "LAG (BITS 7/6)=", 0
 s_dis   .text "DIS=", 0
 s_mism  .text " MISM=", 0

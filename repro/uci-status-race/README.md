@@ -26,7 +26,10 @@ separately (LAG) but we have not yet looked at its rate.
 
 Do not act on the first sample that shows state 1x. Re-read until two consecutive reads agree on bits 7-4 (mask $F0:
 DATA_AV, STAT_AV and the two state bits) and decide on that. Discarding one read is not enough, because the lag and the torn
-read can both show up on the read after it. `probe-recheck.prg` does exactly this in `wait_reply`.
+read can both show up on the read after it. Also require the agreed sample to be a ready state (10 or 11): two agreeing
+reads of busy or of $FF are not an answer. And bound the loop: if no two reads agree within a few tries (we use 8), stop with
+an error. A status that never settles must not turn into an endless loop. `probe-recheck.prg` does exactly this in `wait_reply`
+(ERR 14 when the bound is hit).
 
 ## What we measured, and what is inferred
 
@@ -79,6 +82,7 @@ CPU Turbo Manual 48 MHz, NTSC; Command Interface enabled; replies from a host on
        RACE EVENTS=0001
        ACTED=0001 STILL=0000
        LAG (BITS 7/6)=0000
+       FF FIRST SAMPLES=0000
        DIS=0001 MISM=0000
 
    or dump the 192 bytes at $C000 with any tool and run `python3 host/decode.py dump.bin` (or `decode.py --device HOST`,
@@ -89,10 +93,11 @@ CPU Turbo Manual 48 MHz, NTSC; Command Interface enabled; replies from a host on
 | field | meaning |
 |---|---|
 | DONE | $5A finished, $EE stopped on an error, $00 still running |
-| ERR | 11 = timed out waiting for a reply (the hang), 5 = READ failed, 2/4/7 = OPEN/WRITE/CLOSE failed |
+| ERR | 11 = timed out waiting for a reply, 14 = $DF1C never settled (recheck build), 5 = READ failed, 2/4/7 = OPEN/WRITE/CLOSE failed |
 | READS, LAST BLOCKS | READ commands issued; blocks that were the last of their reply (shorter than 895 bytes, which includes the replies to OPEN, WRITE and CLOSE) |
 | RACE EVENTS | last blocks whose first sample said 11. This is the race |
 | ACTED | events where the first re-read said 10 (the register never held 11). STILL = re-read said 11 again: not the race, report it |
+| FF | replies whose first "ready" sample was exactly $FF (all bits set, which the state test reads as 11). Not a state, so it is not counted as the race. Unexplained, see below |
 | LAG | blocks whose first sample had DATA_AV and STAT_AV both clear although the block carried bytes: the one-clock lag of bits 7/6. Counted separately from the race |
 | DIS | blocks whose first sample differs from a read after the drain, in any state. Any state change between the two samples counts, not only the race, so DIS is at least RACE EVENTS |
 | MISM | payload bytes that differ from their stream offset (the sender sends byte i = i & 255). Should be 0 |
@@ -100,9 +105,48 @@ CPU Turbo Manual 48 MHz, NTSC; Command Interface enabled; replies from a host on
 The log of the first 16 events (sample, three re-reads, bytes in the block, READ number) is at $C040, 8 bytes each;
 `decode.py` prints it. Expect first samples of $30 or $32 and re-reads of $20.
 
-Unpatched, the expected rate is about one hang per 1/3.2e-5 last blocks, about 1.5% of 256 KiB runs in our setup. With
-`probe-recheck.prg` the same events are logged and the run completes. A few thousand READs with no event proves nothing;
-we needed on the order of 250,000 last blocks (about 13 series of 40 runs) to see 8.
+A few thousand READs with no event prove nothing; we needed on the order of 250,000 last blocks to see 8.
+
+## Measured with this kit
+
+U64 Elite, core 1.50, FPGA 126, firmware 3.15a (master 4ac0608ee plus unrelated changes), NTSC, Command Interface Enabled,
+Turbo Control Manual and CPU Speed 48, **read back before and after every batch of 30 connections (all 45 batches, both runs:
+Manual / 48 / Enabled each time)**. Replies came from `host/sender.py` on a laptop on the same LAN, 262,144 bytes per connection.
+Each batch is one launch of the PRG. Both runs used the build whose `probe-recheck.prg` has sha256 `c938b058...` (no bound on the
+re-read loop; the bound was added afterwards and is the only change in the shipped PRG, which was not re-measured;
+`probe-hang.prg` is unchanged).
+
+| | probe-recheck | probe-hang |
+|---|---|---|
+| connections | 900 (30 batches, about 20 min) | 420 completed (14 batches) |
+| READ commands | 161,100 | 75,180 |
+| last blocks (incl. OPEN, WRITE, CLOSE replies) | 163,800 | 76,443 |
+| race events (first sample 11 on a last block) | **8**, all acted (re-read said 10) | 0 |
+| first samples of the events | $32 every time, re-reads $20 $20 $20; every one on the 579-byte second block of a READ | |
+| LAG (state ready, DATA_AV and STAT_AV clear) | 5,021 | 2,366 |
+| first sample $FF | 16 | 3 |
+| payload mismatches | 0 | 0 |
+| hangs caused by the race | 0 (the run continued past every event) | 0 |
+
+What this says:
+
+- **Race confirmed on a second occasion, with this kit.** 8 misreads in 161,100 READ replies is 5.0e-5 per last block (Poisson 95%
+  interval about 2.1e-5 to 9.8e-5), consistent with the 3.2e-5 from our bench program. Every misread was a first sample of $32 on the
+  579-byte second block of a 1472-byte READ (the block before the last edge is $22), and the re-read gave $20.
+- **The hang itself was not reproduced with this kit.** `probe-hang` saw no misread in 75,180 READ replies (about 3.7 expected at
+  the rate above; probability of none about 2.5%), so it had nothing to hang on. The hang was observed with our TLS bench program
+  (halted-PRG dump: both blocks drained and correct, $DF1C = $00, $DF1D = $C9, interface idle). One `probe-hang` batch failed at
+  its first command with ERR 11 (no reply to OPEN_TCP, nothing drained, no connection reached the sender): that is not this
+  race, and we do not know what it was.
+- **LAG is common, not rare:** about 3% of blocks (5,021 of 163,800) were first seen with the state already ready and bits 7/6
+  still clear. The probe drains by polling DATA_AV per byte, so it is not hurt by this, but a client that takes "no data
+  available" from that sample would read an empty reply.
+- **$FF first samples (separate, unexplained, not counted as the race).** In an earlier, shorter run (this kit's hang build,
+  80 connections, config not read back during the batches) both batches logged one $FF on the very first command (OPEN_TCP),
+  re-reads $11 $11 $11. In the later runs they occur 0 to 5 times per batch of 30 connections, at unknown commands. $FF has bits
+  5-4 = 11, so a client that tests only those bits reads it as Data More. Whether this is the open-bus effect, a startup effect or
+  something else is not known. Not measured on the C64U or at 1 MHz.
+- Not measured: 1 MHz, U2/U2+, C64U.
 
 ## How the probe decides
 

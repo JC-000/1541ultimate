@@ -10,7 +10,7 @@ import urllib.request
 
 NAMES = {0x5A: "finished", 0xEE: "stopped on error", 0: "running"}
 ERRS = {0: "none", 2: "OPEN_TCP failed", 4: "WRITE failed", 5: "READ failed", 7: "CLOSE failed",
-        11: "timeout waiting for a reply (the hang)", 13: "interface not idle"}
+        11: "timeout waiting for a reply (the hang)", 13: "interface not idle", 14: "$DF1C never settled (recheck build)"}
 
 
 def le(b):
@@ -28,6 +28,7 @@ def decode(m):
            "events     %d   (last block whose first sample said 11)" % le(m[0x18:0x1A]),
            "  re-read said 10: %d   still 11: %d" % (le(m[0x1A:0x1C]), le(m[0x1C:0x1E])),
            "first sample had DATA_AV and STAT_AV clear on a block with bytes (bits 7/6 lag): %d" % le(m[0x24:0x26]),
+           "first sample was $FF (open bus?, not a state; not counted as the race): %d" % le(m[0x26:0x28]),
            "first-sample vs post-drain state differ: %d" % le(m[0x1E:0x20]),
            "payload mismatches: %d" % le(m[0x20:0x22])]
     n = min(m[0x23] // 8, 16)
