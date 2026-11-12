@@ -1,6 +1,6 @@
 # Bench repro for #1079: the module's reply backlog, and a burst to measure it
 
-Bench only, never for upstream. This branch is `master` plus one commit that adds a backlog counter to the module's UART
+Bench only, never for upstream. This branch is `master` plus two commits that add a backlog counter (and its driver) to the module's UART
 TX path and a command that reads it, so that "master + #1078" (before) and "master + #1078 + #1079" (after) can be
 compared on hardware. It contains neither PR. It goes on top of either: it applies to `upstream/master`, to the #1078
 head (`49074a0d2`) and to the #1079 head (`8e9182b61`) with `git apply --check`, and it touches none of the lines the two
@@ -46,10 +46,10 @@ three), `bench-repro/1079-reply-backlog/txq.py` (the driver), `software/io/wifi/
 
 ```
 git checkout -b before <head of #1078>       # BEFORE: master + #1078 (+ this)
-git cherry-pick <this commit>
+git cherry-pick 085aad730..repro/1079-reply-backlog-counter   # both commits of this branch
 
 git checkout -b after <head of #1079>        # AFTER:  master + #1078 + #1079 (+ this)
-git cherry-pick <this commit>
+git cherry-pick 085aad730..repro/1079-reply-backlog-counter
 ```
 
 This branch and `repro/module-hold` (the RX hold for #1071 and #1078) edit neighbouring lines of the same files and do not
