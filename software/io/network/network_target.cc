@@ -13,6 +13,11 @@
 #include <errno.h>
 #include <stdio.h>
 
+// BENCH ONLY (repro for #1079, never for upstream): UCI network target command 0xE7, the module's reply backlog counter
+// Weak, so that the products without a WiFi module still link; there it answers "unknown command".
+int wifi_bench_rpc(uint8_t command, uint32_t arg, int timeout_ms, uint8_t *out, int maxout) __attribute__((weak));
+#define NET_CMD_BENCH 0xE7
+
 NetworkTarget net(3);
 
 Message c_net_message_identification = { 34, true, (uint8_t *)"ULTIMATE-II NETWORK INTERFACE V1.0" };
@@ -175,6 +180,30 @@ void NetworkTarget :: parse_command(Message *command, Message **reply, Message *
         case NET_CMD_WRITE_SOCKET:
         	write_socket(command, reply, status);
         	break;
+        case NET_CMD_BENCH: // BENCH ONLY (repro for #1079): 03 E7 <burst | size << 16 | 0x80000000 reset, u32 LE>; data = the module's reply: esp_err i32, then 5 u32: sent, q_max, left, drain_us, frames
+            *reply = &c_message_empty;
+            if (!wifi_bench_rpc) {
+                *status = &c_status_unknown_command;
+                break;
+            }
+            if (command->length != 6) {
+                *status = &c_status_invalid_params;
+                break;
+            }
+            {
+                uint32_t arg;
+                memcpy(&arg, command->message + 2, sizeof(arg));
+                int n = wifi_bench_rpc(0x6C, arg, 2000, data_message.message, CMD_MAX_REPLY_LEN);
+                if (n < 0) {
+                    *status = &c_status_internal_error; // no reply from the module
+                    break;
+                }
+                data_message.length = n;
+                data_message.last_part = true;
+                *reply = &data_message;
+                *status = &c_status_ok;
+            }
+            break;
         default:
             *reply  = &c_message_empty;
             *status = &c_status_unknown_command;

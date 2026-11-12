@@ -342,6 +342,9 @@ void dispatch(void *ct)
         case CMD_CLEAR_APS:
             cmd_clear_aps(pbuffer);
             break;
+        case CMD_BENCH_TXQ: // BENCH ONLY (repro for #1079)
+            cmd_bench_txq(UART_CHAN, pbuffer);
+            break;
         default:
             cmd_not_implemented(pbuffer);
             break;

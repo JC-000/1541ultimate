@@ -398,3 +398,43 @@ int wifi_modem_enable(bool enable)
 const char *no_wifi_buf = "*** NO BUFFER TO TRANSMIT ANYTHING.\n";
 const char *no_wifi_slot = "*** NO REPLY SLOT FOR THE WIFI MODULE.\n";
 
+
+// BENCH ONLY (repro for #1079, never for upstream): one request {hdr; u32 arg} to the module, and its reply body (what
+// follows the header) copied to 'out'. Returns the number of bytes copied, or -1 when the request did not go out or
+// no reply came within timeout_ms.
+int wifi_bench_rpc(uint8_t command, uint32_t arg, int timeout_ms, uint8_t *out, int maxout)
+{
+    if (!esp32.uart) {
+        return -1;
+    }
+    command_buf_t *buf;
+    if (esp32.uart->GetBuffer(&buf, 1000) == pdFALSE) {
+        printf(no_wifi_buf);
+        return -1;
+    }
+    rpc_header_t *hdr = (rpc_header_t *)buf->data;
+    hdr->command = command;
+    hdr->sequence = 0;
+    hdr->thread = 0xFF;
+    memcpy(buf->data + sizeof(rpc_header_t), &arg, sizeof(arg));
+    buf->size = sizeof(rpc_header_t) + sizeof(arg);
+    if (!wifi_reply_register(hdr)) {
+        esp32.uart->FreeBuffer(buf);
+        printf(no_wifi_slot);
+        return -1;
+    }
+    buf = wifi_transmit(buf, timeout_ms);
+    if (!buf) {
+        return -1;
+    }
+    int n = buf->size - (int)sizeof(rpc_header_t);
+    if (n < 0) {
+        n = 0;
+    }
+    if (n > maxout) {
+        n = maxout;
+    }
+    memcpy(out, buf->data + sizeof(rpc_header_t), n);
+    esp32.uart->FreeBuffer(buf);
+    return n;
+}

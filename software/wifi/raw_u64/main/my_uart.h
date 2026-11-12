@@ -23,4 +23,10 @@ BaseType_t my_uart_transmit_packet(uint8_t uart_num, command_buf_t *buf);
 BaseType_t my_uart_receive_packet(uint8_t uart_num, command_buf_t **buf, TickType_t ticks);
 BaseType_t my_uart_free_buffer(uint8_t uart_num, command_buf_t *buf);
 
+// BENCH ONLY (repro for #1079, never for upstream): the reply backlog counter and a burst of frames (my_uart.c)
+#define CMD_BENCH_TXQ            0x6C
+#define EVENT_BENCH_TXQ_FRAME    0x6F
+#define BENCH_TXQ_RESET          0x80000000u
+void cmd_bench_txq(uint8_t uart_num, command_buf_t *buf);
+
 #endif /* MY_UART_H_ */

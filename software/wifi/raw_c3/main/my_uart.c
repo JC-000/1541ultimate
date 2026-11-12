@@ -35,6 +35,9 @@
 #include "rpc_dispatch.h"
 #include "dump_hex.h"
 #include "my_uart.h"
+#include "rpc_calls.h"
+#include "esp_timer.h"
+#include "esp_rom_sys.h"
 
 #if CONFIG_IDF_TARGET_ESP32
 #include "esp32/clk.h"
@@ -92,6 +95,21 @@ typedef struct {
 } uart_context_t;
 
 static my_uart_obj_t *p_uart_obj[UART_NUM_MAX] = {0};
+
+// ---- BENCH ONLY (repro for #1079, never for upstream): the reply backlog counter -----------------------------------
+// Counted at every my_uart_transmit_packet(), before the frame is queued: how many frames the module has queued for the
+// UART, and the most there ever were (this one included). CMD_BENCH_TXQ reads them.
+static volatile uint32_t bench_txq_max;
+static volatile uint32_t bench_txq_frames;
+static void bench_txq_note(uint8_t uart_num)
+{
+    uint32_t waiting = (uint32_t)uxQueueMessagesWaiting(p_uart_obj[uart_num]->buffer_context->transmitQueue) + 1;
+    if (waiting > bench_txq_max) {
+        bench_txq_max = waiting;
+    }
+    bench_txq_frames++;
+}
+// ---- end of BENCH ONLY ---------------------------------------------------------------------------------------------
 
 static uart_context_t uart_context[UART_NUM_MAX] = {
     UART_CONTEX_INIT_DEF(UART_NUM_0),
@@ -318,6 +336,7 @@ void UART_ISR_ATTR my_uart_intr_handler(void *param)
 
 BaseType_t my_uart_transmit_packet(uint8_t uart_num, command_buf_t *buf)
 {
+    bench_txq_note(uart_num); // BENCH ONLY (repro for #1079)
 #if UART_DEBUG_TX
     static int count = 0;
     printf("Transmit packet %d:\n", ++count);
@@ -353,6 +372,70 @@ BaseType_t my_uart_free_buffer(uint8_t uart_num, command_buf_t *buf)
 
     return ret;
 }
+
+// ---- BENCH ONLY (repro for #1079, never for upstream): CMD_BENCH_TXQ ---------------------------------------------
+// Request {hdr; u32 arg}: arg = burst | size << 16 | BENCH_TXQ_RESET.
+//   burst  frames of `size` bytes (4..1500, 0 = 4) are queued back to back, then the module waits (at most 200 ms) until
+//          the UART has sent them all, and reports. burst > 0 clears the counters first.
+//   BENCH_TXQ_RESET clears the counters. With burst 0 and no flag the command only reads.
+// Reply {hdr; int esp_err; u32 sent; u32 q_max; u32 left; u32 drain_us; u32 frames}:
+//   sent      frames of the burst that were queued (it stops when no TX buffer is free)
+//   q_max     most frames queued for the UART at once since the counters were cleared
+//   left      frames still queued when the wait ended (before this reply is queued): the backlog
+//   drain_us  microseconds from the first frame queued to the UART idle (the wait's 200 ms when frames are left)
+//   frames    frames handed to the UART since the counters were cleared (the burst, and every reply and event)
+void cmd_bench_txq(uint8_t uart_num, command_buf_t *buf)
+{
+    my_uart_obj_t *obj = p_uart_obj[uart_num];
+    uint32_t arg = 0;
+    if (buf->size >= (int)(sizeof(rpc_header_t) + sizeof(arg))) {
+        memcpy(&arg, buf->data + sizeof(rpc_header_t), sizeof(arg));
+    }
+    uint32_t burst = arg & 0xFFFF & ~BENCH_TXQ_RESET;
+    uint32_t size = (arg >> 16) & 0x7FFF;
+    if (size < sizeof(rpc_header_t)) {
+        size = sizeof(rpc_header_t);
+    }
+    if (size > 1500) {
+        size = 1500;
+    }
+    if ((arg & BENCH_TXQ_RESET) || burst) {
+        bench_txq_max = 0;
+        bench_txq_frames = 0;
+    }
+    uint32_t sent = 0;
+    uint32_t drain_us = 0;
+    if (burst) {
+        int64_t t0 = esp_timer_get_time();
+        for (; sent < burst; sent++) {
+            command_buf_t *ev;
+            if (!my_uart_get_buffer(uart_num, &ev, 0)) {
+                break;
+            }
+            rpc_header_t *hdr = (rpc_header_t *)ev->data;
+            hdr->command = EVENT_BENCH_TXQ_FRAME;
+            hdr->thread = 0xFF;
+            hdr->sequence = (uint16_t)sent;
+            memset(ev->data + sizeof(rpc_header_t), (int)sent, size - sizeof(rpc_header_t));
+            ev->size = size;
+            my_uart_transmit_packet(uart_num, ev);
+        }
+        while ((esp_timer_get_time() - t0) < 200000) {
+            if ((uxQueueMessagesWaiting(obj->buffer_context->transmitQueue) == 0) && (obj->current_tx_buf == NULL) &&
+                uart_hal_is_tx_idle(&(uart_context[uart_num].hal))) {
+                break;
+            }
+            esp_rom_delay_us(20);
+        }
+        drain_us = (uint32_t)(esp_timer_get_time() - t0);
+    }
+    uint32_t reply[6] = { 0, sent, bench_txq_max, (uint32_t)uxQueueMessagesWaiting(obj->buffer_context->transmitQueue),
+                          drain_us, bench_txq_frames };
+    memcpy(buf->data + sizeof(rpc_header_t), reply, sizeof(reply));
+    buf->size = sizeof(rpc_header_t) + sizeof(reply);
+    my_uart_transmit_packet(uart_num, buf);
+}
+// ---- end of BENCH ONLY ---------------------------------------------------------------------------------------------
 
 BaseType_t my_uart_get_buffer(uint8_t uart_num, command_buf_t **buf, TickType_t ticks)
 {

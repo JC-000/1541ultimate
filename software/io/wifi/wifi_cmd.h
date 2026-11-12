@@ -73,6 +73,9 @@ command_buf_t *wifi_wait_reply(rpc_header_t hdr, int timeout_ms);
 int wifi_set_recovery_url(const char *url);
 int wifi_get_recovery_url(char *url, int maxlen);
 
+// BENCH ONLY (repro for #1079): see wifi_cmd.cc
+int wifi_bench_rpc(uint8_t command, uint32_t arg, int timeout_ms, uint8_t *out, int maxout);
+
 extern "C" { void print_uart_status(); }
 extern const char *no_wifi_buf;
 extern const char *no_wifi_slot;

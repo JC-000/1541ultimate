@@ -549,6 +549,9 @@ void dispatch(void *ct)
         case CMD_GET_RECOVERY_URL:
             cmd_get_recovery_url(pbuffer);
             break;
+        case CMD_BENCH_TXQ: // BENCH ONLY (repro for #1079)
+            cmd_bench_txq(UART_CHAN, pbuffer);
+            break;
         default:
             cmd_not_implemented(pbuffer);
             break;
