@@ -40,7 +40,7 @@ enabled. The Ultimate prints each burst frame on its console as `Unexpected Even
 Thread: 255.`, which counts the frames that arrived.
 
 Files: `software/{wifi/raw_u64,wifi/raw_c3,u64ctrl}/main/{my_uart.c,my_uart.h,rpc_dispatch.c}` (the same text in all
-three), `software/io/wifi/wifi_cmd.{cc,h}` (`wifi_bench_rpc`), `software/io/network/network_target.cc` (CRLF kept).
+three), `bench-repro/1079-reply-backlog/txq.py` (the driver), `software/io/wifi/wifi_cmd.{cc,h}` (`wifi_bench_rpc`), `software/io/network/network_target.cc` (CRLF kept).
 
 ## Apply
 
@@ -52,6 +52,10 @@ git checkout -b after <head of #1079>        # AFTER:  master + #1078 + #1079 (+
 git cherry-pick <this commit>
 ```
 
+This branch and `repro/module-hold` (the RX hold for #1071 and #1078) edit neighbouring lines of the same files and do not
+cherry-pick onto each other without hand-merging. Use one per build. The codes do not collide (this branch: command 0x6C,
+event 0x6F, UCI 0xE7; the hold: 0xB1-0xB3, 0x6E, UCI 0xE5).
+
 **Module version.** The Ultimate's updater only installs a module whose version differs from the one the module reports.
 Bump `IDENT_MINOR` and `IDENT_STRING` in `rpc_dispatch.h` of each module you flash (raw_u64 for the Elite, raw_c3 for the
 U2+L), or the new module is silently not installed. Use the same bump on both builds, and flash the module in both cases.
@@ -59,32 +63,36 @@ The patch does not touch the version.
 
 ## Drive it
 
-(UCI, as in `tests/e2e/io/command_interface/net_target_test.py`; sketch, not run against a device.)
+`txq.py` in this directory sends the UCI command with the repo's own `tests/e2e/lib/uci.py` (as `net_target_test.py`
+does) and prints the reply. It sets "Command Interface" to Enabled (not saved to flash) and takes no other action.
 
-```python
-def txq(burst=0, size=0, reset=False):
-    arg = burst | (size << 16) | (0x80000000 if reset else 0)
-    d = uci.transact(bytes([TARGET_NETWORK, 0xE7]) + struct.pack("<I", arg)).data
-    return dict(zip(("esp_err", "sent", "q_max", "left", "drain_us", "frames"), struct.unpack("<iIIIII", d)))
+```
+python3 bench-repro/1079-reply-backlog/txq.py -H <device> --burst 11               # 11 frames of 4 bytes, back to back
+python3 bench-repro/1079-reply-backlog/txq.py -H <device> --burst 11 --size 1000   # for a throughput figure
+python3 bench-repro/1079-reply-backlog/txq.py -H <device> --reset                  # clear q_max and frames
+python3 bench-repro/1079-reply-backlog/txq.py -H <device>                          # read only
 ```
 
-1. The burst. Device idle, WiFi up. `txq(burst=11)` (4 byte frames), then `txq()` after a second.
+Output, e.g. `esp_err 0  sent 11  q_max 10  left 0  drain_us 16533  frames 11`.
+
+1. The burst. Device idle, WiFi up. `--burst 11`, then read again after a second.
    - If the TX interrupt does not start a frame that was queued while the FIFO was already below its threshold (the
-     behaviour #1079 describes, seen on a C64 Ultimate), master + #1078 shows `left` = 10 and `drain_us` = 200000, and the
-     console shows fewer than 11 `Ev 6F` lines at first: the rest come out one per later frame. That is what the host
-     model in #1079 predicts (11 queued, 10 left).
-   - On master + #1078 + #1079 expect `left` = 0, `drain_us` small, 11 `Ev 6F` lines at once.
-   - If master + #1078 also shows `left` = 0 on your device, the stall does not occur on that chip: say so, it is a result.
-     The #1079 text says the edge-like behaviour was seen on the C64 Ultimate and that the IDF headers document a level
-     behaviour; this is the measurement that settles it per product. `q_max` = 11 in both cases (it counts the queue, not
-     the sending).
-2. Throughput. `txq(burst=11, size=1000)`, several times, and compare `drain_us` before and after:
+     behaviour #1079 describes, seen on a C64 Ultimate), master + #1078 shows `left` about 10 and `drain_us` = 200000,
+     and the console shows fewer than 11 `Ev 6F` lines at first: the rest come out one per later frame. That is what
+     the host model in #1079 predicts (11 queued, 10 left).
+   - On master + #1078 + #1079 expect `left` = 0 and `drain_us` of a few hundred microseconds for 4 byte frames.
+   - If master + #1078 also shows `left` = 0 on your device, the stall does not occur on that chip: say so, it is a
+     result. The #1079 text says the edge-like behaviour was seen on the C64 Ultimate and that the IDF headers document
+     a level behaviour; this is the measurement that settles it per product.
+   - `q_max` is the queue depth at the time a frame is queued, so with 4 byte frames it reads 1 when the fill empties
+     the queue at once, and about 10 when the UART is the bottleneck (1000 byte frames).
+2. Throughput. `--burst 11 --size 1000`, several times, and compare `drain_us` before and after:
    bytes/s = `sent * size * 1e6 / drain_us`. The UART limit is the baud rate / 10: 6666667 baud on the Elite and the
-   C64 Ultimate (about 667 KB/s), 5000000 on the U2+L (500 KB/s). The Ultimate's CTS can slow it: it prints each event
-   and has a limited number of receive buffers. Compare the two builds on the same setup, not with the limit.
-3. Backlog under real traffic. `txq(reset=True)`, run your workload (replies and events at your usual rate; ping or HTTP
-   through WiFi, or repeated scans), then `txq()`: `q_max` is the worst backlog the module met, `frames` how many frames it
-   sent. Note that the burst clears the counters, so read `q_max` before you run a burst.
+   C64 Ultimate (about 667 KB/s), 5000000 on the U2+L (500 KB/s). The Ultimate's CTS can slow it. Compare the two
+   builds on the same setup, not with the limit.
+3. Backlog under real traffic. `--reset`, run your workload (ping or HTTP through WiFi, repeated scans), then read:
+   `q_max` is the worst backlog the module met, `frames` how many frames it sent. A burst clears the counters, so read
+   `q_max` before you run one.
 
 ## Our recorded numbers
 
@@ -97,7 +105,20 @@ There is no number from this counter: it is new. What we have:
   #1079 and sends all with it. A model, fitted to that evidence; not measured on a chip.
 - Hardware, C64 Ultimate: with the TX fill, a bench request that got no reply before (`HOLD SENT NO REPLY`) was answered
   (`00,OK`) after it. The PR descriptions give the Elite and C64 Ultimate rows for the firmware they ran.
-- No throughput figure, before or after, on any product. Not run on the U2+L or the Elite.
+- Ultimate 64 Elite, run 2026-11-12 on a build that has the OVF resync and the TX fill ("after"; the module is not plain
+  master). Idle device, WiFi up:
+
+  | command | sent | q_max | left | drain_us | frames |
+  |---|---|---|---|---|---|
+  | `--burst 11` (4 byte frames) | 11 | 1 | 0 | 283 | 11 |
+  | `--burst 3` | 3 | 1 | 0 | 141 | 3 |
+  | `--burst 11 --size 1000` | 11 | 10 | 0 | 16533 | 11 |
+  | `--burst 11 --size 1500` | 11 | 10 | 0 | 24736 | 11 |
+
+  1000 and 1500 byte bursts both come to about 667 KB/s, which is the 6666667 baud limit. `--reset` cleared the counters
+  to 0; a read afterwards counted only the module's own traffic (`frames` 1, `q_max` 1). The "before" column
+  (master + #1078, no TX fill) was not measured: nobody has run it on this product.
+- Not run on the U2+L or the C64 Ultimate.
 
 ## What this patch cannot give you
 
