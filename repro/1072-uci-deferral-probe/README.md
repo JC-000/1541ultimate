@@ -82,8 +82,8 @@ a version of the probe written against raw REST calls.
 
 ## Files
 
-- `probe_1072.py`: the driver, the 6502 routines (generated from Python, with the assembly described in the docstrings
-  of `build_push_only`, `build_push_then_abort`, `build_probe`, `build_settle`) and the stub server.
+- `probe_1072.py`: the driver, the 6502 routines (generated from Python by `build_push_only`, `build_push_then_abort`,
+  `build_probe` and `build_settle`; each has a docstring saying what it does) and the stub server.
 - `prebuilt/*.prg`, `*.hex`: the four routines as assembled by `probe_1072.py dump DIR`. Each loads at `$2000` and is run
   with `SYS 8192`. They use `$C0BF-$C0FF` and `$C100-$C11F` for parameters and results, and CIA2 timers A and B.
   The program assumes it is the only thing using the UCI while it runs.
