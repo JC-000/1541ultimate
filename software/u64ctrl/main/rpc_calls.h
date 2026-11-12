@@ -235,6 +235,27 @@ typedef struct {
 #define CMD_SET_RECOVERY_URL  0x1A
 #define CMD_GET_RECOVERY_URL  0x1B
 
+//----------------------------------
+// BENCH ONLY (never upstream): hold the module's UART RX, so that hardware RTS holds the Ultimate's TX off.
+// The reply goes out before the hold starts.
+#define CMD_BENCH_HOLD_RX     0xB1
+// BENCH ONLY: sent unsolicited (thread 0xFF) when the dispatcher takes a CMD_BENCH_HOLD_RX, before the reply
+#define EVENT_BENCH_HOLD_SEEN 0xB2
+// BENCH ONLY: sent after the reply has left the UART (queue empty, no frame in the ISR, TX FIFO idle, or 50 ms
+// passed), just before the hold starts; sequence = 1 when the UART went idle, 0 when the 50 ms ran out
+#define EVENT_BENCH_HOLD_TXDONE 0xB3
+
+typedef struct {
+    rpc_header_t hdr;
+    uint32_t ms;      // 1..10000 (clamped); 0 releases now
+} rpc_bench_hold_rx_req;
+
+typedef struct {
+    rpc_header_t hdr;
+    int esp_err;
+    uint32_t held_ms; // the clamped value asked for; 0 for a release
+} rpc_bench_hold_rx_resp;
+
 #define EVENT_CONNECTED     0x40
 #define EVENT_GOTIP         0x41
 #define EVENT_DISCONNECTED  0x42

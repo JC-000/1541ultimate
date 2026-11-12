@@ -233,6 +233,47 @@ void cmd_get_connection(command_buf_t *buf)
     wifi_report_disabled();
 }
 
+// BENCH ONLY (CMD_BENCH_HOLD_RX): the reply is queued first, then the hold starts
+void cmd_bench_hold_rx(command_buf_t *buf)
+{
+    rpc_bench_hold_rx_req *req = (rpc_bench_hold_rx_req *)buf->data;
+    rpc_bench_hold_rx_resp *resp = (rpc_bench_hold_rx_resp *)buf->data;
+    uint32_t ms = (buf->size >= (int)sizeof(rpc_bench_hold_rx_req)) ? req->ms : 0; // read before the reply overlays it
+    if (ms > 10000) {
+        ms = 10000;
+    }
+    command_buf_t *seen; // the diagnostic event first, in a TX buffer of its own
+    if (my_uart_get_buffer(UART_CHAN, &seen, 0)) {
+        rpc_header_t *ev = (rpc_header_t *)seen->data;
+        ev->command = EVENT_BENCH_HOLD_SEEN;
+        ev->thread = 0xFF;
+        ev->sequence = (uint16_t)ms;
+        seen->size = sizeof(rpc_header_t);
+        my_uart_transmit_packet(UART_CHAN, seen);
+    }
+    resp->esp_err = ESP_OK;
+    resp->held_ms = ms;
+    buf->size = sizeof(rpc_bench_hold_rx_resp);
+    my_uart_transmit_packet(UART_CHAN, buf);
+    // The reply is queued, not sent: wait (bounded, 50 ms) until the UART has sent it, then say so (EVENT 0xB3)
+    // before the hold starts
+    int waited = 0;
+    while (!my_uart_tx_idle(UART_CHAN) && (waited < 50)) {
+        vTaskDelay(1);
+        waited += portTICK_PERIOD_MS;
+    }
+    command_buf_t *done;
+    if (my_uart_get_buffer(UART_CHAN, &done, 0)) {
+        rpc_header_t *ev = (rpc_header_t *)done->data;
+        ev->command = EVENT_BENCH_HOLD_TXDONE;
+        ev->thread = 0xFF;
+        ev->sequence = my_uart_tx_idle(UART_CHAN) ? 1 : 0;
+        done->size = sizeof(rpc_header_t);
+        my_uart_transmit_packet(UART_CHAN, done);
+    }
+    my_uart_bench_hold_rx(UART_CHAN, ms);
+}
+
 void cmd_get_time(command_buf_t *buf)
 {
     rpc_get_time_req *param = (rpc_get_time_req *)buf->data;
@@ -343,6 +384,9 @@ void dispatch(void *ct)
             break;
         case CMD_CLEAR_APS:
             cmd_clear_aps(pbuffer);
+            break;
+        case CMD_BENCH_HOLD_RX: // BENCH ONLY
+            cmd_bench_hold_rx(pbuffer);
             break;
         default:
             cmd_not_implemented(pbuffer);

@@ -35,6 +35,7 @@
 #include "rpc_dispatch.h"
 #include "dump_hex.h"
 #include "my_uart.h"
+#include "esp_timer.h" // BENCH ONLY: the RX hold
 
 #if CONFIG_IDF_TARGET_ESP32
 //#include "esp32/clk.h"
@@ -92,6 +93,12 @@ typedef struct {
 } uart_context_t;
 
 static my_uart_obj_t *p_uart_obj[UART_NUM_MAX] = {0};
+
+// BENCH ONLY (CMD_BENCH_HOLD_RX, never upstream): while set, nothing turns the RX interrupts back on,
+// so the RX FIFO fills and hardware RTS holds the Ultimate's TX off; a one-shot timer ends it
+static volatile bool rx_held;
+static esp_timer_handle_t rx_hold_timer;
+static uint8_t rx_hold_uart;
 
 static uart_context_t uart_context[UART_NUM_MAX] = {
     UART_CONTEX_INIT_DEF(UART_NUM_0),
@@ -296,9 +303,11 @@ void UART_ISR_ATTR my_uart_intr_handler(void *param)
                 }
             }
             WRITE_PERI_REG(UART_FIFO_AHB_REG(0), '{');
-            UART_ENTER_CRITICAL_ISR(&(uart_context[uart_num].spinlock));
-            uart_hal_ena_intr_mask(&(uart_context[uart_num].hal), (UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_FULL));
-            UART_EXIT_CRITICAL_ISR(&(uart_context[uart_num].spinlock));
+            if (!rx_held) { // BENCH ONLY: the RX hold
+                UART_ENTER_CRITICAL_ISR(&(uart_context[uart_num].spinlock));
+                uart_hal_ena_intr_mask(&(uart_context[uart_num].hal), (UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_FULL));
+                UART_EXIT_CRITICAL_ISR(&(uart_context[uart_num].spinlock));
+            }
             WRITE_PERI_REG(UART_FIFO_AHB_REG(0), '}');
         } // end of receive code
 
@@ -347,11 +356,60 @@ BaseType_t my_uart_free_buffer(uint8_t uart_num, command_buf_t *buf)
     my_uart_obj_t *obj = p_uart_obj[uart_num];
     BaseType_t ret = cmd_buffer_free(obj->buffer_context, buf);
 
-    UART_ENTER_CRITICAL_ISR(&(uart_context[uart_num].spinlock));
-    uart_hal_ena_intr_mask(&(uart_context[uart_num].hal), UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_FULL);
-    UART_EXIT_CRITICAL_ISR(&(uart_context[uart_num].spinlock));
+    if (!rx_held) { // BENCH ONLY: the RX hold
+        UART_ENTER_CRITICAL_ISR(&(uart_context[uart_num].spinlock));
+        uart_hal_ena_intr_mask(&(uart_context[uart_num].hal), UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_FULL);
+        UART_EXIT_CRITICAL_ISR(&(uart_context[uart_num].spinlock));
+    }
 
     return ret;
+}
+
+// BENCH ONLY: everything queued for the UART has been sent (CMD_BENCH_HOLD_RX's diagnostic)
+bool my_uart_tx_idle(uint8_t uart_num)
+{
+    my_uart_obj_t *obj = p_uart_obj[uart_num];
+    return (uxQueueMessagesWaiting(obj->buffer_context->transmitQueue) == 0) && (obj->current_tx_buf == NULL) &&
+           uart_hal_is_tx_idle(&(uart_context[uart_num].hal));
+}
+
+// BENCH ONLY: the end of an RX hold (its timer, a release, or the next hold before it re-arms)
+static void rx_hold_release(void *arg)
+{
+    rx_held = false;
+    UART_ENTER_CRITICAL(&(uart_context[rx_hold_uart].spinlock));
+    uart_hal_ena_intr_mask(&(uart_context[rx_hold_uart].hal), UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_FULL);
+    UART_EXIT_CRITICAL(&(uart_context[rx_hold_uart].spinlock));
+}
+
+// BENCH ONLY (CMD_BENCH_HOLD_RX): stop reading the RX FIFO for ms milliseconds (clamped to 1..10000;
+// 0 releases now). TX, the radio, frames from the air and events go on. Returns the ms held.
+uint32_t my_uart_bench_hold_rx(uint8_t uart_num, uint32_t ms)
+{
+    if (!rx_hold_timer) {
+        const esp_timer_create_args_t args = { .callback = rx_hold_release, .arg = NULL, .name = "rx_hold" };
+        if (esp_timer_create(&args, &rx_hold_timer) != ESP_OK) {
+            return 0;
+        }
+    }
+    esp_timer_stop(rx_hold_timer); // not running: ESP_ERR_INVALID_STATE, harmless
+    rx_hold_uart = uart_num;
+    if (ms == 0) {
+        rx_hold_release(NULL);
+        return 0;
+    }
+    if (ms > 10000) {
+        ms = 10000;
+    }
+    rx_held = true;
+    UART_ENTER_CRITICAL(&(uart_context[uart_num].spinlock));
+    uart_hal_disable_intr_mask(&(uart_context[uart_num].hal), UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_FULL);
+    UART_EXIT_CRITICAL(&(uart_context[uart_num].spinlock));
+    if (esp_timer_start_once(rx_hold_timer, (uint64_t)ms * 1000) != ESP_OK) {
+        rx_hold_release(NULL); // never a hold without its end
+        return 0;
+    }
+    return ms;
 }
 
 BaseType_t my_uart_get_buffer(uint8_t uart_num, command_buf_t **buf, TickType_t ticks)
