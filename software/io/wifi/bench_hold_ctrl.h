@@ -27,7 +27,7 @@
 // The wire format is 32 bit little endian words; the host test of wifi_cmd.cc (software/test/wifi_reply/stubs/FreeRTOS.h)
 // redefines uint32_t as uintptr_t, so everything that is copied to or from the wire uses this type
 typedef unsigned int bench_u32_t;
-#if defined(__cplusplus) && __cplusplus >= 201103L // BENCH r4: the U64 updater builds wifi_cmd.cc as C++98
+#if defined(__cplusplus) && __cplusplus >= 201103L // the U64 updater builds wifi_cmd.cc as C++98, where static_assert does not exist
 static_assert(sizeof(bench_u32_t) == 4 && sizeof(int) == 4, "the wire words are 4 bytes");
 #endif
 

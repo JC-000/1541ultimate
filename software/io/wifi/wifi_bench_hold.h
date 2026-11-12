@@ -38,7 +38,7 @@ typedef struct {
 } rpc_bench_hold_rx_resp;
 #endif
 
-#if defined(__cplusplus) && __cplusplus >= 201103L // BENCH r4: the U64 updater builds wifi_cmd.cc as C++98
+#if defined(__cplusplus) && __cplusplus >= 201103L // the U64 updater builds wifi_cmd.cc as C++98, where static_assert does not exist
 static_assert(sizeof(rpc_bench_hold_rx_req) == 8, "CMD_BENCH_HOLD_RX request is 8 bytes");
 static_assert(sizeof(rpc_bench_hold_rx_resp) == 12, "CMD_BENCH_HOLD_RX reply is 12 bytes");
 #endif
