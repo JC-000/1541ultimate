@@ -90,6 +90,16 @@ TEST(HoldWire, ms_is_clamped_to_10000_and_zero_releases)
     EXPECT_EQ(bench_hold_clamp(0xFFFFFFFFu), (uint32_t)10000);
 }
 
+TEST(HoldWire, bit_31_asks_for_rts_off_and_survives_the_clamp)
+{
+    EXPECT_EQ(bench_hold_arg(1500u | 0x80000000u), 1500u | 0x80000000u);
+    EXPECT_EQ(bench_hold_arg(1500u), 1500u);
+    EXPECT_EQ(bench_hold_arg(0xFFFFFFFFu), 10000u | 0x80000000u);
+    EXPECT_EQ(bench_hold_arg(10001u | 0x80000000u), 10000u | 0x80000000u);
+    EXPECT_EQ(bench_hold_arg(0x80000000u), 0x80000000u);
+    EXPECT_EQ(bench_hold_arg(0u), 0u);
+}
+
 TEST(HoldWire, a_full_reply_gives_esp_err_and_held_ms)
 {
     const uint8_t reply[12] = { 0xB1, 3, 7, 0, 0, 0, 0, 0, 0xB8, 0x0B, 0, 0 };

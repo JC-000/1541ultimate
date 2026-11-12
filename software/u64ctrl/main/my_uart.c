@@ -36,6 +36,7 @@
 #include "dump_hex.h"
 #include "my_uart.h"
 #include "esp_timer.h" // BENCH ONLY: the RX hold
+#include "rpc_calls.h"
 
 #if CONFIG_IDF_TARGET_ESP32
 #include "esp32/clk.h"
@@ -99,6 +100,8 @@ static my_uart_obj_t *p_uart_obj[UART_NUM_MAX] = {0};
 static volatile bool rx_held;
 static esp_timer_handle_t rx_hold_timer;
 static uint8_t rx_hold_uart;
+static volatile bool rx_hold_rts_off;
+static uart_hw_flowcontrol_t rx_hold_flow_saved;
 
 static uart_context_t uart_context[UART_NUM_MAX] = {
     UART_CONTEX_INIT_DEF(UART_NUM_0),
@@ -373,19 +376,59 @@ bool my_uart_tx_idle(uint8_t uart_num)
            uart_hal_is_tx_idle(&(uart_context[uart_num].hal));
 }
 
-// BENCH ONLY: the end of an RX hold (its timer, a release, or the next hold before it re-arms)
+// BENCH ONLY: puts back what a hold with BENCH_HOLD_RTS_OFF took away: the RTS bit of the flow control (a change the
+// host made meanwhile stays) and sw_rts, which the RTS pin follows while rx_flow_en is off (0 = pin high = "stop")
+static void rx_hold_restore_rts(void)
+{
+    if (rx_hold_rts_off) {
+        UART_ENTER_CRITICAL(&(uart_context[rx_hold_uart].spinlock));
+        uart_hw_flowcontrol_t now;
+        uart_hal_get_hw_flow_ctrl(&(uart_context[rx_hold_uart].hal), &now);
+        if (rx_hold_flow_saved & UART_HW_FLOWCTRL_RTS) {
+            now = (uart_hw_flowcontrol_t)(now | UART_HW_FLOWCTRL_RTS);
+        }
+        uart_hal_set_hw_flow_ctrl(&(uart_context[rx_hold_uart].hal), now, 122);
+        uart_hal_set_rts(&(uart_context[rx_hold_uart].hal), 0);
+        rx_hold_rts_off = false;
+        UART_EXIT_CRITICAL(&(uart_context[rx_hold_uart].spinlock));
+    }
+}
+
+// BENCH ONLY: the end of an RX hold (its timer, a release, or the next hold before it re-arms). Before RX is turned
+// back on it reads what the hold left, the raw overflow bit and the bytes in the RX FIFO, and sends them as
+// EVENT_BENCH_HOLD_END: sequence = 0x8000 (overflow seen) | bytes in the FIFO. The Ultimate prints it as
+// "Unexpected Event type: ... Ev 6E ... Seq: n".
 static void rx_hold_release(void *arg)
 {
+    uart_hal_context_t *hal = &(uart_context[rx_hold_uart].hal);
+    rx_hold_restore_rts();
+    uint16_t seq = (uint16_t)uart_hal_get_rxfifo_len(hal);
+    if (uart_hal_get_intraw_mask(hal) & UART_INTR_RXFIFO_OVF) {
+        seq |= 0x8000;
+    }
     rx_held = false;
     UART_ENTER_CRITICAL(&(uart_context[rx_hold_uart].spinlock));
-    uart_hal_ena_intr_mask(&(uart_context[rx_hold_uart].hal), UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_FULL);
+    uart_hal_ena_intr_mask(hal, UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_FULL);
     UART_EXIT_CRITICAL(&(uart_context[rx_hold_uart].spinlock));
+    command_buf_t *ev;
+    if (my_uart_get_buffer(rx_hold_uart, &ev, 0)) {
+        rpc_header_t *hdr = (rpc_header_t *)ev->data;
+        hdr->command = EVENT_BENCH_HOLD_END;
+        hdr->thread = 0xFF;
+        hdr->sequence = seq;
+        ev->size = sizeof(rpc_header_t);
+        my_uart_transmit_packet(rx_hold_uart, ev);
+    }
 }
 
 // BENCH ONLY (CMD_BENCH_HOLD_RX): stop reading the RX FIFO for ms milliseconds (clamped to 1..10000;
-// 0 releases now). TX, the radio, frames from the air and events go on. Returns the ms held.
-uint32_t my_uart_bench_hold_rx(uint8_t uart_num, uint32_t ms)
+// 0 releases now). TX, the radio, frames from the air and events go on. With BENCH_HOLD_RTS_OFF (bit 31) in arg the
+// RTS flow control is off for the hold, so the Ultimate's TX is not held back and the FIFO can overflow.
+// Returns the ms held.
+uint32_t my_uart_bench_hold_rx(uint8_t uart_num, uint32_t arg)
 {
+    bool rts_off = (arg & BENCH_HOLD_RTS_OFF) != 0;
+    uint32_t ms = arg & ~BENCH_HOLD_RTS_OFF;
     if (!rx_hold_timer) {
         const esp_timer_create_args_t args = { .callback = rx_hold_release, .arg = NULL, .name = "rx_hold" };
         if (esp_timer_create(&args, &rx_hold_timer) != ESP_OK) {
@@ -394,6 +437,7 @@ uint32_t my_uart_bench_hold_rx(uint8_t uart_num, uint32_t ms)
     }
     esp_timer_stop(rx_hold_timer); // not running: ESP_ERR_INVALID_STATE, harmless
     rx_hold_uart = uart_num;
+    rx_hold_restore_rts(); // a new hold never inherits the RTS-off of an earlier one
     if (ms == 0) {
         rx_hold_release(NULL);
         return 0;
@@ -404,6 +448,14 @@ uint32_t my_uart_bench_hold_rx(uint8_t uart_num, uint32_t ms)
     rx_held = true;
     UART_ENTER_CRITICAL(&(uart_context[uart_num].spinlock));
     uart_hal_disable_intr_mask(&(uart_context[uart_num].hal), UART_INTR_RXFIFO_TOUT | UART_INTR_RXFIFO_FULL);
+    if (rts_off) {
+        uart_hal_get_hw_flow_ctrl(&(uart_context[uart_num].hal), &rx_hold_flow_saved);
+        uart_hal_set_hw_flow_ctrl(&(uart_context[uart_num].hal), (uart_hw_flowcontrol_t)(rx_hold_flow_saved & ~UART_HW_FLOWCTRL_RTS), 122);
+        // With rx_flow_en off the RTS pin follows sw_rts; its reset value 0 is pin HIGH = "stop", which would hold the
+        // host off and defeat the point. 1 = pin LOW = ready.
+        uart_hal_set_rts(&(uart_context[uart_num].hal), 1);
+        rx_hold_rts_off = true;
+    }
     UART_EXIT_CRITICAL(&(uart_context[uart_num].spinlock));
     if (esp_timer_start_once(rx_hold_timer, (uint64_t)ms * 1000) != ESP_OK) {
         rx_hold_release(NULL); // never a hold without its end

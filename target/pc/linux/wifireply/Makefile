@@ -68,7 +68,7 @@ legacy:
 #   long-timeout    waits the 10 s default instead of 1 s                  no-uart-check no module: dereferences a missing uart
 #   size-ignored    parses 12 bytes whatever came                          short-ok      a 6 byte reply is parsed
 #   bare-success-ok an 8 byte reply with esp_err 0 is an answer            held-from-short held_ms read from an 8 byte reply
-BENCH_HOLD_MUTANTS := clamp-removed clamp-zero long-timeout no-uart-check size-ignored short-ok bare-success-ok held-from-short no-buf-lumped no-slot-lumped
+BENCH_HOLD_MUTANTS := clamp-removed clamp-zero long-timeout no-uart-check size-ignored short-ok bare-success-ok held-from-short no-buf-lumped no-slot-lumped rts-flag-dropped flag-in-wait
 mutfile_clamp-removed := wifi_bench_hold.h
 mut_clamp-removed := s/return (ms > BENCH_HOLD_MS_MAX) ? (uint32_t)BENCH_HOLD_MS_MAX : ms;/return ms;/
 mutfile_clamp-zero := wifi_bench_hold.h
@@ -89,6 +89,10 @@ mutfile_bare-success-ok := wifi_bench_hold.h
 mut_bare-success-ok := s/} else if (err == 0) {/} else if (0) {/
 mutfile_held-from-short := wifi_bench_hold.h
 mut_held-from-short := s/if (size >= (int)sizeof(rpc_bench_hold_rx_resp)) {/if (1) {/
+mutfile_rts-flag-dropped := wifi_cmd.cc
+mut_rts-flag-dropped := s/args->ms = clamped | (ms \& BENCH_HOLD_RTS_OFF);/args->ms = clamped;/
+mutfile_flag-in-wait := wifi_cmd.cc
+mut_flag-in-wait := s/bench_hold_clamp(ms \& ~BENCH_HOLD_RTS_OFF)/bench_hold_clamp(ms)/
 
 define BENCH_HOLD_MUTANT
 bench-hold-red-$(1):

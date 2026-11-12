@@ -273,7 +273,8 @@ void cmd_bench_hold_rx(command_buf_t *buf)
 {
     rpc_bench_hold_rx_req *req = (rpc_bench_hold_rx_req *)buf->data;
     rpc_bench_hold_rx_resp *resp = (rpc_bench_hold_rx_resp *)buf->data;
-    uint32_t ms = (buf->size >= (int)sizeof(rpc_bench_hold_rx_req)) ? req->ms : 0; // read before the reply overlays it
+    uint32_t arg = (buf->size >= (int)sizeof(rpc_bench_hold_rx_req)) ? req->ms : 0; // read before the reply overlays it
+    uint32_t ms = arg & ~BENCH_HOLD_RTS_OFF;
     if (ms > 10000) {
         ms = 10000;
     }
@@ -306,7 +307,7 @@ void cmd_bench_hold_rx(command_buf_t *buf)
         done->size = sizeof(rpc_header_t);
         my_uart_transmit_packet(UART_CHAN, done);
     }
-    my_uart_bench_hold_rx(UART_CHAN, ms);
+    my_uart_bench_hold_rx(UART_CHAN, ms | (arg & BENCH_HOLD_RTS_OFF));
 }
 
 void cmd_get_time(command_buf_t *buf)

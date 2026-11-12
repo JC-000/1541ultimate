@@ -49,6 +49,13 @@ static inline uint32_t bench_hold_clamp(uint32_t ms)
     return (ms > BENCH_HOLD_MS_MAX) ? (uint32_t)BENCH_HOLD_MS_MAX : ms;
 }
 
+// Bit 31 of the argument asks the module to switch its RTS flow control off for the hold (then its RX FIFO can overflow).
+#define BENCH_HOLD_RTS_OFF 0x80000000u
+static inline uint32_t bench_hold_arg(uint32_t arg)
+{
+    return bench_hold_clamp(arg & ~BENCH_HOLD_RTS_OFF) | (arg & BENCH_HOLD_RTS_OFF);
+}
+
 // What the module answered: 'size' bytes at 'data'. BENCH_HOLD_RC_OK with esp_err and held_ms set (an 8 byte error answer
 // has held_ms 0), else BENCH_HOLD_RC_SHORT.
 static inline int bench_hold_rx_parse(const uint8_t *data, int size, int *esp_err, uint32_t *held_ms)

@@ -109,8 +109,8 @@ int wifi_bench_hold_rx(uint32_t ms, int *esp_err, uint32_t *held_ms)
         esp32.uart->FreeBuffer(buf);
         return BENCH_HOLD_RC_NO_SLOT;
     }
-    uint32_t clamped = bench_hold_clamp(ms);
-    args->ms = clamped;
+    uint32_t clamped = bench_hold_clamp(ms & ~BENCH_HOLD_RTS_OFF); // the wait is for the hold only, not for bit 31
+    args->ms = clamped | (ms & BENCH_HOLD_RTS_OFF);
     buf = wifi_transmit(buf, (int)clamped + BENCH_HOLD_RPC_SLACK_MS);
     if (!buf) {
         return BENCH_HOLD_RC_NONE; // sent; no answer in the hold plus the slack

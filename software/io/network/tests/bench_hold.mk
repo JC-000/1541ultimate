@@ -12,7 +12,7 @@ bench-hold:
 # One rule of the headers changed per model (in a copy placed first on the include path); each has to fail the suite.
 BENCH_HOLD_MUTANTS := len-unchecked len-at-least ms-offset short-as-noreply none-as-ok not-supported-as-data not-supported-any-error \
 	swapped-words outlen-12 outlen-kept not-supported-code ok-text clamp-removed clamp-zero parse-short-ok parse-bare-success-ok \
-	parse-held-from-short parse-err-offset parse-held-offset
+	parse-held-from-short parse-err-offset parse-held-offset arg-drops-flag arg-clamps-flag
 mutfile_len-unchecked := bench_hold_ctrl.h
 mut_len-unchecked := s/if (len != BENCH_HOLD_UCI_LEN) {/if (0) {/
 mutfile_len-at-least := bench_hold_ctrl.h
@@ -51,6 +51,10 @@ mutfile_parse-err-offset := wifi_bench_hold.h
 mut_parse-err-offset := s/memcpy(\&err, data + sizeof(rpc_header_t), sizeof(err));/memcpy(\&err, data + 8, sizeof(err));/
 mutfile_parse-held-offset := wifi_bench_hold.h
 mut_parse-held-offset := s/memcpy(\&held, data + sizeof(rpc_header_t) + sizeof(int), sizeof(held));/memcpy(\&held, data + 4, sizeof(held));/
+mutfile_arg-drops-flag := wifi_bench_hold.h
+mut_arg-drops-flag := s/ | (arg \& BENCH_HOLD_RTS_OFF);/;/
+mutfile_arg-clamps-flag := wifi_bench_hold.h
+mut_arg-clamps-flag := s/bench_hold_clamp(arg \& ~BENCH_HOLD_RTS_OFF)/bench_hold_clamp(arg)/
 
 define BENCH_HOLD_MUTANT
 bench-hold-red-$(1):

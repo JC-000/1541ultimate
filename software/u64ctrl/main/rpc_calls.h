@@ -244,10 +244,15 @@ typedef struct {
 // BENCH ONLY: sent after the reply has left the UART (queue empty, no frame in the ISR, TX FIFO idle, or 50 ms
 // passed), just before the hold starts; sequence = 1 when the UART went idle, 0 when the 50 ms ran out
 #define EVENT_BENCH_HOLD_TXDONE 0xB3
+// BENCH ONLY: bit 31 of the hold's ms asks the module to switch its RTS flow control off for the hold, so that the
+// Ultimate's TX is not held back and the RX FIFO overflows
+#define BENCH_HOLD_RTS_OFF      0x80000000u
+// BENCH ONLY: sent (thread 0xFF) when a hold ends; sequence = 0x8000 (raw RX FIFO overflow status was set) | bytes in the FIFO
+#define EVENT_BENCH_HOLD_END    0x6E
 
 typedef struct {
     rpc_header_t hdr;
-    unsigned int ms;  // 1..10000 (clamped); 0 releases now
+    unsigned int ms;  // 1..10000 (clamped); 0 releases now; bit 31 = RTS off for the hold
 } rpc_bench_hold_rx_req;
 
 typedef struct {

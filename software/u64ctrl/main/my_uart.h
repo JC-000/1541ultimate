@@ -20,7 +20,7 @@
 
 esp_err_t  my_uart_init(command_buf_context_t *buffers, uint8_t uart_num);
 BaseType_t my_uart_get_buffer(uint8_t uart_num, command_buf_t **buf, TickType_t ticks);
-uint32_t my_uart_bench_hold_rx(uint8_t uart_num, uint32_t ms); // BENCH ONLY (CMD_BENCH_HOLD_RX)
+uint32_t my_uart_bench_hold_rx(uint8_t uart_num, uint32_t arg); // BENCH ONLY (CMD_BENCH_HOLD_RX): arg = ms | BENCH_HOLD_RTS_OFF
 bool my_uart_tx_idle(uint8_t uart_num);                         // BENCH ONLY: all queued frames sent
 BaseType_t my_uart_transmit_packet(uint8_t uart_num, command_buf_t *buf);
 BaseType_t my_uart_receive_packet(uint8_t uart_num, command_buf_t **buf, TickType_t ticks);

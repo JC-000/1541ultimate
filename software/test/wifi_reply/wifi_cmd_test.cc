@@ -233,8 +233,8 @@ static void test_hold_request(void)
 {
     int err = -1;
     uint32_t held = 0xFFFF;
-    const uint32_t asked[]    = { 3000, 1, 10000, 10001, 0xFFFFFFFFu, 0 };
-    const uint32_t expected[] = { 3000, 1, 10000, 10000, 10000,       0 };
+    const uint32_t asked[]    = { 3000, 1, 10000, 10001, 0xFFFFFFFFu,   0, 1500 | 0x80000000u, 0x80000000u };
+    const uint32_t expected[] = { 3000, 1, 10000, 10000, 10000 | 0x80000000u, 0, 1500 | 0x80000000u, 0x80000000u };
     for (unsigned i = 0; i < sizeof(asked) / sizeof(asked[0]); i++) {
         hold_setup(hold_ok_reply, sizeof(hold_ok_reply), ON_TIME);
         CHECK(wifi_bench_hold_rx(asked[i], &err, &held) == 0);
@@ -242,7 +242,7 @@ static void test_hold_request(void)
         CHECK(txbuf.size == 8);                         // header + u32 ms
         CHECK(tx_ms() == expected[i]);                  // clamped to 10000, 0 stays 0 (release)
         CHECK(uart.transmitted == 1);
-        CHECK(first_wait == pdMS_TO_TICKS(expected[i] + 1000)); // the reply wait: the hold plus 1 s
+        CHECK(first_wait == pdMS_TO_TICKS((expected[i] & 0x7FFFFFFFu) + 1000)); // the reply wait: the hold plus 1 s, bit 31 not counted
         CHECK(all_slots_free());
     }
 }
