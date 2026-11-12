@@ -12,6 +12,10 @@
 #include "netdb.h"
 #include <errno.h>
 #include <stdio.h>
+#if (NIOS && (U64 == 1)) || (U64 == 2) || (U2P == 2) // the targets that build wifi_cmd.cc (u64/riscv does not)
+#define BENCH_HOLD_RX_HOST 1
+#include "bench_hold_ctrl.h" // BENCH ONLY (software/io/wifi)
+#endif
 
 NetworkTarget net(3);
 
@@ -175,6 +179,21 @@ void NetworkTarget :: parse_command(Message *command, Message **reply, Message *
         case NET_CMD_WRITE_SOCKET:
         	write_socket(command, reply, status);
         	break;
+#if BENCH_HOLD_RX_HOST
+        case NET_CMD_BENCH_HOLD_RX: // BENCH ONLY: one 1 s bounded RPC; the hold itself runs on the module
+            {
+                *reply = &c_message_empty;
+                int have_data = bench_hold_rx_ctrl(command->message, command->length, data_message.message, &data_message.length,
+                                                   (char *)status_message.message, wifi_bench_hold_rx);
+                status_message.length = strlen((char *)status_message.message);
+                *status = &status_message;
+                if (have_data) {
+                    data_message.last_part = true;
+                    *reply = &data_message;
+                }
+            }
+            break;
+#endif
         default:
             *reply  = &c_message_empty;
             *status = &c_status_unknown_command;

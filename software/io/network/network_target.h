@@ -21,6 +21,7 @@
 #define NET_CMD_CLOSE_SOCKET        0x09
 #define NET_CMD_READ_SOCKET         0x10
 #define NET_CMD_WRITE_SOCKET        0x11
+#define NET_CMD_BENCH_HOLD_RX       0xE5 // BENCH ONLY (wifi_bench_hold.h): stall the WiFi module's UART RX
 
 #define NET_CMD_BUFSIZE 2048
 

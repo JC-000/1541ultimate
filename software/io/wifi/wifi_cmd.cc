@@ -1,5 +1,6 @@
 #include "wifi_cmd.h"
 #include "dump_hex.h"
+#include "wifi_bench_hold.h" // BENCH ONLY
 
 /// C like functions to 'talk' with the WiFi Module
 static uint16_t sequence_nr = 0;
@@ -86,6 +87,38 @@ void wifi_command_init(void)
     esp32.uart->EnableIRQ(true);
 }
 
+
+// BENCH ONLY: CMD_BENCH_HOLD_RX (wifi_bench_hold.h). The module queues its reply before the hold starts, so this
+// waits for the reply only: 1 s for a TX buffer plus 1 s for the reply at most. -1: no module, buffer, slot or reply.
+int wifi_bench_hold_rx(uint32_t ms, int *esp_err, uint32_t *held_ms)
+{
+    if (!esp32.uart) {
+        return BENCH_HOLD_RC_NO_UART;
+    }
+    // BUFARGS/TRANSMIT_T by hand, so that each way of failing has its own status (bench_hold_ctrl.h)
+    command_buf_t *buf;
+    if (esp32.uart->GetBuffer(&buf, 1000) == pdFALSE) {
+        return BENCH_HOLD_RC_NO_BUF;
+    }
+    rpc_bench_hold_rx_req *args = (rpc_bench_hold_rx_req *)buf->data;
+    args->hdr.command = CMD_BENCH_HOLD_RX;
+    args->hdr.sequence = 0;
+    args->hdr.thread = 0xFF;
+    buf->size = sizeof(rpc_bench_hold_rx_req);
+    if (!wifi_reply_register(&args->hdr)) {
+        esp32.uart->FreeBuffer(buf);
+        return BENCH_HOLD_RC_NO_SLOT;
+    }
+    uint32_t clamped = bench_hold_clamp(ms);
+    args->ms = clamped;
+    buf = wifi_transmit(buf, (int)clamped + BENCH_HOLD_RPC_SLACK_MS);
+    if (!buf) {
+        return BENCH_HOLD_RC_NONE; // sent; no answer in the hold plus the slack
+    }
+    int rc = bench_hold_rx_parse(buf->data, buf->size, esp_err, held_ms);
+    esp32.uart->FreeBuffer(buf);
+    return rc;
+}
 
 int wifi_setbaud(int baudrate, uint8_t flowctrl)
 {

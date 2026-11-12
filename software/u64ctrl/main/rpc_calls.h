@@ -247,13 +247,13 @@ typedef struct {
 
 typedef struct {
     rpc_header_t hdr;
-    uint32_t ms;      // 1..10000 (clamped); 0 releases now
+    unsigned int ms;  // 1..10000 (clamped); 0 releases now
 } rpc_bench_hold_rx_req;
 
 typedef struct {
     rpc_header_t hdr;
     int esp_err;
-    uint32_t held_ms; // the clamped value asked for; 0 for a release
+    unsigned int held_ms; // the clamped value asked for; 0 for a release
 } rpc_bench_hold_rx_resp;
 
 #define EVENT_CONNECTED     0x40
