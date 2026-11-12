@@ -55,11 +55,15 @@ On master:
 ```
 git fetch <this repo> repro/module-hold
 git checkout -b hold-master upstream/master
-git cherry-pick <first commit of the branch>^..<last commit of the branch>
+git cherry-pick 085aad730..FETCH_HEAD
 ```
 
-On the head of PR #1071 (`fix/wifi-tx-nowait`) or of #1078 (`fix/wifi-uart-rx-overflow`): the same cherry-pick on a
-branch made from that head. No conflicts on `b9cdfe261` (the merge of master into #1071), on `49074a0d2` (the #1078 head)
+`085aad730` is the master commit the branch was made on. The range names every commit of the branch (the module, the host
+side, the comment clean-up, the README and the scripts) and works on any base that does not contain them, so use the same
+range line on the PR heads below.
+
+On the head of PR #1071 (`fix/wifi-tx-nowait`) or of #1078 (`fix/wifi-uart-rx-overflow`): the same fetch and
+`git cherry-pick 085aad730..FETCH_HEAD` on a branch made from that head. No conflicts on `b9cdfe261` (the merge of master into #1071), on `49074a0d2` (the #1078 head)
 or on master `085aad730`.
 
 Red and green need the same hold build on both sides: RED is master plus this branch, GREEN is the PR head plus this
@@ -140,5 +144,34 @@ echoes answered per stream and the module answers afterwards; without the handle
 nothing, the module dead until a mains cycle; with the handler and RTS on, 88..90 and alive; with the handler and RTS
 off, 88..91, alive, no wedge (`rx_fifo_ovf` 1).
 
-The recorded #1071 Elite runs used the hold module from the earlier bench images; this branch is a port of that code to the
-current master, built to compile for the three module projects but not yet run on a device by us.
+## What ran on our Ultimate 64 Elite
+
+Image: our bench base (an earlier master with bench-only hooks, so it still has master's waiting `wifi_tx_packet`) plus this
+branch with `bump-ident.sh` applied once, flashed with its module. So the #1071 rows below are a RED reference of this
+branch's hold, not a PR comparison. WiFi connected, Ethernet connected, default configuration, `smoke_hold.py` from this
+directory (the first run used the version before it was made standalone: same legs, same settings).
+
+First run, `--plan full --rate 300`:
+
+| hold | arg | UCI | Ethernet ping, max gap | ping loss | REST, max latency |
+|---|---|---|---|---|---|
+| baseline (10 s) | | | 107.7 ms | 0 % | 17 ms |
+| 3000 ms, RTS on | `0xbb8` | `00,OK` | 2906 / 2922 / 2899 ms | 64 % each | 2741 / 2904 / 2910 ms |
+| 1500 ms, RTS on | `0x5dc` | `00,OK` | 1459 ms | 44 % | 1385 ms |
+| 1500 ms, RTS off | `0x800005dc` | `00,OK` | 105 ms | 0 % | 39 ms |
+
+Second run after a power cycle (`--boot --plan 1500 --rate 600`): 1500 ms RTS on: gap 1474 ms, loss 50 %, REST 1376 ms.
+Two 1500 ms RTS-off holds: gap 105 / 105 ms, loss 0 %, REST 26 / 37 ms. After each run `03 E5 0` answered `00,OK` and the
+WiFi address answered ping with 0 % loss: the module was alive, no wedge. This base already carries a fix for the RX FIFO
+overflow, so an RTS-off hold on it is the GREEN side of #1078.
+
+**Not captured: the 0x6E end-of-hold event.** The syslog delivered nothing on our side in either run (the sink received no
+packet at all, with the target saved and the device rebooted), so whether the RTS-off holds overflowed the RX FIFO is not
+shown by these runs; the absence of ping loss and of a wedge is all that was seen. Look for the console line
+`Unexpected Event type: Pkt n. Ev 6E. Sz 4. Seq: <n>. Thread: 255.`: with RTS on `Seq` is the fill of the FIFO (122..127 is
+expected, since the module holds the Ultimate off at the RTS threshold), with RTS off and an overflow it is `0x8000 | fill`
+(`32896`, i.e. `0x8080`, for a full FIFO). If RTS off shows no 0x8000 bit, the load was too small: raise the UDP rate or
+the hold time.
+
+`smoke_hold.py` is the driver that ran, with its dependencies reduced to the c64-test-harness package; as committed it has
+not been run again.
