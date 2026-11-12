@@ -1,6 +1,6 @@
 # BENCH ONLY, never upstream. Run it on top of the normal Makefile, so that it needs no edit of it:
 #   make -f Makefile -f bench_hold.mk bench-hold bench-hold-red
-# BENCH ONLY: CMD_BENCH_HOLD_RX for the X15 leg. The UCI command 0xE5 (bench_hold_ctrl.h), the wire format and the reply parser
+# BENCH ONLY: CMD_BENCH_HOLD_RX. The UCI command 0xE5 (bench_hold_ctrl.h), the wire format and the reply parser
 # (wifi_bench_hold.h) against a fake RPC; the RPC itself is tested in target/pc/linux/wifireply (make test, make bench-hold-red).
 BENCH_HOLD_TEST := $(OUTPUT_DIR)/benchHoldTest
 BENCH_HOLD_DIR := ../../wifi

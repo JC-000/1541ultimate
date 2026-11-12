@@ -2,10 +2,10 @@
 #define BENCH_HOLD_CTRL_H_
 
 /*
- * BENCH ONLY, never for upstream. The UCI side of the X15 leg's module command CMD_BENCH_HOLD_RX (wifi_bench_hold.h has
+ * BENCH ONLY, never for upstream. The UCI side of the module command CMD_BENCH_HOLD_RX (wifi_bench_hold.h has
  * the wire format and the whole description). No dependency on the RPC headers, so network_target.cc can include it.
  *
- * UCI network target (target 3), command NET_CMD_BENCH_HOLD_RX = 0xE5 (network_target.h; RPC-REGISTRY.md):
+ * UCI network target (target 3), command NET_CMD_BENCH_HOLD_RX = 0xE5 (network_target.h):
  *   command  03 E5 <ms u32 LE>                                  6 bytes, [0] target, [1] command
  *   reply    <esp_err i32 LE> <held_ms u32 LE>                  8 bytes of data, status "00,OK"; esp_err is whatever the
  *            module answered (0 = held), except that NOT_SUPPORTED is an error string, not data.
@@ -14,7 +14,7 @@
  *            98,NO TX BUFFER        no UART TX buffer within 5 s: nothing was sent
  *            98,NO REPLY SLOT       no free RPC reply slot: nothing was sent
  *            01,HOLD SENT NO REPLY  the request went out, no answer within held ms + 1 s: the hold probably ran;
- *                                   confirm with the counters (MODCTR rts_stall / rx_fifo_ovf, NETCTR refused=)
+ *                                   confirm with ping and REST during the hold
  *            98,BAD WIFI REPLY      a reply shorter than 8 bytes (or 8 bytes with esp_err 0)
  *            99,HOLD NOT SUPPORTED  the module does not have the command (bench IDENT missing)
  * The module queues its reply before the hold starts, so the reply normally comes at once; the host still waits up to

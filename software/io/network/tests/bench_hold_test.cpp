@@ -1,4 +1,4 @@
-// BENCH ONLY. The host side of CMD_BENCH_HOLD_RX (0xB1) for the X15 leg: the UCI command 0xE5 of the network target
+// BENCH ONLY. The host side of CMD_BENCH_HOLD_RX (0xB1): the UCI command 0xE5 of the network target
 // (bench_hold_ctrl.h, the part that decides what the harness reads back) and the wire format and reply parser of the
 // RPC (wifi_bench_hold.h). The RPC itself (BUFARGS / TRANSMIT_T, the 1 s bound, the request bytes on the UART) is tested in
 // target/pc/linux/wifireply against the real wifi_cmd.cc; the case in network_target.cc and the module are not built here.

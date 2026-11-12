@@ -2,10 +2,10 @@
 #define WIFI_BENCH_HOLD_H_
 
 /*
- * BENCH ONLY, never for upstream. The host side of the X15 leg's module command CMD_BENCH_HOLD_RX (0xB1): the WiFi
+ * BENCH ONLY, never for upstream. The host side of the module command CMD_BENCH_HOLD_RX (0xB1): the WiFi
  * module stops reading its UART RX FIFO for a set time, so its hardware RTS stalls the host's WiFi UART TX while the
- * radio, the events and the air frames keep running (spec lanes/async-impl/net/bench/x15-module-hold-rx.md; the module
- * side is bench/mod-hold-rx, not part of this tree).
+ * radio, the events and the air frames keep running (the module side is in the rpc_dispatch.c and
+ * my_uart.c of software/wifi/raw_u64, raw_c3 and software/u64ctrl, cmd_bench_hold_rx).
  *
  * Wire format (rpc_header_t is 4 bytes: command, thread, sequence):
  *   request  { rpc_header_t hdr; uint32_t ms; }                 8 bytes. ms: 1..10000, larger is clamped to 10000,
