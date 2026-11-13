@@ -42,7 +42,7 @@ sys.path.insert(0, bootstrap.directory("e2e", "io", "command_interface"))
 import net_tls_fixture as fx  # noqa: E402
 import net_tls_proto as proto  # noqa: E402
 import net_tls_test as suite  # noqa: E402
-from net_tls_mock import MockDevice  # noqa: E402
+from net_tls_mock import ABORT_SLICE, MockDevice  # noqa: E402
 
 SUITE = "net_tls_selftest"
 STANDINS = (("H1", "h1.standin.test"), ("H2", "h2.standin.test"))
@@ -240,10 +240,24 @@ class UciDouble(DeviceDouble):
         return self._ok_json(params)
 
     def _run(self, command: bytes) -> None:
-        data, text = self.mock._dispatch(command)
+        # An ABORT cancels the command within a slice and the module closes the session it
+        # had begun (doc/uci_tls.md): the dispatch runs on a worker, and what it opens after
+        # the ABORT is closed again when it ends.
+        before = set(self.mock.handles)
+        box: list[tuple[bytes, bytes]] = []
+        worker = threading.Thread(target=lambda: box.append(self.mock._dispatch(command)), daemon=True)
+        worker.start()
+        while worker.is_alive() and not self.abort:
+            worker.join(0.02)
+        if self.abort:
+            time.sleep(ABORT_SLICE)
+            with self.uci_lock:
+                self.state, self.abort, self.blocks = "idle", False, []
+            threading.Thread(target=self._discard, args=(worker, before), daemon=True).start()
+            return
+        data, text = box[0]
         with self.uci_lock:
             if self.abort:
-                # The ABORT is serviced once the command returns: reply dropped.
                 self.state, self.abort, self.blocks = "idle", False, []
                 return
             chunks = [data[i:i + MAX_BLOCK_BYTES] for i in range(0, len(data), MAX_BLOCK_BYTES)]
@@ -251,6 +265,14 @@ class UciDouble(DeviceDouble):
             self.blocks = [(chunk, text if i == len(chunks) - 1 else b"")
                            for i, chunk in enumerate(chunks)]
             self._next_block()
+
+    def _discard(self, worker: threading.Thread, before: set) -> None:
+        worker.join()
+        for handle in set(self.mock.handles) - before:
+            try:
+                self.mock.handles.pop(handle).sock.close()
+            except OSError:
+                pass
 
     def _next_block(self) -> None:
         chunk, text = self.blocks.pop(0)
@@ -670,15 +692,16 @@ def main() -> int:
             ok = False
         section("part 3: each mutant turns its guard red")
         for flavour, sids in (("bundle-accepts-all", ["S0", "S5"]),
-                              ("release-noop", ["S0", "S19e", "S19e2"]),
+                              ("release-noop", ["S0", "S19e2"]),
                               ("group-zero", ["S0", "S2"]),
-                              ("info-ff-claims", ["S0", "S19e", "S19e2b"])):
+                              ("info-ff-claims", ["S0", "S19e2b"])):
             outcomes = world.run(flavour, sids)
             ok &= judge_flavour(flavour, outcomes, {sid: "FAIL" for sid in sids[1:]})
         outcomes = world.run("no-notify-reply", ["S0", "S6"])
         ok &= judge_flavour("no-notify-reply", outcomes, {"S6": "FAIL"})
-        outcomes = world.run("abort-shortens", ["S0", "S19e"])
-        ok &= judge_flavour("abort-shortens", outcomes, {"S19e": "FAIL"})
+        for flavour in ("abort-ignored", "abort-leaves-entry"):
+            outcomes = world.run(flavour, ["S0", "S19e", "S19e2b"])
+            ok &= judge_flavour(flavour, outcomes, {"S19e": "FAIL", "S19e2b": "FAIL"})
         if not args.quick:
             ok &= part4(world)
         ok &= part5(world)
