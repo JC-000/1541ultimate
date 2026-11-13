@@ -26,7 +26,7 @@ void start_dispatch(QueueHandle_t queue);
 void send_button_event(uint8_t button);
 void send_keepalive();
 
-#define IDENT_STRING "ESP32 WiFi Bridge V1.32"
+#define IDENT_STRING "ESP32 WiFi Bridge V1.36"
 #define IDENT_MAJOR   1
 // 1.36: serves the TLS client sessions of software/wifi/tls (CMD_TLS_*, 0x30-0x35), built with
 // the mbedTLS options the engine needs (TLS 1.3, certificate dates, client only, no renegotiation).
