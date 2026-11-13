@@ -31,7 +31,7 @@ typedef enum {
 
 // rpc_tls_open_resp.reason, telling the ESP_ERR_INVALID_STATE refusals apart
 #define TLS_OPEN_REASON_NONE         0
-#define TLS_OPEN_REASON_NO_ENTROPY   1 // the radio has not started: no RNG seed
+#define TLS_OPEN_REASON_NO_ENTROPY   1 // no entropy source is on (radio off and no ADC source): no RNG seed
 #define TLS_OPEN_REASON_NO_TIME      2 // BUNDLE or CUSTOM, but no trustworthy clock
 #define TLS_OPEN_REASON_NO_CUSTOM_CA 3 // CUSTOM, but no CA held under the request's ca_tag
 
@@ -57,6 +57,7 @@ typedef enum {
     TLS_FAIL_CERT_VERIFY      = 4, // verify_flags = mbedtls_ssl_get_verify_result(), 0xFFFFFFFF if it never completed
     TLS_FAIL_PIN_MISMATCH     = 5, // PIN: the leaf key is not the pinned one
     TLS_FAIL_PEER_CLOSED      = 6, // close_notify during the handshake
+    TLS_FAIL_NO_ENTROPY       = 7, // a draw found no entropy source (radio stopped or voltages read mid-handshake)
 } tls_fail_reason_t;
 
 // rpc_tls_set_ca_resp.reject, with ESP_ERR_INVALID_ARG
@@ -263,7 +264,8 @@ _Static_assert((TLS_STATE_HANDSHAKING == 0) && (TLS_STATE_ESTABLISHED == 1) &&
                (TLS_STATE_CLOSED == 2) && (TLS_STATE_FAILED == 3), "tls_state_t");
 _Static_assert((TLS_TRUST_BUNDLE == 0) && (TLS_TRUST_CUSTOM == 1) && (TLS_TRUST_PIN == 2), "tls_trust_t");
 _Static_assert((TLS_FAIL_VERSION_REFUSED == 1) && (TLS_FAIL_DOWNGRADE == 2) && (TLS_FAIL_NO_EMS == 3) &&
-               (TLS_FAIL_CERT_VERIFY == 4) && (TLS_FAIL_PIN_MISMATCH == 5) && (TLS_FAIL_PEER_CLOSED == 6), "tls_fail_reason_t");
+               (TLS_FAIL_CERT_VERIFY == 4) && (TLS_FAIL_PIN_MISMATCH == 5) && (TLS_FAIL_PEER_CLOSED == 6) &&
+               (TLS_FAIL_NO_ENTROPY == 7), "tls_fail_reason_t");
 _Static_assert((TLS_OPEN_REASON_NO_ENTROPY == 1) && (TLS_OPEN_REASON_NO_TIME == 2) && (TLS_OPEN_REASON_NO_CUSTOM_CA == 3),
                "rpc_tls_open_resp.reason");
 _Static_assert((TLS_CA_REJECT_RSA_KEY_SHORT == 1) && (TLS_CA_REJECT_CURVE == 3) && (TLS_CA_REJECT_NOT_CA == 4),

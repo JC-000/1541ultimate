@@ -24,6 +24,7 @@
 #endif
 #include "cmd_buffer.h"
 #include "wifi_modem.h"
+#include "tls_rng_gate.h"
 #include "sntp.h"
 #include "tls_engine.h"
 
@@ -392,8 +393,15 @@ int tls_open(uint8_t slot, uint16_t tag, const tls_open_params_t *p, uint8_t *re
     }
 #endif
     // All randomness comes from PSA, which (MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG) keeps no seeded state and draws every byte
-    // from esp_fill_random() when needed. The entropy gate above runs at OPEN only and the handshake steps draw later:
-    // this relies on the bridge never stopping the radio once started.
+    // from esp_fill_random() when needed. The check above is at OPEN only: the radio may stop, or the voltages be read,
+    // before the handshake steps draw. Each draw therefore holds the entropy gate itself (tls_rng_gate.c); a draw with no
+    // source ends the handshake as TLS_FAIL_NO_ENTROPY (tls_classify).
+    //
+    // That covers every draw of this engine because its cipher list is AEAD only. In mbedTLS 4.1.1 (the IDF 6.0.3 one)
+    // the draws are the ClientHello random and session id (ssl_client.c), the ECDHE key share (ssl_tls12_client.c,
+    // ssl_tls13_generic.c) and, for CBC suites only, the per-record IV (ssl_msg.c); AEAD nonces come from the record
+    // sequence number, so records, KeyUpdate and NewSessionTicket of an established session draw nothing. A CBC suite,
+    // DTLS (cookies) or server-side tickets would draw elsewhere: any of them needs the same treatment of its draws.
     if (!tls_psa_ready()) {
         return ESP_FAIL;
     }
@@ -506,7 +514,10 @@ static int tls_note_handshake(tls_session_t *s, int state_before, int version_be
 // Classifies a failed handshake step for the Ultimate's failure reasons. The Ultimate infers nothing from bare mbedTLS codes.
 static void tls_classify(tls_session_t *s, int ret, int state_before, int version_before, tls_step_result_t *r)
 {
-    if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+    if (tls_rng_gate_take_refusal()) {
+        // A draw found no entropy source (the radio stopped, or a voltage read ran, and the source is off): not the peer's
+        r->fail_reason = TLS_FAIL_NO_ENTROPY;
+    } else if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
         r->fail_reason = TLS_FAIL_PEER_CLOSED;
     } else if ((state_before == MBEDTLS_SSL_SERVER_HELLO) && (ret == MBEDTLS_ERR_SSL_BAD_PROTOCOL_VERSION)) {
         // A TLS 1.2 ServerHello below the minimum: the 1.2 parser has set tls_version to the server's choice
@@ -544,6 +555,7 @@ static void tls_classify(tls_session_t *s, int ret, int state_before, int versio
 // Runs handshake steps until mbedTLS wants input or output, the handshake is over, or it fails
 static int tls_handshake(tls_session_t *s, tls_step_result_t *r)
 {
+    tls_rng_gate_take_refusal(); // one left by an earlier session is not this one's
     while (!mbedtls_ssl_is_handshake_over(&s->ssl)) {
         int state_before = s->ssl.state;
         int version_before = s->ssl.tls_version;

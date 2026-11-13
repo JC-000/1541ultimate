@@ -27,8 +27,11 @@ void start_dispatch(QueueHandle_t queue);
 void send_button_event(uint8_t button);
 void send_keepalive();
 
-#define IDENT_STRING "ESP32 WiFi Bridge V1.22"
+#define IDENT_STRING "ESP32 WiFi Bridge V1.25"
 #define IDENT_MAJOR   1
+// 1.25: every random draw of the TLS task holds the entropy gate for that draw (tls_rng_gate), so a radio
+//       start or stop or a read of the voltages cannot switch the random source off in the middle of one;
+//       a draw with no source ends the handshake as NO ENTROPY.
 // 1.22: TLS client sessions (CMD_TLS_*) on their own task, and the Mozilla root list of
 //       software/u64ctrl/ca as the certificate bundle.
 // 1.21: CMD_GET_RANDOM, served with the radio off too, from the SAR ADC source.
@@ -49,7 +52,7 @@ void send_keepalive();
 // Disconnected forever. The Ultimate's updater only reflashes the module
 // when this differs from what the module reports, so a module change that
 // does not bump it is silently never installed.
-#define IDENT_MINOR   22
+#define IDENT_MINOR   25
 #define MULTITHREADED 0
 #define DISPATCHER_STACK 3072 // TLS runs on its own task, so this stays small
 
