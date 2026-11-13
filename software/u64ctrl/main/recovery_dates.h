@@ -30,8 +30,9 @@
 /* The clock can be trusted for certificate dates: SNTP has set it, or it reads at least the floor. A time() at or after
    the floor comes from SNTP, from the RTC time the S3 keeps over a soft restart (SNTP has not run again yet), or from
    the Ultimate's SNTP time that tls_set_clock() (software/wifi/tls/tls_engine.c) sets with settimeofday() at an OPEN. A
-   wrong but plausible time only makes the recovery stricter: it can turn a date check on, never off, and a certificate
-   that does not fit it fails as it would on any machine with that clock.
+   wrong but plausible time is stricter than the unknown clock, which checks nothing: dates count, and a certificate that
+   does not fit that time fails as it would on any machine with that clock. A time that is behind the real date can let
+   an expired certificate pass; the manifest's signature is what the recovery relies on.
    The floor is 2024-01-01 here, a fixed date; the TLS engine's floor is the firmware's build time, which is static in
    tls_engine.c. The two are not shared: the engine's moves with every build and recovery has to work from the oldest
    image it may meet. */

@@ -21,9 +21,11 @@ sees plaintext. Implementation: `software/io/network/network_target_tls.cc` (Ult
   [Builds without TLS](#builds-without-tls).
 - On the Ultimate 64 Elite II and the C64 Ultimate the WiFi module's radio may be off (WiFi disabled, wired network).
   The module then seeds TLS from its ADC entropy source, which counts: ready bit 1 is set and a handshake does not
-  end in 87. The module reads its voltages every 10 s with the same ADC. With the radio on the read does not touch the source and
-  no draw waits for it. With the radio off the source is switched off for the read, and a draw that meets it waits (the wait is
-  60 ms; the read normally takes a few ms, but it runs in app_main at a low priority, so a preempted one can fail the draw). A radio
+  end in 87. The module reads its voltages with the same ADC: every 10 s from app_main, and for each CMD_GET_VOLTAGES on its dispatch task.
+  With the radio on a read does not touch the source and no draw waits for it; a second read that overlaps one gets the cached
+  values (up to 10 s old) instead of waiting. With the radio off a read switches the source off and holds the gate
+  exclusively, and a draw that meets it waits (the wait is 60 ms; the read normally takes a few ms, but the app_main one runs at a
+  low priority, so a preempted one can fail the draw). A radio
   start or stop holds the source longer. A draw that finds no source ends the handshake with `13,TLS HANDSHAKE FAILED:
   NO ENTROPY` (87 is answered only at the open).
 
@@ -240,7 +242,7 @@ A pending chunk of `$16` is dropped by any other command, as for plain sockets.
 | 85 | ERROR OPENING SOCKET | OPEN | as OPEN_TCP |
 | 86 | INTERNAL ERROR | any | |
 | 87 | NO ENTROPY SOURCE | OPEN, START_TLS | no entropy source is on, so there is no random seed. Answered only at the module's OPEN (step 5), before anything is sent: the radio is off and the ADC source did not read back. The handle is always unchanged, so 87 never ends a handle. A source that is lost after the OPEN is answered as `13,TLS HANDSHAKE FAILED: NO ENTROPY` and the handle is gone, as for every 13: only a random draw that lands inside a radio change, or after a failed readback, finds no source (a finished radio stop leaves the ADC source on; a voltage read, on a product that has one, only delays a draw while its hold of the entropy gate stays under the 60 ms a draw waits, and a longer hold fails the draw. On the Ultimate 64 Elite II and the C64 Ultimate a read with the radio on holds the gate shared and delays no draw; only with the radio off, when the read switches the ADC source off, can a long hold fail one. `raw_u64` has no voltage read). A draw that finds the entropy gate busy for that whole wait, which on `raw_u64` means a radio change in progress, is answered the same way, `13,TLS HANDSHAKE FAILED: NO ENTROPY`, even with the source on. A radio change is also started implicitly, by a `CMD_WIFI_IS_CONNECTED` on an Ultimate without the radio switch and by the WiFi connector when it enables a disabled radio. A radio change or a voltage read never waits for the handshake's computing: each draw holds the source only for itself |
-| 90 | TLS NOT AVAILABLE | OPEN, START_TLS, TRUST | the module's application has not been detected (no module, or it has not answered yet), a module image without TLS, or a build without TLS. A radio that is off is not a cause: the module answers then and refuses an OPEN itself, for want of entropy (87) |
+| 90 | TLS NOT AVAILABLE | OPEN, START_TLS, TRUST | the module's application has not been detected (no module, or it has not answered yet), a module image without TLS, or a build without TLS. A radio that is off is not a cause: the module answers then and seeds from its ADC source, and an OPEN succeeds; only an ADC source that failed its readback ends in 87 |
 | 91 | TLS SESSIONS IN USE | OPEN, START_TLS | both table entries are used, failed ones included; none is ever evicted |
 | 92 | NO TRUSTED TIME | OPEN, START_TLS | BUNDLE and CUSTOM need a trusted clock; PIN does not |
 | 93 | CERTIFICATE NOT TRUSTED: 0xNNNNNNNN | OPEN | chain not trusted, bad signature, weak key or hash, bad key usage; `0xFFFFFFFF` when verification did not complete |

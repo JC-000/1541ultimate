@@ -826,8 +826,8 @@ bool wifi_module_ready(void)
     return wifi.getState() >= eWifi_AppDetected;
 }
 
-// The application answers while its radio is off too; the module then refuses
-// an OPEN itself, for want of entropy.
+// The application answers while its radio is off too; the module then seeds from its
+// ADC source, and refuses an OPEN itself (87) only when that source failed its readback.
 bool wifi_tls_module_available(void)
 {
     return wifi_module_ready();
