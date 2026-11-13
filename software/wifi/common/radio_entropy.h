@@ -10,7 +10,8 @@
  * ENTROPY_ADC.
  *
  * A writer-preferring reader/writer gate keeps those transitions away from the draws:
- *  - shared holders: a GET_RANDOM draw;
+ *  - shared holders: a GET_RANDOM draw, and a draw of the TLS task's handshake
+ *    (software/wifi/tls/tls_rng_gate.c, one draw at a time);
  *  - exclusive holders: a radio start or stop (wifi_radio.c), a read of the voltages that
  *    needs the SAR ADC, and a retry of a failed readback.
  * Rules for every holder: no re-acquire (it is refused, never waited for), no UART, queue

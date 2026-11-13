@@ -13,6 +13,7 @@
 #include "my_uart.h"
 #include "wifi_modem.h"
 #include "tls_engine.h"
+#include "tls_rng_gate.h"
 #include "tls_rpc.h"
 
 // Every request and reply must fit one command buffer
@@ -209,6 +210,7 @@ void tls_serve(command_buf_t *buf)
 
 static void tls_task(void *arg)
 {
+    tls_rng_gate_bind_task();
     command_buf_t *buf;
     while (1) {
         if (xQueueReceive(tls_queue, &buf, portMAX_DELAY) == pdTRUE) {

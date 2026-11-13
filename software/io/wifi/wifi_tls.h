@@ -23,7 +23,7 @@
 #define WIFI_TLS_STEP_NO_READ      0x01 // the module takes no plaintext out of the session in this step
 
 // Why an OPEN was refused.
-#define WIFI_TLS_REASON_NO_ENTROPY   1 // the radio has not started, so there is no seed
+#define WIFI_TLS_REASON_NO_ENTROPY   1 // no entropy source is on, so there is no seed
 #define WIFI_TLS_REASON_NO_TIME      2 // BUNDLE or CUSTOM, and neither side has a trustworthy clock
 #define WIFI_TLS_REASON_NO_CUSTOM_CA 3 // CUSTOM, and the module holds no CA under the given ca_tag
 
@@ -45,6 +45,7 @@
 #define WIFI_TLS_FAIL_CERT_VERIFY     4 // verify_flags is the final verify result
 #define WIFI_TLS_FAIL_PIN_MISMATCH    5
 #define WIFI_TLS_FAIL_PEER_CLOSED     6
+#define WIFI_TLS_FAIL_NO_ENTROPY      7 // a draw found no entropy source mid-handshake: status 87
 
 #define WIFI_TLS_ALERT_NONE     0xFF
 

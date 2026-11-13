@@ -718,6 +718,8 @@ Message *NetworkTarget :: tls_classify(TlsSocket *e, void *step)
             return pin ? &c_status_tls_pin_mismatch : &c_status_tls_module;
         case WIFI_TLS_FAIL_PEER_CLOSED:
             return set_status("13,TLS HANDSHAKE FAILED: PEER CLOSED");
+        case WIFI_TLS_FAIL_NO_ENTROPY:
+            return &c_status_no_entropy; // the source went off after the OPEN: the same code as at OPEN
         default:
             return &c_status_tls_module;
     }

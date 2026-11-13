@@ -101,7 +101,7 @@ Handle `$FF`, the capability record, 16 bytes, `00,OK`. It makes one module STAT
 | 1 | maximum sessions, 2 |
 | 2 | table entries in use, including failed ones not yet closed |
 | 3 | trust modes: bit 0 BUNDLE, bit 1 CUSTOM, bit 2 PIN (always `07`) |
-| 4 | ready: bit 0 the module answered a STATS (kept while the module is merely busy, cleared when it stops, has no TLS or restarts); bit 1 entropy (radio started, never set without bit 0); bit 2 trusted time (SNTP time not before 2025-01-01, or the module's clock while bit 0); bit 3 custom CA LOADED |
+| 4 | ready: bit 0 the module answered a STATS (kept while the module is merely busy, cleared when it stops, has no TLS or restarts); bit 1 entropy (the module has an entropy source on, the radio or the ADC source; never set without bit 0); bit 2 trusted time (SNTP time not before 2025-01-01, or the module's clock while bit 0); bit 3 custom CA LOADED |
 | 5 | versions: bit 0 TLS 1.2, bit 1 TLS 1.3 (always `03`) |
 | 6 | module major version (0 with no module) |
 | 7..8 | module minor version (LE). 0 while no module application is detected, and on builds without TLS |
@@ -147,8 +147,8 @@ On failure the code decides what the handle is:
 
 | Codes | Handle afterwards |
 |---|---|
-| 81, 82, 87, 90, 91, 92, 97 | unchanged: still an open TCP handle, nothing was sent |
-| every other code (11-19, 93-96, 17, 86) | gone: closed and untracked; do not close it |
+| 81, 82, 87 at OPEN, 90, 91, 92, 97 | unchanged: still an open TCP handle, nothing was sent |
+| every other code (11-19, 93-96, 17, 86), and 87 from the handshake | gone: closed and untracked; do not close it |
 
 ### `$25` TLS_RELEASE
 
@@ -232,7 +232,7 @@ A pending chunk of `$16` is dropped by any other command, as for plain sockets.
 | 84 | UNRESOLVED HOST | OPEN | as OPEN_TCP, also a 10 s DNS timeout |
 | 85 | ERROR OPENING SOCKET | OPEN | as OPEN_TCP |
 | 86 | INTERNAL ERROR | any | |
-| 87 | NO ENTROPY SOURCE | OPEN, START_TLS | the radio has not started, so there is no random seed |
+| 87 | NO ENTROPY SOURCE | OPEN, START_TLS | no entropy source is on, so there is no random seed. At the module's OPEN (step 5) the radio is off and the ADC source did not read back; the handle is unchanged and nothing was sent. In the handshake that follows, a random draw that finds the source off (the radio stopped, or the voltages were being read, since the OPEN) fails the handshake with the same code; the ClientHello may already have been sent, and the handle is gone, as for 13. A radio change or a voltage read never waits for the handshake's computing: each draw holds the source only for itself |
 | 90 | TLS NOT AVAILABLE | OPEN, START_TLS, TRUST | no module, WiFi disabled, a module image without TLS, or a build without TLS |
 | 91 | TLS SESSIONS IN USE | OPEN, START_TLS | both table entries are used, failed ones included; none is ever evicted |
 | 92 | NO TRUSTED TIME | OPEN, START_TLS | BUNDLE and CUSTOM need a trusted clock; PIN does not |
@@ -268,6 +268,9 @@ Policy of the module's client, for both versions:
 - Key exchange groups, in order: x25519, secp256r1, secp384r1, secp521r1.
 - TLS 1.2 requires the extended master secret (else `13,...: NO EMS`). No renegotiation, no session tickets or
   resumption.
+- A TLS 1.3 KeyUpdate from the server is not supported (mbedTLS 4.1.1 treats it as an unexpected message): the READ or
+  WRITE that meets it fails with `16,TLS SESSION FAILED: -0x7700` and the handle is closed. Servers send a KeyUpdate
+  only near the record limit of the cipher, about 2^24 records, so a C64 transfer does not reach it.
 - A ServerHello without `supported_versions` is 18 under REQUIRE_TLS13; in default mode it is 19 only when its random
   ends in the downgrade sentinel, else 13. A protocol_version alert is always 14 with 70.
 

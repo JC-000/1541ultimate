@@ -112,6 +112,7 @@ static_assert(WIFI_TLS_FAIL_NO_EMS == TLS_FAIL_NO_EMS, "fail reasons differ");
 static_assert(WIFI_TLS_FAIL_CERT_VERIFY == TLS_FAIL_CERT_VERIFY, "fail reasons differ");
 static_assert(WIFI_TLS_FAIL_PIN_MISMATCH == TLS_FAIL_PIN_MISMATCH, "fail reasons differ");
 static_assert(WIFI_TLS_FAIL_PEER_CLOSED == TLS_FAIL_PEER_CLOSED, "fail reasons differ");
+static_assert(WIFI_TLS_FAIL_NO_ENTROPY == TLS_FAIL_NO_ENTROPY, "fail reasons differ");
 static_assert(WIFI_TLS_ALERT_NONE == TLS_ALERT_NONE, "alerts differ");
 static_assert(WIFI_TLS_REJECT_RSA_KEY_SHORT == TLS_CA_REJECT_RSA_KEY_SHORT, "rejects differ");
 static_assert(WIFI_TLS_REJECT_CURVE == TLS_CA_REJECT_CURVE, "rejects differ");
