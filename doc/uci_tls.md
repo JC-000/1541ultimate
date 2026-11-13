@@ -146,8 +146,8 @@ On failure the code decides what the handle is:
 
 | Codes | Handle afterwards |
 |---|---|
-| 81, 82, 87 at OPEN, 90, 91, 92, 97 | unchanged: still an open TCP handle, nothing was sent |
-| every other code (11-19, 93-96, 17, 86), and 87 from the handshake | gone: closed and untracked; do not close it |
+| 81, 82, 87, 90, 91, 92, 97 | unchanged: still an open TCP handle, nothing was sent |
+| every other code (11-19, 93-96, 17, 86) | gone: closed and untracked; do not close it |
 
 ### `$25` TLS_RELEASE
 
@@ -219,7 +219,7 @@ A pending chunk of `$16` is dropped by any other command, as for plain sockets.
 | 05 | TLS CLOSED WITHOUT NOTIFY | READ | TCP end without close_notify, possible truncation; handle gone |
 | 11 | ERROR ON CONNECT: errno | OPEN | as OPEN_TCP, including the connect timeout |
 | 12 | SEND ERROR: errno, RECEIVE ERROR: errno | READ, WRITE | failed handle; never from `$21` or `$24` |
-| 13 | TLS HANDSHAKE FAILED: -0xNNNN, or `: NO EMS`, `: PEER CLOSED`, `: PEER RESET: errno`, `: SEND ERROR: errno` | OPEN | a handshake failure that is none of 14, 15, 18, 19, 93-96 |
+| 13 | TLS HANDSHAKE FAILED: -0xNNNN, or `: NO EMS`, `: NO ENTROPY`, `: PEER CLOSED`, `: PEER RESET: errno`, `: SEND ERROR: errno` | OPEN | a handshake failure that is none of 14, 15, 18, 19, 93-96 |
 | 14 | TLS ALERT RECEIVED: n | OPEN, READ, WRITE | fatal alert n from the server; 70 is protocol_version |
 | 15 | TLS HANDSHAKE TIMEOUT | OPEN | no established session in 15 s, or the 40 s open budget ran out in the handshake |
 | 16 | TLS SESSION FAILED: -0xNNNN | READ, WRITE | bad record MAC, decode error, too many empty records, KeyUpdate |
@@ -231,7 +231,7 @@ A pending chunk of `$16` is dropped by any other command, as for plain sockets.
 | 84 | UNRESOLVED HOST | OPEN | as OPEN_TCP, also a 10 s DNS timeout |
 | 85 | ERROR OPENING SOCKET | OPEN | as OPEN_TCP |
 | 86 | INTERNAL ERROR | any | |
-| 87 | NO ENTROPY SOURCE | OPEN, START_TLS | no entropy source is on, so there is no random seed. At the module's OPEN (step 5) the radio is off and the ADC source did not read back; the handle is unchanged and nothing was sent. In the handshake that follows, a random draw that finds the source off (the radio stopped, or the voltages were being read, since the OPEN) fails the handshake with the same code; the ClientHello may already have been sent, and the handle is gone, as for 13. A radio change or a voltage read never waits for the handshake's computing: each draw holds the source only for itself |
+| 87 | NO ENTROPY SOURCE | OPEN, START_TLS | no entropy source is on, so there is no random seed. Answered only at the module's OPEN (step 5), before anything is sent: the radio is off and the ADC source did not read back. The handle is always unchanged, so 87 never ends a handle. A source that is lost after the OPEN is answered as `13,TLS HANDSHAKE FAILED: NO ENTROPY` and the handle is gone, as for every 13: only a random draw that lands inside a radio change, or after a failed readback, finds no source (a finished radio stop leaves the ADC source on, and a voltage read only delays a draw). A radio change is also started implicitly, by a `CMD_WIFI_IS_CONNECTED` on an Ultimate without the radio switch and by the WiFi connector when it enables a disabled radio. A radio change or a voltage read never waits for the handshake's computing: each draw holds the source only for itself |
 | 90 | TLS NOT AVAILABLE | OPEN, START_TLS, TRUST | no module, WiFi disabled, a module image without TLS, or a build without TLS |
 | 91 | TLS SESSIONS IN USE | OPEN, START_TLS | both table entries are used, failed ones included; none is ever evicted |
 | 92 | NO TRUSTED TIME | OPEN, START_TLS | BUNDLE and CUSTOM need a trusted clock; PIN does not |
