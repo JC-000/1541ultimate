@@ -24,6 +24,9 @@ extern std::string world_trace;   // every call, in order
 extern int world_suspended;       // vTaskSuspendAll minus xTaskResumeAll
 extern int world_transmits;       // requests that went out
 extern int world_isr_calls;       // replies the interrupt handled
+extern int world_frees;           // FreeBuffer calls
+extern int world_free_unsuspended; // of those, made with the scheduler not suspended
+extern bool world_stale_next;     // the next reply the interrupt queues is tagged with a pre-reset generation
 size_t world_queued(void);        // replies still in dedicated_replies
 void world_deliver_now(void);     // the receive interrupt hands over an answer now
 void world_reset_maker(world_maker_t maker); // answers from now on come from maker

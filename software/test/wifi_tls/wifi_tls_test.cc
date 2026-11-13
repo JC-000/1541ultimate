@@ -7,6 +7,7 @@
 #include "world.h"
 #include "wifi_dedicated.h"
 #include "wifi_tls.h"
+#include "wifi_random.h"
 #include "rpc_calls.h"
 #include "check.h"
 #undef printf
@@ -693,6 +694,62 @@ static void test_calls(void)
     dedicated_waiting = true;
     r = wifi_tls_stats(0, 1, &stats, &esp_err, 1000, NULL);
     check((r == WIFI_TLS_UNSENT) && dedicated_waiting, "another request outstanding: UNSENT at once");
+    // Nothing sent: a failed GetBuffer or TransmitPacket is UNSENT for the TLS calls and BUSY for GET_RANDOM.
+    uint8_t random_bytes[16];
+    world_reset(19, tls_maker, true);
+    world_no_buffer = true;
+    r = wifi_tls_stats(0, 1, &stats, &esp_err, 1000, NULL);
+    check((r == WIFI_TLS_UNSENT) && (world_transmits == 0) && !dedicated_waiting && (world_queued() == 0),
+          "no buffer: UNSENT (%d), nothing sent, the channel free again", r);
+    world_reset(19, tls_maker, true);
+    world_no_buffer = true;
+    r = wifi_get_random(random_bytes, sizeof(random_bytes));
+    check((r == WIFI_RANDOM_BUSY) && (world_transmits == 0) && !dedicated_waiting,
+          "GET_RANDOM, no buffer: BUSY, not UNSENT (%d)", r);
+    world_reset(21, tls_maker, true);
+    world_no_transmit = true;
+    r = wifi_tls_stats(0, 1, &stats, &esp_err, 1000, NULL);
+    check((r == WIFI_TLS_UNSENT) && (world_transmits == 0) && !dedicated_waiting && (world_queued() == 0) &&
+              (world_trace.find("print: TLS Stats: no reply.") != std::string::npos),
+          "a failed transmit: UNSENT, not BUSY (%d): the module never saw the request", r);
+    world_reset(21, tls_maker, true);
+    world_no_transmit = true;
+    r = wifi_get_random(random_bytes, sizeof(random_bytes));
+    check((r == WIFI_RANDOM_BUSY) && (world_transmits == 0) && !dedicated_waiting,
+          "GET_RANDOM, a failed transmit: BUSY, not UNSENT (%d)", r);
+    world_reset(22, tls_maker, true);
+    dedicated_waiting = true;
+    r = wifi_get_random(random_bytes, sizeof(random_bytes));
+    check((r == WIFI_RANDOM_BUSY) && dedicated_waiting, "GET_RANDOM, channel taken: BUSY, not UNSENT (%d)", r);
+
+    // The buffer of a taken answer is freed with the scheduler suspended, so that no reset gets in between.
+    world_reset(23, tls_maker, true);
+    r = wifi_tls_stats(0, 1, &stats, &esp_err, 1000, NULL);
+    check((r == 0) && (world_frees == 1) && (world_free_unsuspended == 0) && (world_suspended == 0),
+          "a taken answer is freed inside the suspended section (%d frees, %d outside)", world_frees,
+          world_free_unsuspended);
+    // So is one that is dropped unread after the call gave up.
+    world_reset(24, late_maker, true);
+    cancel_calls = 0;
+    cancel_after = 1;
+    fresh_step(&st, 1024);
+    r = wifi_tls_step(0, 1, &st, 5000, &soon);
+    check((r == WIFI_TLS_BUSY) && (world_frees >= 1) && (world_free_unsuspended == 0) && (world_suspended == 0),
+          "a skipped answer is freed inside the suspended section (%d frees, %d outside)", world_frees,
+          world_free_unsuspended);
+
+    // An answer queued before the last buffer pool reset is dropped unread and its buffer not freed.
+    world_reset(25, tls_maker, true);
+    world_stale_next = true;
+    memset(&stats, 0, sizeof(stats));
+    r = wifi_tls_stats(0, 1, &stats, &esp_err, 100, NULL);
+    check((r == WIFI_TLS_BUSY) && (world_isr_calls == 1) && (world_frees == 0) && (stats.heap_free == 0) &&
+              !dedicated_waiting && (world_queued() == 0),
+          "a right-looking answer of a past generation is not taken and not freed: BUSY (%d)", r);
+    world_reset(26, tls_maker, true);
+    world_stale_next = true;
+    r = wifi_get_random(random_bytes, sizeof(random_bytes));
+    check((r == WIFI_RANDOM_BUSY) && (world_frees == 0), "GET_RANDOM: a past generation's answer is dropped (%d)", r);
 }
 
 int main(void)
