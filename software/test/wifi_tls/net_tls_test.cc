@@ -630,6 +630,7 @@ static void test_classify(void)
     expect_fail(2, 5, 0x08, N, -0x2700, "96,PINNED KEY MISMATCH", "PIN, reason 5");
     expect_fail(0, 5, 0x08, N, -0x2700, "17,TLS MODULE NOT RESPONDING", "BUNDLE, reason 5 (PIN only: malformed)");
     expect_fail(0, 6, 0, N, -0x7280, "13,TLS HANDSHAKE FAILED: PEER CLOSED", "reason 6");
+    expect_fail(0, 7, 0, N, -0x0103, "87,NO ENTROPY SOURCE", "reason 7 (the source went off after the OPEN)");
     expect_fail(0, 9, 0, N, -0x7280, "17,TLS MODULE NOT RESPONDING", "an unknown reason");
 
     fresh();
