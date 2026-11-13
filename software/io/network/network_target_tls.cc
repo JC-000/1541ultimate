@@ -719,7 +719,9 @@ Message *NetworkTarget :: tls_classify(TlsSocket *e, void *step)
         case WIFI_TLS_FAIL_PEER_CLOSED:
             return set_status("13,TLS HANDSHAKE FAILED: PEER CLOSED");
         case WIFI_TLS_FAIL_NO_ENTROPY:
-            return &c_status_no_entropy; // the source went off after the OPEN: the same code as at OPEN
+            // The source went off after the OPEN. 87 is only ever answered with the TCP handle kept, and this ends it, so
+            // it is a handshake failure with a detail that names the cause.
+            return set_status("13,TLS HANDSHAKE FAILED: NO ENTROPY");
         default:
             return &c_status_tls_module;
     }

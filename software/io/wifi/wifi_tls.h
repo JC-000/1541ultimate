@@ -45,7 +45,7 @@
 #define WIFI_TLS_FAIL_CERT_VERIFY     4 // verify_flags is the final verify result
 #define WIFI_TLS_FAIL_PIN_MISMATCH    5
 #define WIFI_TLS_FAIL_PEER_CLOSED     6
-#define WIFI_TLS_FAIL_NO_ENTROPY      7 // a draw found no entropy source mid-handshake: status 87
+#define WIFI_TLS_FAIL_NO_ENTROPY      7 // a draw found no entropy source mid-handshake: status 13, ": NO ENTROPY"
 
 #define WIFI_TLS_ALERT_NONE     0xFF
 

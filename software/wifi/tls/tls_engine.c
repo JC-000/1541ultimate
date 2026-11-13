@@ -359,6 +359,7 @@ int tls_open(uint8_t slot, uint16_t tag, const tls_open_params_t *p, uint8_t *re
 {
     char hostname[TLS_SNI_MAX_LEN + 1];
 
+    tls_rng_gate_bind_task(); // from here on, this task's random draws hold the entropy gate (tls_rng_gate.h)
     *reason = TLS_OPEN_REASON_NONE;
     // Verifying without a host name would skip the name check, so only PIN may go without one
     if ((slot >= TLS_MAX_SESSIONS) || (tag == 0) || (p->trust > TLS_TRUST_PIN) ||
@@ -399,7 +400,8 @@ int tls_open(uint8_t slot, uint16_t tag, const tls_open_params_t *p, uint8_t *re
     //
     // That covers every draw of this engine because its cipher list is AEAD only. In mbedTLS 4.1.1 (the IDF 6.0.3 one)
     // the draws are the ClientHello random and session id (ssl_client.c), the ECDHE key share (ssl_tls12_client.c,
-    // ssl_tls13_generic.c) and, for CBC suites only, the per-record IV (ssl_msg.c); AEAD nonces come from the record
+    // ssl_tls13_generic.c), the blinding of the ECDH scalar multiplications (psa_crypto_ecp.c: the public key and the
+    // shared secret) and, for CBC suites only, the per-record IV (ssl_msg.c); AEAD nonces come from the record
     // sequence number, so records, KeyUpdate and NewSessionTicket of an established session draw nothing. A CBC suite,
     // DTLS (cookies) or server-side tickets would draw elsewhere: any of them needs the same treatment of its draws.
     if (!tls_psa_ready()) {

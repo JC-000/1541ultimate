@@ -630,7 +630,7 @@ static void test_classify(void)
     expect_fail(2, 5, 0x08, N, -0x2700, "96,PINNED KEY MISMATCH", "PIN, reason 5");
     expect_fail(0, 5, 0x08, N, -0x2700, "17,TLS MODULE NOT RESPONDING", "BUNDLE, reason 5 (PIN only: malformed)");
     expect_fail(0, 6, 0, N, -0x7280, "13,TLS HANDSHAKE FAILED: PEER CLOSED", "reason 6");
-    expect_fail(0, 7, 0, N, -0x0103, "87,NO ENTROPY SOURCE", "reason 7 (the source went off after the OPEN)");
+    expect_fail(0, 7, 0, N, -0x0103, "13,TLS HANDSHAKE FAILED: NO ENTROPY", "reason 7 (the source went off after the OPEN)");
     expect_fail(0, 9, 0, N, -0x7280, "17,TLS MODULE NOT RESPONDING", "an unknown reason");
 
     fresh();
@@ -904,6 +904,16 @@ static void test_start_tls(void)
           "start: a 93 closes the handle (every code but the kept ones)");
     r = close_cmd(t);
     check(r.status == "12,ERROR ON CLOSE: " + num(EBADF), "start: CLOSE after it -> 12,ERROR ON CLOSE: 9");
+    // 87 is answered at the OPEN only, with the handle kept. A source lost in the handshake is a 13 and ends the handle.
+    fresh();
+    t = open_tcp();
+    world_module.hs_fail = true;
+    world_module.hs_fail_reason = 7;
+    r = run(start_cmd(t, 0, 0, "mail.example"));
+    check(r.status == "13,TLS HANDSHAKE FAILED: NO ENTROPY" && !sock(t).open,
+          "start: a source lost in the handshake -> 13 NO ENTROPY, handle closed (87 is only ever kept)");
+    r = close_cmd(t);
+    check(r.status == "12,ERROR ON CLOSE: " + num(EBADF), "start: CLOSE after the 13 NO ENTROPY -> 12");
     fresh();
     t = open_tcp();
     world_module.open_delay_ms = 6000;
