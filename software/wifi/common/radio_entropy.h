@@ -10,10 +10,11 @@
  * ENTROPY_ADC.
  *
  * A writer-preferring reader/writer gate keeps those transitions away from the draws:
- *  - shared holders: a GET_RANDOM draw, and a draw of the TLS task's handshake
- *    (software/wifi/tls/tls_rng_gate.c, one draw at a time);
- *  - exclusive holders: a radio start or stop (wifi_radio.c), a read of the voltages that
- *    needs the SAR ADC, and a retry of a failed readback.
+ *  - shared holders: a GET_RANDOM draw, a draw of the TLS task's handshake
+ *    (software/wifi/tls/tls_rng_gate.c, one draw at a time), and a read of the voltages while
+ *    the radio is on (the ADC source is not on then, so the read changes nothing a draw uses);
+ *  - exclusive holders: a radio start or stop (wifi_radio.c), a read of the voltages while the
+ *    ADC source is on (it is switched off for the read), and a retry of a failed readback.
  * Rules for every holder: no re-acquire (it is refused, never waited for), no UART, queue
  * or event-loop wait while holding, and event handlers never take the gate.
  *
@@ -73,9 +74,10 @@ void radio_entropy_change_end(void);
 int radio_entropy_acquire_shared(uint32_t timeout_ms);
 void radio_entropy_release_shared(void);
 
-// Exclusive hold around a use of the SAR ADC1 by someone else (the voltage read). Takes
-// the gate, and switches the ADC source off if it is on. The end enables the source again
-// and reads it back. RE_OK or RE_ERR_BUSY.
+// Hold around a use of the SAR ADC1 by someone else (the voltage read). With the radio on the
+// gate is held shared and the source is not touched; a second read at the same time gets
+// RE_ERR_BUSY. Otherwise it takes the gate exclusively and switches the ADC source off; the
+// end enables the source again and reads it back. RE_OK or RE_ERR_BUSY.
 int radio_entropy_adc_begin(uint32_t timeout_ms);
 void radio_entropy_adc_end(void);
 

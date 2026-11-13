@@ -21,8 +21,11 @@ sees plaintext. Implementation: `software/io/network/network_target_tls.cc` (Ult
   [Builds without TLS](#builds-without-tls).
 - On the Ultimate 64 Elite II and the C64 Ultimate the WiFi module's radio may be off (WiFi disabled, wired network).
   The module then seeds TLS from its ADC entropy source, which counts: ready bit 1 is set and a handshake does not
-  end in 87. The module reads its voltages every 10 s with that ADC; a draw that meets the read waits for it (at most 60 ms)
-  and is only delayed, not failed. A radio start or stop holds the source longer, and a draw that meets one ends the handshake with `13,TLS HANDSHAKE FAILED: NO ENTROPY` (87 is answered only at the open).
+  end in 87. The module reads its voltages every 10 s with the same ADC. With the radio on the read does not touch the source and
+  no draw waits for it. With the radio off the source is switched off for the read, and a draw that meets it waits (the wait is
+  60 ms; the read normally takes a few ms, but it runs in app_main at a low priority, so a preempted one can fail the draw). A radio
+  start or stop holds the source longer. A draw that finds no source ends the handshake with `13,TLS HANDSHAKE FAILED:
+  NO ENTROPY` (87 is answered only at the open).
 
 ## Commands
 

@@ -59,6 +59,19 @@ static void violate(const char *what)
     printf("    violation: %s\n", what);
 }
 
+// True when the calling task holds the gate in either mode
+static bool holds_gate(void)
+{
+    if (radio_entropy_held_exclusive()) {
+        return true;
+    }
+    if (radio_entropy_acquire_shared(0) == RE_OK) {
+        radio_entropy_release_shared();
+        return false;
+    }
+    return true; // refused as a recursion: it is held
+}
+
 // Every chip call comes with the exclusive hold.
 static void need_gate(const char *what)
 {
@@ -130,7 +143,8 @@ void re_port_random_enable(void)
 
 void re_port_adc_ready(void)
 {
-    need_gate("ADC readied without the gate");
+    // Exclusive, or the shared hold a voltage read takes with the radio on (the register is set atomically)
+    if (!holds_gate()) violate("ADC readied without the gate");
     bus_clk_off = false;
 }
 
@@ -489,6 +503,60 @@ static void writer_that_gives_up_leaves_nothing_behind(void)
     CHECK(violations == 0, "no violations");
 }
 
+static void voltage_read_with_radio_on_does_not_stop_draws(void)
+{
+    // With the radio on the voltage read never switches the source off, so a draw (a TLS handshake's, a GET_RANDOM)
+    // must not wait for it, or fail because the task that holds the read was preempted for longer than the draw waits
+    CHECK(radio_start() == 0, "start");
+    struct holder lender = { .kind = 5, .wait_ms = RE_WAIT_ADC_MS };
+    pthread_t tl = spawn(&lender);
+    wait_state(&lender, 1);
+    CHECK(lender.state == 1 && lender.rc == 0, "the voltage read is in progress");
+    uint32_t t0 = re_port_now_ms();
+    CHECK(radio_entropy_acquire_shared(RE_WAIT_RANDOM_MS) == 0, "a draw gets the gate during the read");
+    CHECK(re_port_now_ms() - t0 < 10, "without waiting for it");
+    CHECK(entropy_source() == ENTROPY_RADIO, "the source is the radio's");
+    radio_entropy_release_shared();
+    lender.release = 1;
+    pthread_join(tl, NULL);
+    CHECK(violations == 0, "no violations");
+}
+
+static void voltage_read_with_radio_on_still_holds_off_a_radio_change(void)
+{
+    CHECK(radio_start() == 0, "start");
+    struct holder lender = { .kind = 5, .wait_ms = RE_WAIT_ADC_MS };
+    pthread_t tl = spawn(&lender);
+    wait_state(&lender, 1);
+    struct holder stopper = { .kind = 1 };
+    pthread_t ts = spawn(&stopper);
+    wait_state(&stopper, 1);
+    for (int i = 0; i < 40; i++) usleep(1000);
+    CHECK(stopper.state == 1, "the radio stop waits for the read");
+    CHECK(wifi_running, "the radio is still on");
+    lender.release = 1;
+    pthread_join(tl, NULL);
+    pthread_join(ts, NULL);
+    CHECK(stopper.rc == 0 && !wifi_running, "then it stops");
+    CHECK(violations == 0, "no violations");
+}
+
+static void two_voltage_reads_do_not_overlap_with_the_radio_on(void)
+{
+    CHECK(radio_start() == 0, "start");
+    struct holder lender = { .kind = 5, .wait_ms = RE_WAIT_ADC_MS };
+    pthread_t tl = spawn(&lender);
+    wait_state(&lender, 1);
+    CHECK(radio_entropy_adc_begin(10) == RE_ERR_BUSY, "a second read does not share the ADC");
+    CHECK(radio_entropy_acquire_shared(0) == 0, "and leaves no gate state behind");
+    radio_entropy_release_shared();
+    lender.release = 1;
+    pthread_join(tl, NULL);
+    CHECK(radio_entropy_adc_begin(RE_WAIT_ADC_MS) == 0, "after the first ends, a read goes");
+    radio_entropy_adc_end();
+    CHECK(violations == 0, "no violations");
+}
+
 static void recursion_is_refused(void)
 {
     CHECK(radio_start() == 0, "start");
@@ -692,7 +760,8 @@ static volatile uint16_t unit_base;
 static int fake_unit(uint16_t *out)
 {
     unit_reads++;
-    if (!radio_entropy_held_exclusive()) violate("voltages read without the exclusive hold");
+    // With the source on and the radio off the read holds the gate exclusively; with the radio on, shared
+    if (!holds_gate() || (hw_on && !radio_entropy_held_exclusive())) violate("voltages read without the hold");
     if (bus_clk_off) violate("voltages read with the SAR ADC bus clock off");
     if (hw_on) violate("voltages read with the ADC source on");
     if (unit_fails > 0) {
@@ -971,6 +1040,9 @@ static const struct testcase cases[] = {
     CASE(shared_holders_do_not_block_each_other),
     CASE(pending_writer_blocks_new_readers),
     CASE(writer_that_gives_up_leaves_nothing_behind),
+    CASE(voltage_read_with_radio_on_does_not_stop_draws),
+    CASE(voltage_read_with_radio_on_still_holds_off_a_radio_change),
+    CASE(two_voltage_reads_do_not_overlap_with_the_radio_on),
     CASE(recursion_is_refused),
     CASE(back_to_back_readers_do_not_starve_a_transition),
     CASE(gate_is_free_after_a_failed_transition),

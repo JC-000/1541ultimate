@@ -28,6 +28,8 @@ static volatile entropy_source_t source = ENTROPY_NONE;
 // Changed under the exclusive hold only
 static bool hw_enabled;       // bootloader_random_enable() was called, and no disable since
 static bool adc_off;          // radio_entropy_adc_begin() switched the source off
+static bool adc_shared;       // the voltage read in progress holds the gate shared (the radio is on)
+static uintptr_t adc_shared_task; // ... and this task is it
 static uint32_t adc_begin_ms;
 static bool retry_pending;
 static int retries_left;
@@ -247,12 +249,42 @@ void radio_entropy_change_end(void)
 
 int radio_entropy_adc_begin(uint32_t timeout_ms)
 {
-    int rc = acquire_exclusive(timeout_ms);
+    uint32_t start = re_port_now_ms();
+    // With the radio running the RNG does not depend on the ADC and the read changes nothing the draws use, so the
+    // read holds the gate SHARED: a draw is not made to wait, or to fail, because the task that reads the voltages was
+    // preempted. A radio change (the writer) still waits for the read. hw_enabled only changes under the exclusive hold,
+    // so it cannot flip while the shared hold is held.
+    int rc = radio_entropy_acquire_shared(timeout_ms);
+    if (rc != RE_OK) {
+        return rc;
+    }
+    if (!hw_enabled) {
+        re_port_lock();
+        bool busy = adc_shared; // another read has the ADC
+        if (!busy) {
+            adc_shared = true;
+            adc_shared_task = re_port_task();
+        }
+        if (busy) {
+            stats.busy++;
+        }
+        re_port_unlock();
+        if (busy) {
+            radio_entropy_release_shared();
+            return RE_ERR_BUSY;
+        }
+        adc_begin_ms = re_port_now_ms();
+        re_port_adc_ready();
+        return RE_OK;
+    }
+    // The ADC source is on (the radio is off) and has to go off for the read: that takes the gate exclusively
+    radio_entropy_release_shared();
+    uint32_t used = re_port_now_ms() - start;
+    rc = acquire_exclusive(used < timeout_ms ? timeout_ms - used : 0);
     if (rc != RE_OK) {
         return rc;
     }
     adc_begin_ms = re_port_now_ms();
-    // With the radio running the RNG does not depend on the ADC, and the ADC is free as it is
     adc_off = hw_enabled;
     if (adc_off) {
         source = ENTROPY_NONE;
@@ -265,6 +297,21 @@ int radio_entropy_adc_begin(uint32_t timeout_ms)
 
 void radio_entropy_adc_end(void)
 {
+    re_port_lock();
+    bool shared_mine = adc_shared && (adc_shared_task == re_port_task());
+    if (shared_mine) {
+        adc_shared = false;
+        adc_shared_task = 0;
+    }
+    re_port_unlock();
+    if (shared_mine) {
+        uint32_t held = re_port_now_ms() - adc_begin_ms;
+        if (held > stats.adc_hold_max_ms) {
+            stats.adc_hold_max_ms = held;
+        }
+        radio_entropy_release_shared();
+        return;
+    }
     if (!radio_entropy_held_exclusive()) {
         re_port_log("radio_entropy: adc_end without adc_begin");
         return;
