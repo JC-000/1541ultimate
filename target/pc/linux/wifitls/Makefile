@@ -4,17 +4,22 @@
 # U64=2 builds the same checks with the compile flags of the Ultimate 64 Elite II and the C64 Ultimate target (-DU64=2
 # -DRISCV=1, no Nios) and against that product's module header, software/u64ctrl/main/rpc_calls.h (the U64=1 pass
 # uses raw_u64's). It tests the NET_TLS gate and the network target above the module.
+# NIOS=0 with U64=1 is the RISC-V Ultimate 64 target (-DU64=1 -DRISCV=1): it carries no WiFi module code, so only the
+# gate is checked there, and it must say NET_TLS is off.
 U64     ?= 1
-ifeq ($(U64),1)
+NIOS    ?= 1
+ifeq ($(U64)$(NIOS),11)
 NIOS_OPT = -DNIOS=1
 SUFFIX   =
 MODULE   = wifi/raw_u64/main
+EXPECT_TLS = 1
 else
 NIOS_OPT = -DRISCV=1
-SUFFIX   = /u64-$(U64)
+SUFFIX   = /u64-$(U64)-nios$(NIOS)
 MODULE   = u64ctrl/main
+EXPECT_TLS = $(if $(filter 2,$(U64)),1,0)
 endif
-# U64=2 works under the ignored result/ and output/
+# The other passes work under the ignored result/ and output/
 RESULT  = result$(SUFFIX)
 OUTPUT  = output$(SUFFIX)
 
@@ -37,7 +42,7 @@ NET_OPTIONS = -std=gnu++11 -g -O0 -Wall -Wextra -Wno-unused-parameter -Wno-depre
 NET_SRCS = net_tls_test.cc net_world.cc ip4addr_aton.cc
 NET_OBJS = $(addprefix $(OUTPUT)/net/, $(NET_SRCS:%.cc=%.o)) $(OUTPUT)/net/network_target.o $(OUTPUT)/net/network_target_tls.o $(OUTPUT)/net/wifi_random.o
 
-.PHONY: all test clean
+.PHONY: all test clean gate
 
 all: $(RESULT)/wifitls $(RESULT)/nettls
 
@@ -76,11 +81,16 @@ $(RESULT)/nettls: $(NET_OBJS)
 	@mkdir -p $(RESULT)
 	$(CXX) -o $@ $(NET_OBJS)
 
-test: all
+# NET_TLS must be what this target has: on for the Nios II U64 and the U64-II, off for the RISC-V U64.
+gate:
+	$(CXX) $(NET_OPTIONS) -DEXPECT_NET_TLS=$(EXPECT_TLS) -fsyntax-only $(TEST)/net_gate_test.cc
+
+test: all gate
 	@$(RESULT)/wifitls
 	@$(RESULT)/nettls
-ifeq ($(U64),1)
+ifeq ($(U64)$(NIOS),11)
 	@$(MAKE) U64=2 test
+	@$(MAKE) U64=1 NIOS=0 gate
 endif
 
 clean:
