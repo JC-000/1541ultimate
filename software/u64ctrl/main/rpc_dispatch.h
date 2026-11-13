@@ -28,6 +28,8 @@ void send_keepalive();
 
 #define IDENT_STRING "ESP32 WiFi Bridge V1.32"
 #define IDENT_MAJOR   1
+// 1.36: serves the TLS client sessions of software/wifi/tls (CMD_TLS_*, 0x30-0x35), built with
+// the mbedTLS options the engine needs (TLS 1.3, certificate dates, client only, no renegotiation).
 // 1.32: CMD_GET_RANDOM, served with the radio off too, from the SAR ADC source; starts and
 // stops the radio through the code it shares with the U64 module.
 // 1.31: built with ESP-IDF 6.0.3; the recovery code uses PSA Crypto (mbedTLS 4).
@@ -53,7 +55,7 @@ void send_keepalive();
 // when this is higher than what the module reports, so a module change that
 // does not bump it is silently never installed, and an older release never
 // replaces a newer module.
-#define IDENT_MINOR   32
+#define IDENT_MINOR   36
 #define MULTITHREADED 0
 #define DISPATCHER_STACK 3072
 

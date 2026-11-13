@@ -209,6 +209,9 @@ typedef struct {
     uint8_t reason;
 } event_pkt_disconnected;
 
+//----------------------------------
+#include "rpc_tls.h" // CMD_TLS_* opcodes and the TLS session layouts, software/wifi/tls
+
 #define CMD_ECHO              0x01
 #define CMD_IDENTIFY          0x02
 #define CMD_SET_BAUD          0x03
@@ -237,6 +240,7 @@ typedef struct {
 #define CMD_SET_RECOVERY_URL  0x1A
 #define CMD_GET_RECOVERY_URL  0x1B
 // 0x20 is CMD_GET_RANDOM, in rpc_shared.h
+// CMD_TLS_OPEN .. CMD_TLS_SET_CA (0x30-0x35): rpc_tls.h
 
 #define EVENT_CONNECTED     0x40
 #define EVENT_GOTIP         0x41

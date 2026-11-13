@@ -26,6 +26,8 @@
 #include "sntp.h"
 #include "recovery.h"
 #include "recovery_url.h"
+#include "esp_timer.h"
+#include "tls_rpc.h"
 
 // not officially supported
 #include "../lwip/esp_netif_lwip_internal.h"
@@ -478,6 +480,7 @@ void dispatch(void *ct)
         printf("Received buffer %d with %d bytes.\n", pbuffer->bufnr, pbuffer->size);
 #endif
         hdr = (rpc_header_t *)(pbuffer->data);
+        int64_t start = esp_timer_get_time();
         switch(hdr->command) {
         case CMD_SEND_PACKET:
             cmd_send_eth_packet(pbuffer);
@@ -561,15 +564,25 @@ void dispatch(void *ct)
         case CMD_GET_RANDOM:
             cmd_get_random(pbuffer);
             break;
+        case CMD_TLS_OPEN:
+        case CMD_TLS_STEP:
+        case CMD_TLS_CLOSE:
+        case CMD_TLS_STATS:
+        case CMD_TLS_CLOSE_ALL:
+        case CMD_TLS_SET_CA:
+            tls_rpc_dispatch(pbuffer);
+            break;
         default:
             cmd_not_implemented(pbuffer);
             break;
         }
+        tls_rpc_note_block((esp_timer_get_time() - start) / 1000);
     }
 }
 
 void start_dispatch(QueueHandle_t queue)
 {
+    tls_rpc_start();
     // Core 1, above the system tasks: the UART ISR that feeds this queue runs on core 1 too
     xTaskCreatePinnedToCore( dispatch, "Dispatch Task", DISPATCHER_STACK, queue, 19, NULL, 1 );
 }
