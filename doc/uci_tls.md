@@ -16,7 +16,8 @@ sees plaintext. Implementation: `software/io/network/network_target_tls.cc` (Ult
 - A TLS handle is an lwIP descriptor number, in the same space as TCP and UDP handles.
 - `$21` and `$24` with the no-reply bit (`$80` in byte 0) are refused with 81 and open nothing. (A build without TLS
   answers them from their layout alone, 81 or 90.)
-- TLS is built for the Ultimate 64 (Nios II) only. Every other build has the commands without TLS, see
+- TLS is built for the Ultimate 64 (Nios II) and for the Ultimate 64 Elite II and the C64 Ultimate, which run the
+  session on their WiFi module. Every other build has the commands without TLS, see
   [Builds without TLS](#builds-without-tls).
 
 ## Commands
@@ -286,7 +287,7 @@ a C64 reset ends a command early.
 
 ## Builds without TLS
 
-Builds other than the Ultimate 64 (the U2 family, the Ultimate 64-II) have the commands but no TLS:
+Builds other than those (the U2 family, and the RISC-V Ultimate 64 build, which has no WiFi module code) have the commands but no TLS:
 
 - `$23 $FF` answers the 16-byte record with byte 4 = 0, byte 3 = `07` and byte 5 = `03`; byte 6..8 are 0.
 - `$21` checks its layout (81) and otherwise answers 90, including trust > 2. `$24` answers 81 for a handle it does

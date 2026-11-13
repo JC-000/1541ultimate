@@ -203,6 +203,7 @@ SRCS_CC	 =  u64ii_init.cc \
 			wifi_cmd.cc \
 			wifi_random.cc \
 			wifi_dedicated.cc \
+			wifi_tls.cc \
 			wifi.cc \
 			sntp_time.cc \
 			$(PRJ).cc
@@ -233,6 +234,7 @@ VPATH +=	$(PATH_SW)/u64ii
 VPATH +=	$(PATH_SW)/u64
 VPATH +=	$(PATH_SW)/u64ctrl/main
 VPATH +=	$(PATH_SW)/wifi/common
+VPATH +=	$(PATH_SW)/wifi/tls
 
 SRCS_ASM =
 

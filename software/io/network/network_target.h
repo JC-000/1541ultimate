@@ -57,10 +57,10 @@
 // network_target.cc and wifi_random.cc assert the three agree).
 #define NET_MAX_RANDOM 512
 // TLS sockets: the WiFi module runs the session, this target
-// keeps the TCP socket and carries the ciphertext. U64 only; elsewhere the
-// commands exist and answer that TLS is not available. The target with the WiFi
-// module is the Nios II one (wifi_tls.cc is not built for the others).
-#if (U64 == 1) && defined(NIOS)
+// keeps the TCP socket and carries the ciphertext. Ultimate 64 products only; elsewhere the
+// commands exist and answer that TLS is not available. The targets with a WiFi
+// module are the Nios II one and the U64-II one (U64 == 2); the RISC-V U64 target (U64 == 1, no NIOS) has no wifi_tls.cc.
+#if (U64 == 2) || ((U64 == 1) && defined(NIOS))
 #define NET_TLS 1
 #else
 #define NET_TLS 0
