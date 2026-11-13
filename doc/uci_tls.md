@@ -19,6 +19,10 @@ sees plaintext. Implementation: `software/io/network/network_target_tls.cc` (Ult
 - TLS is built for the Ultimate 64 (Nios II) and for the Ultimate 64 Elite II and the C64 Ultimate, which run the
   session on their WiFi module. Every other build has the commands without TLS, see
   [Builds without TLS](#builds-without-tls).
+- On the Ultimate 64 Elite II and the C64 Ultimate the WiFi module's radio may be off (WiFi disabled, wired network).
+  The module then seeds TLS from its ADC entropy source, which counts: ready bit 1 is set and a handshake does not
+  end in 87. The module reads its voltages every 10 s with that ADC; a draw that meets the read waits for it (at most 50 ms)
+  and is only delayed, not failed. A radio start or stop holds the source longer, and a draw that meets one fails with 87.
 
 ## Commands
 
