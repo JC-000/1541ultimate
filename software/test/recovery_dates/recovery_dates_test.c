@@ -24,17 +24,32 @@ static void check(int condition, const char *what)
 
 // mbedTLS: BADCERT_EXPIRED 0x01, REVOKED 0x02, CN_MISMATCH 0x04, NOT_TRUSTED 0x08, BADCRL_NOT_TRUSTED 0x10
 #define OTHER_FLAGS 0x1Eu
+#define NOT_TRUSTED 0x08u
+
+static int inner_calls;
+
+static int fake_bundle(void *ctx, void *crt, int depth, uint32_t *flags)
+{
+    (void)ctx; (void)crt; (void)depth;
+    inner_calls++;
+    if (*flags != NOT_TRUSTED) {
+        return 0; // esp_crt_bundle.c: not exactly "not trusted": returns without a lookup
+    }
+    *flags = 0; // the issuer is in the bundle
+    return 0;
+}
 
 int main(void)
 {
     const int64_t good = RECOVERY_CLOCK_FLOOR + 1000;
 
     printf("The clock\n");
-    check(!recovery_clock_valid(false, good), "SNTP has not run: not valid, whatever time() says");
-    check(!recovery_clock_valid(true, 0), "SNTP says it ran but time() is 1970: not valid");
-    check(!recovery_clock_valid(true, RECOVERY_CLOCK_FLOOR - 1), "one second before 2024-01-01: not valid");
-    check(recovery_clock_valid(true, RECOVERY_CLOCK_FLOOR), "2024-01-01 with SNTP: valid");
-    check(recovery_clock_valid(true, good), "later with SNTP: valid");
+    check(!recovery_clock_valid(false, 0), "SNTP has not run and time() is 1970: not valid");
+    check(!recovery_clock_valid(false, RECOVERY_CLOCK_FLOOR - 1), "one second before 2024-01-01, no SNTP: not valid");
+    check(recovery_clock_valid(false, RECOVERY_CLOCK_FLOOR), "no SNTP but time() at 2024-01-01 (RTC kept over a soft restart): valid");
+    check(recovery_clock_valid(false, good), "no SNTP but time() later (soft restart): valid");
+    check(recovery_clock_valid(true, 0), "SNTP has set the clock: valid");
+    check(recovery_clock_valid(true, good), "SNTP and a late time(): valid");
 
     printf("Unknown clock: only the date flags go\n");
     check(recovery_date_policy(RECOVERY_X509_BADCERT_FUTURE, false) == 0, "not yet valid is cleared");
@@ -52,6 +67,28 @@ int main(void)
     check(recovery_date_policy(RECOVERY_X509_BADCERT_FUTURE, true) == RECOVERY_X509_BADCERT_FUTURE, "not yet valid stays");
     check(recovery_date_policy(RECOVERY_X509_DATE_FLAGS | OTHER_FLAGS, true) == (RECOVERY_X509_DATE_FLAGS | OTHER_FLAGS),
           "all flags stay");
+
+    printf("The callback order (a stand-in for esp_crt_verify_callback)\n");
+    // ESP-IDF's: only a certificate whose flags are exactly NOT_TRUSTED gets its issuer looked up in the bundle
+    // (found: flags cleared); any other flags come back unchanged, with a 0 result.
+    {
+        uint32_t f = RECOVERY_X509_BADCERT_FUTURE | NOT_TRUSTED;
+        bool cleared = false;
+        inner_calls = 0;
+        int r = recovery_verify(fake_bundle, NULL, NULL, 1, &f, false, &cleared);
+        check(r == 0 && f == 0, "unknown clock, 1970: not trusted + not yet valid ends with no flags (bundle lookup reached)");
+        check(cleared && inner_calls == 1, "... the policy reports it cleared a date flag; the inner callback ran once");
+        f = RECOVERY_X509_BADCERT_FUTURE | NOT_TRUSTED;
+        r = recovery_verify(fake_bundle, NULL, NULL, 1, &f, true, &cleared);
+        check(r == 0 && f == (RECOVERY_X509_BADCERT_FUTURE | NOT_TRUSTED) && !cleared,
+              "valid clock: the flags reach the inner callback as they are, and it leaves them");
+        f = NOT_TRUSTED;
+        r = recovery_verify(fake_bundle, NULL, NULL, 1, &f, false, &cleared);
+        check(r == 0 && f == 0 && !cleared, "no date flag: the bundle lookup runs, nothing cleared");
+        f = RECOVERY_X509_BADCERT_EXPIRED | OTHER_FLAGS;
+        r = recovery_verify(fake_bundle, NULL, NULL, 0, &f, false, &cleared);
+        check(r == 0 && f == OTHER_FLAGS, "unknown clock: the other flags survive the whole callback");
+    }
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -9,6 +9,7 @@
 
 #include <string.h>
 #include <strings.h>
+#include "sdkconfig.h"
 #include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -257,23 +258,30 @@ _Static_assert(RECOVERY_X509_BADCERT_FUTURE == MBEDTLS_X509_BADCERT_FUTURE, "mbe
 _Static_assert(RECOVERY_X509_BADCRL_EXPIRED == MBEDTLS_X509_BADCRL_EXPIRED, "mbedTLS flag value");
 _Static_assert(RECOVERY_X509_BADCRL_FUTURE == MBEDTLS_X509_BADCRL_FUTURE, "mbedTLS flag value");
 extern int esp_crt_verify_callback(void *buf, mbedtls_x509_crt *crt, int depth, uint32_t *flags);
+// esp_crt_verify_callback looks the issuer up in the bundle only for a certificate whose flags are exactly "not
+// trusted", and the chain top of most servers is not in the bundle itself but is issued by a root that is
+// (cross-signed). Both need this option, and the ca list's README says why.
+#if !CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY
+#error "recovery needs CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY: the built-in servers verify only through cross-signed chains"
+#endif
 
 static bool dates_unchecked_logged;
 
+static int bundle_verify(void *ctx, void *crt, int depth, uint32_t *flags)
+{
+    return esp_crt_verify_callback(ctx, (mbedtls_x509_crt *)crt, depth, flags);
+}
+
 static int recovery_verify_callback(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags)
 {
-    int ret = esp_crt_verify_callback(ctx, crt, depth, flags);
-    if (ret != 0) {
-        return ret;
-    }
+    bool cleared;
     bool valid = recovery_clock_valid(sntp_has_time(), (int64_t)time(NULL));
-    uint32_t kept = recovery_date_policy(*flags, valid);
-    if (kept != *flags && !dates_unchecked_logged) {
+    int ret = recovery_verify(bundle_verify, ctx, crt, depth, flags, valid, &cleared);
+    if (cleared && !dates_unchecked_logged) {
         dates_unchecked_logged = true;
         ESP_LOGW(TAG, "The clock is not set: certificate dates were not checked");
     }
-    *flags = kept;
-    return 0;
+    return ret;
 }
 
 static esp_err_t recovery_crt_attach(void *conf)
