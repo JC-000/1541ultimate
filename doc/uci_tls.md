@@ -267,6 +267,9 @@ Policy of the module's client, for both versions:
 - Key exchange groups, in order: x25519, secp256r1, secp384r1, secp521r1.
 - TLS 1.2 requires the extended master secret (else `13,...: NO EMS`). No renegotiation, no session tickets or
   resumption.
+- A TLS 1.3 KeyUpdate from the server is not supported (mbedTLS 4.1.1 treats it as an unexpected message): the READ or
+  WRITE that meets it fails with `16,TLS SESSION FAILED: -0x7700` and the handle is closed. Servers send a KeyUpdate
+  only near the record limit of the cipher, about 2^24 records, so a C64 transfer does not reach it.
 - A ServerHello without `supported_versions` is 18 under REQUIRE_TLS13; in default mode it is 19 only when its random
   ends in the downgrade sentinel, else 13. A protocol_version alert is always 14 with 70.
 
