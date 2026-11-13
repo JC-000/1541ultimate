@@ -25,18 +25,28 @@ static void check(int condition, const char *what)
 // mbedTLS: BADCERT_EXPIRED 0x01, REVOKED 0x02, CN_MISMATCH 0x04, NOT_TRUSTED 0x08, BADCRL_NOT_TRUSTED 0x10
 #define OTHER_FLAGS 0x1Eu
 #define NOT_TRUSTED 0x08u
+#define BAD_MD 0x4000u                // MBEDTLS_X509_BADCERT_BAD_MD
+#define VERIFY_FAILED (-0x2700)       // MBEDTLS_ERR_X509_CERT_VERIFY_FAILED
 
 static int inner_calls;
+static bool bundle_has_issuer = true;
+static bool signature_good = true;
 
+// esp_crt_verify_callback (ESP-IDF 6.0.3, esp_crt_bundle.c): a weak hash is ignored when comparing, anything other
+// than exactly "not trusted" comes back unchanged with 0; then the issuer is looked up in the bundle: found and
+// signed, the flags go; found but badly signed, or not found, it is an error and the flags stay
 static int fake_bundle(void *ctx, void *crt, int depth, uint32_t *flags)
 {
     (void)ctx; (void)crt; (void)depth;
     inner_calls++;
-    if (*flags != NOT_TRUSTED) {
-        return 0; // esp_crt_bundle.c: not exactly "not trusted": returns without a lookup
+    if ((*flags & ~BAD_MD) != NOT_TRUSTED) {
+        return 0;
     }
-    *flags = 0; // the issuer is in the bundle
-    return 0;
+    if (bundle_has_issuer && signature_good) {
+        *flags = 0;
+        return 0;
+    }
+    return VERIFY_FAILED;
 }
 
 int main(void)
@@ -88,6 +98,29 @@ int main(void)
         f = RECOVERY_X509_BADCERT_EXPIRED | OTHER_FLAGS;
         r = recovery_verify(fake_bundle, NULL, NULL, 0, &f, false, &cleared);
         check(r == 0 && f == OTHER_FLAGS, "unknown clock: the other flags survive the whole callback");
+
+        // The callback's own result and what it leaves are the caller's, whatever the policy cleared
+        bundle_has_issuer = false;
+        f = RECOVERY_X509_BADCERT_FUTURE | NOT_TRUSTED;
+        r = recovery_verify(fake_bundle, NULL, NULL, 1, &f, false, &cleared);
+        check(r == VERIFY_FAILED, "unknown clock, issuer not in the bundle: the callback's error is returned");
+        check(f == NOT_TRUSTED, "... and the trust flag is still on; only the date flag went");
+        bundle_has_issuer = true;
+        signature_good = false;
+        f = RECOVERY_X509_BADCERT_FUTURE | NOT_TRUSTED;
+        r = recovery_verify(fake_bundle, NULL, NULL, 1, &f, false, &cleared);
+        check(r == VERIFY_FAILED && f == NOT_TRUSTED, "unknown clock, bad signature: the error is returned, trust flag kept");
+        f = NOT_TRUSTED;
+        r = recovery_verify(fake_bundle, NULL, NULL, 1, &f, true, &cleared);
+        check(r == VERIFY_FAILED, "valid clock, bad signature: the error is returned");
+        signature_good = true;
+        f = RECOVERY_X509_BADCERT_FUTURE | NOT_TRUSTED | BAD_MD;
+        r = recovery_verify(fake_bundle, NULL, NULL, 1, &f, false, &cleared);
+        check(r == 0 && f == 0, "unknown clock, weak hash too: the bundle lookup still runs (BAD_MD is filtered) and clears all");
+        f = RECOVERY_X509_BADCERT_EXPIRED | NOT_TRUSTED | BAD_MD;
+        r = recovery_verify(fake_bundle, NULL, NULL, 1, &f, true, &cleared);
+        check(r == 0 && f == (RECOVERY_X509_BADCERT_EXPIRED | NOT_TRUSTED | BAD_MD),
+              "valid clock, expired + weak hash: not looked up, flags unchanged, so the handshake fails on the date");
     }
 
     printf("%d checks, %d failures\n", checks, failures);
