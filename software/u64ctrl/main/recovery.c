@@ -23,11 +23,16 @@
 #include "jtag.h"
 #include "pinout.h"
 #include "recovery.h"
+#include "recovery_dates.h"
 #include "recovery_image.h"
 #include "recovery_manifest.h"
 #include "recovery_url.h"
 #include "recovery_verify.h"
 #include "rpc_dispatch.h"
+#include "sntp.h"
+#include "mbedtls/ssl.h"
+#include "mbedtls/x509.h"
+#include "mbedtls/x509_crt.h"
 
 static const char *TAG = "recovery";
 
@@ -244,6 +249,42 @@ static esp_err_t on_http_event(esp_http_client_event_t *evt)
    body, with its status in `status`, or NULL when no response arrived. The URL
    the body came from goes to `final_url` when it is not NULL: the client's own
    esp_http_client_get_url() leaves out the port, so it is tracked here. */
+/* Certificate dates: a clock SNTP has not set makes every certificate "not yet valid" (recovery_dates.h). The
+   bundle's own verify callback does the chain, then the date flags are dropped while the clock is unknown. The
+   callback is esp_crt_bundle.c's; it is not in the header, but it is not static. */
+_Static_assert(RECOVERY_X509_BADCERT_EXPIRED == MBEDTLS_X509_BADCERT_EXPIRED, "mbedTLS flag value");
+_Static_assert(RECOVERY_X509_BADCERT_FUTURE == MBEDTLS_X509_BADCERT_FUTURE, "mbedTLS flag value");
+_Static_assert(RECOVERY_X509_BADCRL_EXPIRED == MBEDTLS_X509_BADCRL_EXPIRED, "mbedTLS flag value");
+_Static_assert(RECOVERY_X509_BADCRL_FUTURE == MBEDTLS_X509_BADCRL_FUTURE, "mbedTLS flag value");
+extern int esp_crt_verify_callback(void *buf, mbedtls_x509_crt *crt, int depth, uint32_t *flags);
+
+static bool dates_unchecked_logged;
+
+static int recovery_verify_callback(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags)
+{
+    int ret = esp_crt_verify_callback(ctx, crt, depth, flags);
+    if (ret != 0) {
+        return ret;
+    }
+    bool valid = recovery_clock_valid(sntp_has_time(), (int64_t)time(NULL));
+    uint32_t kept = recovery_date_policy(*flags, valid);
+    if (kept != *flags && !dates_unchecked_logged) {
+        dates_unchecked_logged = true;
+        ESP_LOGW(TAG, "The clock is not set: certificate dates were not checked");
+    }
+    *flags = kept;
+    return 0;
+}
+
+static esp_err_t recovery_crt_attach(void *conf)
+{
+    esp_err_t err = esp_crt_bundle_attach(conf);
+    if (err == ESP_OK && conf) {
+        mbedtls_ssl_conf_verify((mbedtls_ssl_config *)conf, recovery_verify_callback, NULL);
+    }
+    return err;
+}
+
 static esp_http_client_handle_t http_open(const char *get_url, int *status, char *final_url, size_t final_size)
 {
     static char current[256];
@@ -251,11 +292,12 @@ static esp_http_client_handle_t http_open(const char *get_url, int *status, char
     esp_http_client_config_t cfg = {
         .url = get_url,
         .timeout_ms = 15000,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .crt_bundle_attach = recovery_crt_attach,
         .buffer_size = READ_SIZE,
         .buffer_size_tx = 1024,
         .event_handler = on_http_event,
     };
+    dates_unchecked_logged = false;
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
         return NULL;
