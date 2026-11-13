@@ -66,7 +66,7 @@ $(OUTPUT)/voltages_extract.c: $(SRC)/u64ctrl/main/rpc_dispatch.c
 
 $(RESULT)/voltages: $(OUTPUT)/voltages_extract.c $(TESTDIR)/voltages_test.c
 	@mkdir -p $(RESULT)
-	$(CC) -std=gnu11 -g -O0 $(WARN) -I$(OUTPUT) -I$(TESTDIR)/stub -I$(SRC)/u64ctrl/main -I$(SRC)/wifi/common \
+	$(CC) -std=gnu11 -g -O0 $(WARN) -I$(OUTPUT) -I$(TESTDIR)/stub -I$(SRC)/u64ctrl/main -I$(SRC)/wifi/common -I$(SRC)/wifi/tls \
 	    -o $@ $(TESTDIR)/voltages_test.c
 
 test: all

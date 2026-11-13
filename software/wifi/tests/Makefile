@@ -29,7 +29,7 @@ INC_raw_u64 := -I$(PATH_SW)/wifi/common -I$(PATH_SW)/wifi/tls
 INC_raw_c3  := -I$(PATH_SW)/wifi/common
 # u64ctrl's rpc_calls.h and wifi_modem.h include rpc_shared.h and radio_entropy.h from there. It has no radio
 # switch: module_env.h does not count it as one, although radio_boot.h is on its path now
-INC_u64ctrl := -I$(PATH_SW)/wifi/common
+INC_u64ctrl := -I$(PATH_SW)/wifi/common -I$(PATH_SW)/wifi/tls
 
 HOSTTEST := $(PATH_SW)/io/usb/tests
 CASES    := $(wildcard module_*_test.cpp)
