@@ -576,7 +576,11 @@ void dispatch(void *ct)
             cmd_not_implemented(pbuffer);
             break;
         }
-        tls_rpc_note_block((esp_timer_get_time() - start) / 1000);
+        // MACHINE_OFF and MACHINE_REBOOT sleep 1 s and 3 s on purpose, to power the machine down and up; that is
+        // not the dispatcher being held against traffic, so it is not counted in TLS_STATS block_max_ms.
+        if (hdr->command != CMD_MACHINE_OFF && hdr->command != CMD_MACHINE_REBOOT) {
+            tls_rpc_note_block((esp_timer_get_time() - start) / 1000);
+        }
     }
 }
 

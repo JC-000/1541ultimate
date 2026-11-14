@@ -89,6 +89,9 @@ SETTINGS = (
 )
 REQUIRED_SETTING = "Command Interface"
 WIFI_SETTING = "WiFi Enabled"
+# U64 == 2 products (Elite II, C64 Ultimate; names as net_target_test.U64_MK2_PRODUCTS). The module serves
+# TLS over Ethernet with the radio off there, so "WiFi Enabled" is neither required nor set.
+RADIO_OPTIONAL_PRODUCTS = ("Ultimate 64-II", "C64 Ultimate")
 # INFO $FF [4]: module, entropy, trusted time. How long the module and SNTP may
 # take to come up after the settings above.
 READY_BITS = 0x07
@@ -1308,7 +1311,7 @@ def lock_check(host: str, require: bool = False) -> dict:
                   f"the device. Run under its lock, or wait")
 
 
-def apply_settings(device, set_wifi: bool, original: dict, header: dict) -> dict:
+def apply_settings(device, set_wifi: bool, original: dict, header: dict, product: str = "") -> dict:
     """Read every setting first; refuse before writing anything; then set and read back.
 
     `original` is the caller's, filled as each setting is written, so whatever
@@ -1326,7 +1329,10 @@ def apply_settings(device, set_wifi: bool, original: dict, header: dict) -> dict
                 before[item] = "absent"
         detail(json.dumps(before))
     wifi = before.get(WIFI_SETTING, "absent")
-    if wifi != "absent" and wifi.strip() != "Enabled" and not set_wifi:
+    radio_optional = product in RADIO_OPTIONAL_PRODUCTS
+    if radio_optional:
+        detail(f"{product}: TLS works with the radio off; {WIFI_SETTING} {wifi!r} is left as it is")
+    elif wifi != "absent" and wifi.strip() != "Enabled" and not set_wifi:
         # One-way on the U64: switching it on cannot be undone by this suite, so
         # only an explicit --set-wifi may do it.
         raise SetupRefused(f"{WIFI_SETTING} is {wifi!r}; this suite needs it 'Enabled' and does "
@@ -1334,6 +1340,9 @@ def apply_settings(device, set_wifi: bool, original: dict, header: dict) -> dict
                            f"was changed")
     applied = {}
     for category, item, value, restore in SETTINGS:
+        if radio_optional and item == WIFI_SETTING:
+            applied[item] = before[item]
+            continue
         with check(f"set {category} / {item} = {value}"):
             current = before[item]
             if current == "absent":
@@ -1549,7 +1558,7 @@ def main(argv=None) -> int:
             header["device"] = {"product": info.product, "firmware_version": info.firmware_version,
                                 "fpga_version": info.fpga_version, **info.extra}
             detail(json.dumps(header["device"]))
-        header["settings"] = apply_settings(device, args.set_wifi, original, header)
+        header["settings"] = apply_settings(device, args.set_wifi, original, header, info.product)
         touched = True
         with check("reset the C64 so nothing another program left is still driving the UCI"):
             computer.machine.reset(force=True)
