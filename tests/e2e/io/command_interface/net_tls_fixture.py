@@ -25,6 +25,7 @@ A server is one listening socket and a thread per connection, with one
 `Behaviour`. The device reaches it at this machine's address on the route to
 the device, as net_target_test.py's Peer does.
 """
+from __future__ import annotations
 
 import datetime
 import hashlib
@@ -139,7 +140,7 @@ class Pki:
     def _name(cn: str) -> x509.Name:
         return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
 
-    def _ca(self, cn, key, issuer, issuer_key, now) -> "x509.Certificate":
+    def _ca(self, cn, key, issuer, issuer_key, now) -> x509.Certificate:
         day = datetime.timedelta(days=1)
         builder = (x509.CertificateBuilder()
                    .subject_name(self._name(cn))
@@ -203,8 +204,8 @@ class Pki:
 @dataclass
 class Behaviour:
     """What one server does with each connection."""
-    min_version: "ssl.TLSVersion" = ssl.TLSVersion.TLSv1_3
-    max_version: "ssl.TLSVersion" = ssl.TLSVersion.TLSv1_3
+    min_version: ssl.TLSVersion = ssl.TLSVersion.TLSv1_3
+    max_version: ssl.TLSVersion = ssl.TLSVersion.TLSv1_3
     # OpenSSL cipher string for TLS 1.2; TLS 1.3 suites are left at their default.
     ciphers: str | None = None
     # One curve name ("prime256v1"), to force an HRR or a P-256 group.

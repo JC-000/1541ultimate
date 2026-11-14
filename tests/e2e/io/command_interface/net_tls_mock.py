@@ -25,6 +25,7 @@ simulated, a READ takes what the socket has, and the group is reported as
 x25519 because Python's ssl does not expose the negotiated one. Nothing here
 is evidence about a device.
 """
+from __future__ import annotations
 
 import hashlib
 import ipaddress
