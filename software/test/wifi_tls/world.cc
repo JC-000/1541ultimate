@@ -19,6 +19,9 @@ std::string world_trace;
 int world_suspended;
 int world_transmits;
 int world_isr_calls;
+int world_frees;
+int world_free_unsuspended;
+bool world_stale_next;
 
 #define QUEUE_DEPTH 4 // as wifi_cmd.cc creates it
 #define RX_BUFFERS  16
@@ -73,6 +76,9 @@ void world_reset(uint32_t seed, world_maker_t maker, bool quiet)
     world_suspended = 0;
     world_transmits = 0;
     world_isr_calls = 0;
+    world_frees = 0;
+    world_free_unsuspended = 0;
+    world_stale_next = false;
     rx_next = 0;
     last_tx_size = -1;
     // Now and then start just short of the tick counter wrapping.
@@ -101,6 +107,10 @@ static void isr_deliver(void)
     uint32_t generation = uart.generation;
     if (!calm && (world_rand(10) == 0)) {
         generation--; // tagged before a reset that has since happened
+    }
+    if (world_stale_next) {
+        generation--; // tagged before a reset that has since happened
+        world_stale_next = false;
     }
     world_isr_calls++;
     if (!dedicated_waiting) {
@@ -237,6 +247,10 @@ BaseType_t DmaUART::TransmitPacket(command_buf_t *buf, uint16_t *ms)
 
 BaseType_t DmaUART::FreeBuffer(command_buf_t *buf)
 {
+    world_frees++;
+    if (!world_suspended) {
+        world_free_unsuspended++;
+    }
     trace("free b%x%s\n", buf->bufnr, world_suspended ? "" : " (not suspended)");
     return pdTRUE;
 }

@@ -17,14 +17,17 @@ the self-test can show that scenario turning red:
   "group-zero"          the OPEN reply's group is 0 (S2 must catch it)
   "info-ff-claims"      `03 23 FF` claims every session (S19e2b must catch it)
   "no-notify-reply"     the peer's close_notify is not answered with ours (S6 must catch it)
-  "abort-shortens"      an ABORT ends PROCESSING early: bit 2 clears at the ABORT,
-                        while the open still completes behind it (S19e must catch it)
+  "abort-ignored"       an ABORT does not cancel an OPEN: it runs to its end and
+                        leaves an unclaimed session (S19e, S19e2b must catch it)
+  "abort-leaves-entry"  an ABORT ends the OPEN within a slice, but the session it
+                        had begun stays open (S19e, S19e2b must catch it)
 
 It is a model of the contract, not of the firmware: timings are not
 simulated, a READ takes what the socket has, and the group is reported as
 x25519 because Python's ssl does not expose the negotiated one. Nothing here
 is evidence about a device.
 """
+from __future__ import annotations
 
 import hashlib
 import ipaddress
@@ -47,9 +50,10 @@ except ImportError:  # pragma: no cover
     x509 = None
 
 MUTANTS = ("bundle-accepts-all", "release-noop", "group-zero", "info-ff-claims",
-           "abort-shortens", "no-notify-reply")
+           "abort-ignored", "abort-leaves-entry", "no-notify-reply")
 FLAVOURS = ("tls", "stock", *MUTANTS)
 MAX_TLS = 2
+ABORT_SLICE = 0.1    # a cancelled wait ends within one slice of the ABORT
 
 SUITES = {
     "TLS_AES_128_GCM_SHA256": 0x1301, "TLS_AES_256_GCM_SHA384": 0x1302,
@@ -120,13 +124,22 @@ class MockDevice(Link):
 
     def abort_in_flight(self, command: bytes, abort_after: float,
                         bound: float | None = None) -> AbortedCommand:
-        # ABORT never shortens a command: it runs to its end, and only
-        # its reply is dropped.
+        # An ABORT cancels an OPEN_TLS / START_TLS within a slice and the module
+        # closes the session the command had begun (doc/uci_tls.md); the
+        # "abort-ignored" mutant lets it run to its end instead, and
+        # "abort-leaves-entry" ends it early but keeps the session.
+        before = set(self.handles)
         started = time.monotonic()
         self._dispatch(command)
         elapsed = time.monotonic() - started
-        if self.flavour == "abort-shortens":
-            elapsed = abort_after
+        if self.flavour != "abort-ignored":
+            elapsed = abort_after + ABORT_SLICE
+            if self.flavour != "abort-leaves-entry":
+                for handle in set(self.handles) - before:
+                    try:
+                        self.handles.pop(handle).sock.close()
+                    except OSError:
+                        pass
         self.log.append({"t": round(time.time(), 3), "link": self.name,
                          "command": command.hex(" "), "abort_after": abort_after,
                          "busy_at_abort": True, "bit2_cleared_after": round(elapsed, 3)})

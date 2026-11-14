@@ -965,7 +965,12 @@ def s19e2b_info_does_not_claim(ctx: Ctx) -> None:
     slow = ctx.server("ecdsa", fx.Behaviour(delay_handshake=SLOW_HANDSHAKE_SECONDS))
     a = ctx.expect_open(fast.port, ctx.bind_ip, pin=pin_of(ctx)).handle
     try:
-        with check("OPEN A, accept it, unused; ABORTed OPEN B leaves nothing: `03 23 FF` [2] = 1, [14] = 0; $25 -> 0"):
+        with check("OPEN A, accept it, unused; `03 23 FF` twice: [2] = 1, [14] = 1 both times (INFO claims nothing)"):
+            for _ in range(2):
+                cap = ctx.info_ff()
+                if (cap.entries, cap.unclaimed) != (1, 1):
+                    raise Failure(f"[2] = {cap.entries}, [14] = {cap.unclaimed}")
+        with check("ABORTed OPEN B leaves no entry: `03 23 FF` [2] = 1, [14] = 0; $25 -> 0"):
             ctx.link.abort_in_flight(open_tls_command(slow.port, ctx.bind_ip, TRUST_PIN,
                                                       pin=pin_of(ctx)), ABORT_AFTER_SECONDS)
             cap = ctx.info_ff()
