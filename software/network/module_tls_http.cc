@@ -302,7 +302,10 @@ bool ModuleTlsHttpProvider::available() const
 HttpConnection *ModuleTlsHttpProvider::create_connection(const OperationCancellation& token)
 {
     if (!available() || token.cancelled()) return 0;
-    if (__atomic_exchange_n(&occupied_, true, __ATOMIC_ACQ_REL)) return 0;
+    // Only the UCI Server task creates a connection and only a connection's owner clears this, a byte store;
+    // the core has no atomic read-modify-write.
+    if (occupied_) return 0;
+    occupied_ = true;
     Connection *connection = new Connection(*this, token);
     if (!connection) occupied_ = false;
     return connection;
