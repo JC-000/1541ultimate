@@ -29,6 +29,7 @@ struct Scenario {
     bool no_time = false;                  // the clock is not trustworthy
     bool slot_free = true;
     bool connect_fails = false;
+    bool open_unanswered = false;          // the module starts the session but its OPEN answer is lost
     bool no_length = false;                // no Content-Length: the body runs to the end of the connection
     int cut = 0;                           // bytes of the body the server never sends
     int fragment = 5;                      // the most bytes one recv hands over
@@ -140,7 +141,7 @@ int wifi_tls_open(const wifi_tls_open_t *open, uint32_t, const wifi_tls_cancel_t
     }
     Session& s = sessions[open->slot];
     s = Session(); s.live = true; s.tag = open->tag; s.state = WIFI_TLS_HANDSHAKING;
-    return 0;
+    return sc.open_unanswered ? WIFI_TLS_BUSY : 0;
 }
 int wifi_tls_step(uint8_t slot, uint16_t tag, wifi_tls_step_t *st, uint32_t, const wifi_tls_cancel_t *cancel)
 {
@@ -329,6 +330,56 @@ int main()
         reset(Scenario());
         target.begin_command(events.token());
         expect(get(target, URL).data == "{\"answer\":42}", "a fresh command works after a cancelled one");
+    }
+    {   // M5: an OPEN nobody answers may still have started the session: the CLOSE goes out all the same.
+        Scenario s; s.open_unanswered = true;
+        reset(s);
+        ModuleTlsHttpProvider provider(port, 20000, 500);
+        HttpTarget target(7, &provider);
+        Reply r = get(target, URL);
+        expect(r.status == "503 SERVICE UNAVAILABLE" && request_seen.empty(), "an unanswered OPEN fails the request");
+        expect(module_closes == 1 && !sessions[1].live && !sessions[0].live, "an unanswered OPEN: a CLOSE frees the module's session");
+        balanced("released after an unanswered OPEN");
+    }
+    {   // M3, below HttpTarget: the connection itself stops for the token, at open, during the handshake and mid-read.
+        const char *req = "GET /probe HTTP/1.1\r\nHost: secure.test\r\n\r\n";
+        char buf[64];
+        {   CancellationSource events; reset(Scenario());
+            ModuleTlsHttpProvider provider(port, 20000, 500);
+            OperationCancellation token = events.token();
+            events.signal();
+            HttpConnection *c = provider.create_connection(token);
+            expect(!c, "a connection is not made for a cancelled token");
+            if (c) delete c;
+            balanced("nothing held for a cancelled token");
+        }
+        {   CancellationSource events; reset(Scenario());
+            ModuleTlsHttpProvider provider(port, 20000, 500);
+            HttpConnection *c = provider.create_connection(events.token());
+            events.signal();     // after the connection exists, before open
+            expect(c && c->open("secure.test", 443) != 0 && !connects && !module_opens, "open for a token cancelled before it: refused, nothing opened");
+            delete c;
+            balanced("released after a cancelled open");
+        }
+        {   CancellationSource events; reset(Scenario());
+            ModuleTlsHttpProvider provider(port, 20000, 500);
+            HttpConnection *c = provider.create_connection(events.token());
+            expect(c && c->open("secure.test", 443) == 0, "uncancelled: open works");
+            events.signal();     // established, then cancelled
+            expect(c->write(req, (int)strlen(req)) < 0 && request_seen.empty(), "write after cancellation fails, nothing sent");
+            delete c;
+            balanced("released after a cancelled write");
+        }
+        {   CancellationSource events; Scenario s; s.cancel_on_request = &events;
+            reset(s);
+            ModuleTlsHttpProvider provider(port, 20000, 500);
+            HttpConnection *c = provider.create_connection(events.token());
+            expect(c && c->open("secure.test", 443) == 0, "opened; the token is cancelled as the request reaches the server");
+            c->write(req, (int)strlen(req));
+            expect(c->read(buf, sizeof(buf)) < 0, "read after cancellation fails");
+            delete c;
+            balanced("released after a cancelled read");
+        }
     }
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
