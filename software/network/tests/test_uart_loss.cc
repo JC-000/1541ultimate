@@ -13,10 +13,19 @@ static bool in_clear;
 static unsigned raced, suspends, resumes, unserialized;
 static void preempt_point() { if (in_clear && !uart_scheduler_suspended) ++raced; }
 void vTaskSuspendAll(void) { ++suspends; ++uart_scheduler_suspended; }
-BaseType_t xTaskResumeAll(void) { assert(uart_scheduler_suspended); --uart_scheduler_suspended; ++resumes; return pdFALSE; }
+static DmaUART *clearing; static uint32_t generation_at_start;
+static unsigned resumed_early;
+// The scheduler must not be resumed before the reset is counted in the generation.
+BaseType_t xTaskResumeAll(void) {
+    assert(uart_scheduler_suspended); --uart_scheduler_suspended; ++resumes;
+    if (clearing && clearing->generation == generation_at_start) ++resumed_early;
+    return pdFALSE;
+}
 static void loss() {
     if (in_clear && !uart_scheduler_suspended) ++unserialized;
-    expect(in_isr || uart_critical_depth || uart_scheduler_suspended, "loss callback serialized");
+    // Suspending the scheduler does not stop the DMA interrupt, which calls the callback too: only a critical section (or
+    // being the interrupt) serializes it.
+    expect(in_isr || uart_critical_depth, "loss callback serialized against the interrupt");
     preempt_point();
     ++losses;
 }
@@ -54,7 +63,9 @@ int main()
     irq(uart,1); expect(losses == 1 && callbacks == 1 && frees == 0, "accepted receive preserves ownership");
     have_receive = false; irq(uart,1);
     expect(losses == 2 && frees == 0, "missing DMA buffer signals loss without invented free");
-    in_clear = true; uart.ClearRxBuffer(); in_clear = false;
+    clearing = &uart; generation_at_start = uart.generation;
+    in_clear = true; uart.ClearRxBuffer(); in_clear = false; clearing = NULL;
+    expect(resumed_early == 0, "scheduler resumed only after the generation counted the reset");
     expect(losses == 3 && resets == 1, "receive reset signals loss");
     expect(suspends == 1 && resumes == 1 && uart_scheduler_suspended == 0, "receive reset suspends the scheduler once and resumes it");
     expect(raced == 0 && unserialized == 0, "no other task runs inside the receive reset or its loss callback");
