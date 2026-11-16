@@ -29,6 +29,7 @@ struct Scenario {
     bool no_time = false;                  // the clock is not trustworthy
     bool slot_free = true;
     bool connect_fails = false;
+    int open_unsent = 0, step_unsent = 0, close_unsent = 0; // answer UNSENT this many times first: another caller holds the thread
     bool open_unanswered = false;          // the module starts the session but its OPEN answer is lost
     bool no_length = false;                // no Content-Length: the body runs to the end of the connection
     int cut = 0;                           // bytes of the body the server never sends
@@ -133,6 +134,7 @@ struct Session {
 int wifi_tls_open(const wifi_tls_open_t *open, uint32_t, const wifi_tls_cancel_t *, int *esp_err, uint8_t *reason)
 {
     *esp_err = 0; *reason = 0;
+    if (sc.open_unsent > 0) { --sc.open_unsent; return WIFI_TLS_UNSENT; }
     ++module_opens;
     last_trust = open->trust; last_time_source = open->time_source;
     last_sni.assign(open->sni ? open->sni : "", open->sni ? open->sni_len : 0);
@@ -145,6 +147,7 @@ int wifi_tls_open(const wifi_tls_open_t *open, uint32_t, const wifi_tls_cancel_t
 }
 int wifi_tls_step(uint8_t slot, uint16_t tag, wifi_tls_step_t *st, uint32_t, const wifi_tls_cancel_t *cancel)
 {
+    if (sc.step_unsent > 0 && true) { --sc.step_unsent; return WIFI_TLS_UNSENT; }
     ++module_steps;
     if (cancel && cancel->cancelled && cancel->cancelled(cancel->context)) return WIFI_TLS_BUSY;
     Session& s = sessions[slot];
@@ -186,6 +189,7 @@ int wifi_tls_step(uint8_t slot, uint16_t tag, wifi_tls_step_t *st, uint32_t, con
 int wifi_tls_close(uint8_t slot, uint16_t tag, uint8_t *ct_out, uint16_t room, uint16_t *ct_out_len, int *esp_err,
                    uint32_t, const wifi_tls_cancel_t *)
 {
+    if (sc.close_unsent > 0) { --sc.close_unsent; return WIFI_TLS_UNSENT; }
     ++module_closes;
     *esp_err = 0; *ct_out_len = 0;
     Session& s = sessions[slot];
@@ -357,6 +361,25 @@ int main()
             expect(c && c->open("1.example.com", 443) == 0 && last_sni == "1.example.com", "1.example.com is a name");
             delete c;
         }
+    }
+    {   // Target 3 holds the module thread: UNSENT is sent again until the request's deadline (OPEN, STEP) or the cleanup budget (CLOSE).
+        Scenario s; s.open_unsent = 100; s.step_unsent = 100; s.close_unsent = 15;
+        reset(s);
+        ModuleTlsHttpProvider provider(port, 20000, 1000);
+        HttpTarget target(7, &provider);
+        Reply r = get(target, URL);
+        expect(r.status.compare(0, 15, "HTTP/1.1 200 OK") == 0 && r.data == "{\"answer\":42}", "UNSENT 100 times on OPEN and on STEP: the request still succeeds");
+        expect(module_closes == 1 && !sessions[0].live && !sessions[1].live && notifies_seen == 1, "UNSENT on the cleanup CLOSE: sent again within its budget");
+        balanced("released after UNSENT everywhere");
+    }
+    {   // ... but not past the deadline.
+        Scenario s; s.open_unsent = 100000;
+        reset(s);
+        ModuleTlsHttpProvider provider(port, 8000, 500);
+        HttpTarget target(7, &provider);
+        Reply r = get(target, URL);
+        expect(r.status == "503 SERVICE UNAVAILABLE" && fake_now <= 1000 + 8000 + 600, "UNSENT without end: the request fails at its deadline");
+        balanced("released after an OPEN that is never sent");
     }
     {   // M5: an OPEN nobody answers may still have started the session: the CLOSE goes out all the same.
         Scenario s; s.open_unanswered = true;

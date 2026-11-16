@@ -12,7 +12,6 @@
 #define SEND_MS            5000
 #define NOTIFY_SEND_MS     100
 #define SLICE_MS           100   // the longest a wait goes without looking at the token
-#define UNSENT_RETRIES     10
 #define UNSENT_DELAY_MS    50
 #define AGAIN_DELAY_MS     5
 #define WRITE_CHUNK        512   // plaintext per step, so that its record fits one step's ciphertext room
@@ -72,7 +71,7 @@ class ModuleTlsHttpProvider::Connection : public HttpConnection
             uint32_t budget = left(RPC_STEP_MS);
             if (!budget) return WIFI_TLS_BUSY;
             result = wifi_tls_step(slot_, tag_, st, budget, &c);
-            if (result != WIFI_TLS_UNSENT || i == UNSENT_RETRIES || stop()) break;
+            if (result != WIFI_TLS_UNSENT || stop()) break; // until the request's deadline
             port_.sleep_ms(UNSENT_DELAY_MS);
         }
         return result;
@@ -119,7 +118,7 @@ class ModuleTlsHttpProvider::Connection : public HttpConnection
             uint32_t budget = left(RPC_OPEN_MS);
             if (!budget) break;
             result = wifi_tls_open(&open, budget, &c, &esp_err, &reason);
-            if (result != WIFI_TLS_UNSENT || i == UNSENT_RETRIES || stop()) break;
+            if (result != WIFI_TLS_UNSENT || stop()) break; // until the request's deadline
             port_.sleep_ms(UNSENT_DELAY_MS);
         }
         if (result == WIFI_TLS_NO_MODULE || result == WIFI_TLS_REFUSED) return -1;
@@ -292,7 +291,15 @@ public:
         if (live_) {
             uint16_t notify = 0;
             int esp_err = 0;
-            int result = wifi_tls_close(slot_, tag_, ct_, sizeof(ct_), &notify, &esp_err, provider_.cleanup_ms_, NULL);
+            // Another caller may hold the module thread: sent again, within the cleanup budget.
+            uint32_t end = port_.now_ms() + provider_.cleanup_ms_;
+            int result;
+            while (true) {
+                int32_t room = (int32_t)(end - port_.now_ms());
+                result = wifi_tls_close(slot_, tag_, ct_, sizeof(ct_), &notify, &esp_err, room > 0 ? (uint32_t)room : 1, NULL);
+                if (result != WIFI_TLS_UNSENT || (int32_t)(end - port_.now_ms()) <= UNSENT_DELAY_MS) break;
+                port_.sleep_ms(UNSENT_DELAY_MS);
+            }
             if (result == 0 && notify && sock_ >= 0) {
                 port_.tcp_send(sock_, ct_, notify, NOTIFY_SEND_MS, NULL);
             }
