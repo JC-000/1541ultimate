@@ -38,6 +38,9 @@ struct Scenario {
     int close_cost_ms = 0, close_max_ms = 0; // the local socket disposal takes this long, and the port says it can take at most that
     bool notify_blocks = false;            // the peer takes nothing: the close_notify send uses its whole budget
     int late_step_ms = 0;                  // a STEP, once the request is out, takes this long (the clock moves)
+    int late_final_ms = 0;                 // so does the STEP of a write that takes no more input (its last one)
+    int close_busy = 0;                    // CLOSE: sent but not answered (BUSY) this many times first; the session stays
+    int close_refused = 0;                 // CLOSE: refused with this esp_err (the session stays), when not zero
     CancellationSource *cancel_on_request = NULL;
 };
 static Scenario sc;
@@ -199,12 +202,15 @@ int wifi_tls_step(uint8_t slot, uint16_t tag, wifi_tls_step_t *st, uint32_t, con
     memcpy(st->ct_out, out.data(), out.size()); st->ct_out_len = (uint16_t)out.size();
     st->state = s.state;
     if (sc.late_step_ms && !request_seen.empty() && st->ct_in_len) fake_now += sc.late_step_ms;
+    if (sc.late_final_ms && (st->flags & WIFI_TLS_STEP_NO_READ) && !st->pt_in_len && !out.size()) fake_now += sc.late_final_ms;
     return 0;
 }
 int wifi_tls_close(uint8_t slot, uint16_t tag, uint8_t *ct_out, uint16_t room, uint16_t *ct_out_len, int *esp_err,
                    uint32_t, const wifi_tls_cancel_t *)
 {
     if (sc.close_unsent > 0) { --sc.close_unsent; return WIFI_TLS_UNSENT; }
+    if (sc.close_busy > 0) { --sc.close_busy; return WIFI_TLS_BUSY; }
+    if (sc.close_refused) { *esp_err = sc.close_refused; return WIFI_TLS_REFUSED; }
     ++module_closes;
     *esp_err = 0; *ct_out_len = 0;
     Session& s = sessions[slot];
@@ -554,6 +560,51 @@ int main()
         reset(s);
         ModuleTlsHttpProvider provider(port, 20000, 500);
         expect(!provider.available() && !provider.create_connection(OperationCancellation()), "cleanup bound: not available when the socket disposal alone can take all of it");
+    }
+    {   // The end of the stream is a result like any other: not handed out once the token or the deadline says stop.
+        const char *req = "GET /probe HTTP/1.1\r\nHost: secure.test\r\n\r\n";
+        static char big[4096];
+        for (int phase = 0; phase < 4; ++phase) {
+            CancellationSource events; Scenario s; s.fragment = 4000; s.no_length = phase >= 2; s.body = "tail";
+            reset(s);
+            ModuleTlsHttpProvider provider(port, 20000, 500);
+            HttpConnection *c = provider.create_connection(events.token());
+            expect(c && c->open("secure.test", 443) == 0, "end of stream: opened");
+            c->write(req, (int)strlen(req));
+            int n = c->read(big, sizeof(big));
+            expect(n > 0 && std::string(big, n).find("tail") != std::string::npos, "end of stream: the whole response arrives in time");
+            if (phase % 2 == 0) events.signal(); else fake_now += 20000;
+            expect(c->read(big, sizeof(big)) < 0, phase == 0 ? "end of stream after cancellation is a failure, not a clean end"
+                                                  : phase == 1 ? "end of stream after the deadline is a failure, not a clean end"
+                                                  : phase == 2 ? "unframed body: the end after cancellation is a failure"
+                                                               : "unframed body: the end after the deadline is a failure");
+            delete c;
+        }
+    }
+    {   // write() does not report success for a request whose last step ended after the deadline.
+        const char *req = "GET /probe HTTP/1.1\r\nHost: secure.test\r\n\r\n";
+        Scenario s; s.late_final_ms = 25000;
+        reset(s);
+        ModuleTlsHttpProvider provider(port, 20000, 500);
+        HttpConnection *c = provider.create_connection(OperationCancellation());
+        expect(c && c->open("secure.test", 443) == 0, "late write: opened");
+        expect(c->write(req, (int)strlen(req)) < 0, "a write whose last step ended after the deadline fails");
+        delete c;
+        balanced("released after a late write");
+    }
+    {   // A CLOSE that was sent but not answered (BUSY), or refused for any reason but "no such session", has not
+        // freed the session: the slot stays withheld.
+        for (int phase = 0; phase < 2; ++phase) {
+            Scenario s; if (phase == 0) s.close_busy = 1; else s.close_refused = 0x102;
+            reset(s);
+            ModuleTlsHttpProvider provider(port, 20000, 500);
+            HttpTarget target(7, &provider);
+            Reply r = get(target, URL);
+            expect(r.data == "{\"answer\":42}", "unconfirmed CLOSE: the exchange succeeded");
+            expect(lent[1] && slots_given == 0 && sessions[1].live,
+                   phase == 0 ? "a CLOSE that got no answer (BUSY) keeps the slot withheld"
+                              : "a CLOSE refused for another reason than 'no such session' keeps the slot withheld");
+        }
     }
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

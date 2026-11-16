@@ -307,7 +307,7 @@ public:
             if (st.state == WIFI_TLS_FAILED || st.state == WIFI_TLS_CLOSED) live_ = false;
             if (!send_out(ct_, st.ct_out_len) || st.state != WIFI_TLS_ESTABLISHED) return fail();
             if (result == 0) taken = true;
-            if (taken && st.ct_out_len == 0) return n;
+            if (taken && st.ct_out_len == 0) return stop() ? fail() : n;
             if (result == WIFI_TLS_AGAIN) port_.sleep_ms(AGAIN_DELAY_MS);
         }
         return fail();
