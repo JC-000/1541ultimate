@@ -341,6 +341,8 @@ int NetworkTarget :: tls_in_use(bool unclaimed_only)
     for (int i = 0; i < NET_MAX_TLS; i++) {
         if (tls[i].used && (!unclaimed_only || !tls[i].claimed)) {
             n++;
+        } else if (!unclaimed_only && !tls[i].used && (tls_lent & (1u << i))) {
+            n++; // lent to target 6: not free for an OPEN_TLS
         }
     }
     return n;

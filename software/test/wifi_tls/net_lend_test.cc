@@ -220,6 +220,19 @@ int main(int argc, char **argv)
     h = open_status(&st);
     check(h >= 0 && st == "00,OK" && !lent_in_hook, "loan during the OPEN: no slot to lend while the OPEN holds its own (got %s)", st.c_str());
     world_open_hook = NULL;
+    NetworkTarget::tls_return_slot(a);
+    // INFO $FF counts a slot lent to target 6 as in use, and a returned one as free.
+    fresh();
+    uint8_t lent_a, lent_b;
+    uint16_t lent_ta, lent_tb;
+    check(run(B({ 0x03, 0x23, 0xFF })).data[2] == 0, "info: nothing in use at first");
+    NetworkTarget::tls_lend_slot(&lent_a, &lent_ta);
+    check(run(B({ 0x03, 0x23, 0xFF })).data[2] == 1, "info: one slot lent -> 1 in use");
+    NetworkTarget::tls_lend_slot(&lent_b, &lent_tb);
+    check(run(B({ 0x03, 0x23, 0xFF })).data[2] == 2, "info: both lent -> 2 in use");
+    NetworkTarget::tls_return_slot(lent_a);
+    NetworkTarget::tls_return_slot(lent_b);
+    check(run(B({ 0x03, 0x23, 0xFF })).data[2] == 0, "info: both returned -> 0 in use");
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
