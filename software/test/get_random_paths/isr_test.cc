@@ -41,6 +41,7 @@ static BaseType_t frame(uint8_t thread, uint16_t sequence = 0)
 {
     static command_buf_t buf;
     memset(&buf, 0, sizeof(buf));
+    buf.size = sizeof(rpc_header_t); // wifi_rx_isr drops a packet too short to carry a header
     ((rpc_header_t *)buf.data)->thread = thread;
     ((rpc_header_t *)buf.data)->sequence = sequence;
     rlog[0] = 0;

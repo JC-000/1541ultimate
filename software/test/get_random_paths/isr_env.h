@@ -47,6 +47,7 @@ public:
     QueueHandle_t rx_bufs;
     volatile uint32_t generation;
     void ClearRxBuffer(void);
+    void NotifyLoss() {} // the loss observer of a module that has none; ClearRxBuffer calls it
 };
 struct Esp32Stub { DmaUART *uart; };
 extern Esp32Stub esp32;
@@ -54,6 +55,9 @@ extern Esp32Stub esp32;
 extern wifi_reply_slot_t replySlots[WIFI_REPLY_SLOTS]; // static in wifi_cmd.cc
 extern QueueHandle_t dedicated_replies;
 extern volatile bool dedicated_waiting;
+// the provider hook of wifi_rx_isr (not under test here) and the buffer release it ends with
+static inline int wifi_provider_receive(command_buf_t *) { return 0; }
+static inline BaseType_t cmd_buffer_free_isr(command_buf_context_t *, command_buf_t *, BaseType_t *) { return pdFALSE; }
 
 BaseType_t xQueueSendFromISR(QueueHandle_t q, const void *item, BaseType_t *w);
 // The value is the buffer's address in 32 bits on the target; the stub does not need it,
