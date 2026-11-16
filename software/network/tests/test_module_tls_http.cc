@@ -35,6 +35,7 @@ struct Scenario {
     bool no_length = false;                // no Content-Length: the body runs to the end of the connection
     int cut = 0;                           // bytes of the body the server never sends
     int fragment = 5;                      // the most bytes one recv hands over
+    int late_step_ms = 0;                  // a STEP, once the request is out, takes this long (the clock moves)
     CancellationSource *cancel_on_request = NULL;
 };
 static Scenario sc;
@@ -186,6 +187,7 @@ int wifi_tls_step(uint8_t slot, uint16_t tag, wifi_tls_step_t *st, uint32_t, con
     if (out.size() > st->ct_out_room) { out.resize(st->ct_out_room); } // never happens for these sizes
     memcpy(st->ct_out, out.data(), out.size()); st->ct_out_len = (uint16_t)out.size();
     st->state = s.state;
+    if (sc.late_step_ms && !request_seen.empty() && st->ct_in_len) fake_now += sc.late_step_ms;
     return 0;
 }
 int wifi_tls_close(uint8_t slot, uint16_t tag, uint8_t *ct_out, uint16_t room, uint16_t *ct_out_len, int *esp_err,
@@ -441,6 +443,29 @@ int main()
             expect(c->read(buf, sizeof(buf)) < 0, "read after cancellation fails");
             delete c;
             balanced("released after a cancelled read");
+        }
+    }
+    {   // Buffered and late plaintext is not returned once the exchange is over: after the token is cancelled,
+        // after the deadline, and when the STEP that produced it finished after the deadline.
+        const char *req = "GET /probe HTTP/1.1\r\nHost: secure.test\r\n\r\n";
+        char buf[8];
+        for (int phase = 0; phase < 3; ++phase) {
+            CancellationSource events; Scenario s; s.fragment = 1000; s.late_step_ms = phase == 2 ? 25000 : 0;
+            reset(s);
+            ModuleTlsHttpProvider provider(port, 20000, 500);
+            HttpConnection *c = provider.create_connection(events.token());
+            expect(c && c->open("secure.test", 443) == 0, "buffered read: opened");
+            c->write(req, (int)strlen(req));
+            if (phase < 2) {
+                expect(c->read(buf, 4) == 4, "buffered read: the first bytes arrive in time");
+                if (phase == 0) events.signal(); else fake_now += 20000;
+            }
+            int n = c->read(buf, sizeof(buf));
+            expect(n < 0, phase == 0 ? "buffered bytes are not returned after cancellation"
+                        : phase == 1 ? "buffered bytes are not returned after the deadline"
+                                     : "bytes of a STEP that ended after the deadline are not returned");
+            delete c;
+            balanced("released after a read that stopped");
         }
     }
     printf("%d checks, %d failures\n", checks, failures);

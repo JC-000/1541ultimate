@@ -205,6 +205,9 @@ public:
         if (!opened_ || closed_ || !buffer || count <= 0) return -1;
         uint8_t *out = static_cast<uint8_t *>(buffer);
         while (true) {
+            // Whatever is buffered, and whatever a step just produced, is dropped once the exchange is over: the
+            // token and the deadline are looked at before every result is handed out, an end of stream included.
+            if (stop()) return fail();
             if (rx_off_ < rx_len_) {
                 int n = rx_len_ - rx_off_;
                 if (n > count) n = count;
@@ -213,7 +216,6 @@ public:
                 return n;
             }
             if (eof_) return 0;
-            if (stop()) return fail();
             if (held_len_ == 0 && !module_more_) {
                 if (fetch() < 0) return fail();
                 if (fin_) module_more_ = true; // one last drain step, then the end
