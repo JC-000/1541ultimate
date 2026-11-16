@@ -11,7 +11,7 @@ CXXFLAGS = -std=gnu++11 -g -O0 -Wall -Wextra -Wno-format -Wno-format-extra-args 
 OUT = output
 CXX_SRCS = $(SW)/network/tests/test_module_tls_http.cc $(SW)/network/tests/http_target_test_support.cc \
            $(SW)/network/module_tls_http.cc $(SW)/network/http_request.cc \
-           $(SW)/api/json.cc $(SW)/components/mystring.cc $(SW)/components/pattern.cc $(SW)/system/small_printf.cc
+           $(SW)/test/wifi_tls/ip4addr_aton.cc $(SW)/api/json.cc $(SW)/components/mystring.cc $(SW)/components/pattern.cc $(SW)/system/small_printf.cc
 C_SRCS = $(SW)/httpd/c-version/lib/http_protocol.c $(SW)/httpd/c-version/lib/multipart.c $(SW)/httpd/c-version/lib/url.c
 OBJS = $(patsubst %,$(OUT)/%.o,$(notdir $(CXX_SRCS) $(C_SRCS)))
 VPATH = $(dir $(CXX_SRCS) $(C_SRCS))
@@ -23,6 +23,9 @@ test: all
 $(OUT)/http_target.cc.o: $(SW)/io/command_interface/http_target.cc
 	@mkdir -p $(OUT)
 	$(CXX) $(CXXFLAGS) -I$(SW)/io/command_interface/tests/host_rtos -c -o $@ $<
+$(OUT)/ip4addr_aton.cc.o: $(SW)/test/wifi_tls/ip4addr_aton.cc
+	@mkdir -p $(OUT)
+	$(CXX) $(CXXFLAGS) -I$(SW)/test/wifi_tls/netstub -c -o $@ $<
 $(OUT)/%.cc.o: %.cc
 	@mkdir -p $(OUT)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<

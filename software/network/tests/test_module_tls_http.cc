@@ -12,6 +12,7 @@
 #include "http_target.h"
 #include "http_target_test_support.h"
 #include "module_tls_http.h"
+#include "../../test/wifi_tls/netstub/lwip/dns.h" // ip4addr_aton: a copy of lwIP's, as target 3's host tests use
 
 static int checks, failures;
 static void expect(bool ok, const char *label)
@@ -123,6 +124,7 @@ struct FakePort : ModuleTlsPort {
         return n;
     }
     void tcp_close(int) override { ++tcp_closes; --tcp_open; }
+    bool is_ipv4_literal(const char *host) override { ip4_addr_t a; return ip4addr_aton(host, &a) != 0; }
 };
 
 // ---- the fake module ------------------------------------------------------
@@ -348,7 +350,8 @@ int main()
         }
         reset(Scenario());
         ModuleTlsHttpProvider provider(port, 20000, 500);
-        const char *hosts[] = { "::1", "2001:db8::1", "10.0.0.1", "127.1", "0x7f.0.0.1", "2130706433" };
+        const char *hosts[] = { "::1", "2001:db8::1", "10.0.0.1", "127.1", "0x7f.0.0.1", "2130706433",
+                                "1.2.3.4\v", "1.2.3.4\f", "1.2.3.4 ", "1.2.3.4\t", "secure.test\v", "secure .test", "secure\x01.test", "secure.test\x7f" };
         for (const char *h : hosts) {
             HttpConnection *c = provider.create_connection(OperationCancellation());
             expect(c && c->open(h, 443) != 0 && !connects && !module_opens && !slots_taken, h);

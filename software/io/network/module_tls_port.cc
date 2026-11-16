@@ -200,6 +200,11 @@ public:
         }
         return ((errno == EWOULDBLOCK) || (errno == EAGAIN)) ? 0 : -2;
     }
+    bool is_ipv4_literal(const char *host) override
+    {
+        ip4_addr_t address;
+        return ip4addr_aton(host, &address) != 0;
+    }
     void tcp_close(int sock) override { lwip_close(sock); }
 };
 

@@ -38,6 +38,9 @@ public:
     // peer's end of stream, -2 for an error.
     virtual int tcp_recv(int handle, uint8_t *buffer, int room, uint32_t budget_ms, const wifi_tls_cancel_t *cancel) = 0;
     virtual void tcp_close(int handle) = 0;
+    // lwIP's own predicate for an IPv4 literal (ip4addr_aton: 127.1, 0x7f.0.0.1, a trailing space or \v), as target 3
+    // asks it. host is NUL-terminated.
+    virtual bool is_ipv4_literal(const char *host) = 0;
 };
 
 class ModuleTlsHttpProvider : public HttpSecureProvider
