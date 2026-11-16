@@ -248,6 +248,41 @@ int main(int argc, char **argv)
         run(close_cmd(h));
     }
     check(seen[0] == 0x7FFE && seen[1] == 0x7FFF && seen[2] == 1, "tags: 0x7FFE, 0x7FFF, then 1 (got %04X %04X %04X)", seen[0], seen[1], seen[2]);
+    // A C64 reset ends target 3's own sessions, and only those: a slot lent to target 6 is not target 3's to reset,
+    // so no CLOSE_ALL goes out while one is lent (target 6 closes its own session, by slot and tag).
+    fresh();
+    check(NetworkTarget::tls_lend_slot(&a, &ta) && a == 1, "reset: slot 1 lent");
+    {
+        wifi_tls_open_t o;
+        memset(&o, 0, sizeof(o));
+        o.trust = WIFI_TLS_TRUST_BUNDLE;
+        o.slot = a;
+        o.tag = ta;
+        o.time_source = WIFI_TLS_TIME_NIOS;
+        o.unix_time = 1800000000u;
+        o.sni = "example.com";
+        o.sni_len = 11;
+        int esp_err;
+        uint8_t reason;
+        check(wifi_tls_open(&o, 1000, NULL, &esp_err, &reason) == 0 && world_module.sess[1].live, "reset: target 6's session is live on the module");
+    }
+    h = open_status(&st);
+    check(h >= 0 && net.tls[0].used && world_module.sess[0].live, "reset: target 3's session is live on slot 0 (got %s)", st.c_str());
+    world_module.calls.clear();
+    world_module.close_alls = 0;
+    reset_c64();
+    check(world_module.close_alls == 0, "reset: no CLOSE_ALL while a slot is lent to target 6 (%d)", world_module.close_alls);
+    check(!world_module.sess[0].live && !net.tls[0].used && world_count(0x32) == 1, "reset: target 3's own session is closed, by slot and tag (%d CLOSEs)", world_count(0x32));
+    check(world_module.sess[1].live, "reset: the session in the lent slot is left to target 6");
+    bool lent_again = NetworkTarget::tls_lend_slot(&c, &tc);
+    check(lent_again && c == 0, "reset: slot 1 is still lent, so slot 0 is the one lent next");
+    if (lent_again) NetworkTarget::tls_return_slot(c);
+    NetworkTarget::tls_return_slot(a);
+    // Nothing lent: the reset is CLOSE_ALL, as before.
+    world_module.close_alls = 0;
+    h = open_status(&st);
+    reset_c64();
+    check(world_module.close_alls == 1 && !world_module.sess[0].live, "reset: with no slot lent, CLOSE_ALL goes out once (%d)", world_module.close_alls);
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

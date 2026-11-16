@@ -1675,16 +1675,39 @@ void NetworkTarget :: tls_reset(void)
     // The sockets went with close_all_sockets. The sessions on the module go
     // with CLOSE_ALL, and if that is lost, with the next OPEN of each slot;
     // the CA with the new ca_tag, which the module's copy can never match.
+    // While a slot is lent to target 6, CLOSE_ALL is not ours to send: it would end that session too. Each of
+    // this target's own sessions is closed by slot and tag instead, and the lent slots are left to their owner.
+    portENTER_CRITICAL();
+    uint8_t lent = tls_lent;
+    portEXIT_CRITICAL();
+    bool live[NET_MAX_TLS];
     for (int i = 0; i < NET_MAX_TLS; i++) {
+        live[i] = tls[i].used && tls[i].module_live;
         tls[i].used = false;
     }
     ca_state = CA_EMPTY;
     tls_new_ca_tag();
-    if (wifi_tls_module_available()) {
+    if (!wifi_tls_module_available()) {
+        return;
+    }
+    if (!lent) {
         int esp_err;
         for (int i = 0; wifi_tls_close_all(&esp_err, TLS_CLOSE_ALL_RPC_MS) == WIFI_TLS_UNSENT && i < TLS_UNSENT_RETRIES; i++) {
             vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));
         }
+        return;
+    }
+    for (int i = 0; i < NET_MAX_TLS; i++) {
+        if (!live[i] || (lent & (1u << i))) {
+            continue;
+        }
+        uint16_t notify_len;
+        int esp_err;
+        for (int n = 0; wifi_tls_close(tls[i].slot, tls[i].tag, tls_ct_out, sizeof(tls_ct_out), &notify_len, &esp_err,
+                                       TLS_CLOSE_RPC_MS, NULL) == WIFI_TLS_UNSENT && n < TLS_UNSENT_RETRIES; n++) {
+            vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));
+        }
+        tls[i].module_live = false;
     }
 }
 
