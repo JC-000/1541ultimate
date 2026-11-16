@@ -117,6 +117,7 @@ void DmaUART::ClearRxBuffer(void)
     // buffer it held into the half filled pool, which the reset then fills with that buffer a second time.
     // Nothing below blocks: queue resets and zero tick sends only.
     vTaskSuspendAll();
+    NotifyLoss();
     // uart->ictrl = DMAUART_RxIRQ_DIS | DMAUART_TxIRQ_DIS |DMAUART_BufReq_DIS; // disable interrupts
     uart->flowctrl = uart->flowctrl | DMAUART_RESET; // reset pulse; will also disable interrupts
     xQueueGenericReset(rx_bufs, pdFALSE);
@@ -158,12 +159,18 @@ uint8_t DmaUART::DmaUartInterrupt(void *context)
     uint8_t uart_intr_status = 0;
 
     BaseType_t HPTaskAwoken = pdFALSE;
+    bool loss_reported = false;
     // ioWrite8(UART_DATA, '[');
 
     while (1) {
         // The `continue statement` may cause the interrupt to loop infinitely
         // we exit the interrupt here
-        uart_intr_status = u->uart->status & (DMAUART_RxInterrupt | DMAUART_TxInterrupt | DMAUART_BufInterrupt);
+        uint8_t status = u->uart->status;
+        if (!loss_reported && (status & DMAUART_Overflow)) {
+            if (u->loss_callback) u->loss_callback();
+            loss_reported = true;
+        }
+        uart_intr_status = status & (DMAUART_RxInterrupt | DMAUART_TxInterrupt | DMAUART_BufInterrupt);
         
         //Exit form while loop
         if (uart_intr_status == 0) {
@@ -219,11 +226,13 @@ uint8_t DmaUART::DmaUartInterrupt(void *context)
                 rxb->size = u->uart->length;
 
                 if (u->isr_rx_callback(u->packets, rxb, &HPTaskAwoken) != pdTRUE) {
+                    if (u->loss_callback) u->loss_callback();
                     // Packet could not be queued, so we need to drop it, But now it's free again
                     cmd_buffer_free_isr(u->packets, rxb, &HPTaskAwoken);
                     u->uart->ictrl = DMAUART_BufReq_EN;
                 }
             } else {
+                if (u->loss_callback) u->loss_callback();
                 ioWrite8(UART_DATA, '!');
             }
             u->uart->rx_pop = 1;
@@ -235,12 +244,22 @@ uint8_t DmaUART::DmaUartInterrupt(void *context)
 
 void DmaUART :: SetReceiveCallback(isr_receive_callback_t cb)
 {
+    portENTER_CRITICAL();
+    NotifyLoss();
     isr_rx_callback = cb;
+    portEXIT_CRITICAL();
 }
 
 void DmaUART :: ResetReceiveCallback(void)
 {
-    isr_rx_callback = cmd_buffer_received_isr;
+    // Construction has no observer and precedes scheduler startup.
+    if (!loss_callback) isr_rx_callback = cmd_buffer_received_isr;
+    else SetReceiveCallback(cmd_buffer_received_isr);
+}
+
+void DmaUART::NotifyLoss()
+{
+    if (loss_callback) loss_callback();
 }
 
 
@@ -261,6 +280,16 @@ BaseType_t DmaUART :: SendSlipPacket(const uint8_t *data, int len)
 }
 
 // Send routine without copy
+BaseType_t DmaUART :: TryTransmitPacket(command_buf_t *buf)
+{
+    if (xQueueSend(packets->transmitQueue, &buf, 0) != pdTRUE) {
+        cmd_buffer_free(packets, buf);
+        return pdFALSE;
+    }
+    uart->ictrl = DMAUART_TxIRQ_EN;
+    return pdTRUE;
+}
+
 BaseType_t DmaUART :: TransmitPacket(command_buf_t *buf, uint16_t *ms)
 {
     if (cmd_buffer_transmit(packets, buf) == pdTRUE) {

@@ -101,7 +101,11 @@ zwrap   = $0C                   ; wraps this transaction's waits may take
 ; 25 cycles, so a wrap is about 1.7 s and $08 about 14 s on a 1 MHz 6510
 ; (counted, not measured): longer than any plain command takes. A host that
 ; sends a longer command (a TLS open) raises it through OPT_WAIT.
+        .weak
 WAIT_WRAPS = $08
+EXTERNAL_ABORT = 0
+        .endweak
+OPT_CANCEL = $C00A              ; optional HTTPS runner mailbox, not a UCI register
 
         * = $0801
 
@@ -121,6 +125,9 @@ start
         sta SEQ
         sta OPT_ABRT            ; so a host that never sets it gets the default
         sta OPT_WAIT
+        .if EXTERNAL_ABORT
+        sta OPT_CANCEL
+        .endif
         lda #$A5
         sta READY
 main_wait
@@ -332,6 +339,23 @@ wait_reply
         sta ztmo+1
         sta ztmo+2
 wait_loop
+        .if EXTERNAL_ABORT
+        lda OPT_CANCEL
+        beq wait_no_cancel
+        lda #$00
+        sta OPT_CANCEL
+        lda #CTRL_ABRT
+        sta CTRL
+        jsr wait_idle
+        lda #CTRL_CLR
+        sta CTRL
+        lda R_FLAGS
+        ora #$08
+        sta R_FLAGS
+        sec
+        rts
+wait_no_cancel
+        .endif
         lda CTRL
         sta zstat
         and #ST_STATE

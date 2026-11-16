@@ -24,6 +24,9 @@
 #include "button_handler.h"
 #include "wifi_modem.h"
 #include "sntp.h"
+#include "provider_identity.h"
+#include "provider_boot.h"
+#include "provider_control_task.h"
 #include "recovery.h"
 #include "recovery_url.h"
 #include "esp_timer.h"
@@ -44,11 +47,18 @@ void cmd_echo(command_buf_t *buf)
 
 void cmd_identify(command_buf_t *buf)
 {
+    uint8_t cookie[8];
+    int extended = provider_probe_cookie(buf->data, buf->size, cookie);
     rpc_identify_resp *resp = (rpc_identify_resp *)buf->data;
     resp->major = IDENT_MAJOR;
     resp->minor = IDENT_MINOR;
     strcpy(&resp->string, IDENT_STRING);
     buf->size = sizeof(rpc_identify_resp) + strlen(&resp->string);
+    const uint8_t *boot = provider_boot_identity();
+    if (extended && boot) {
+        buf->size = provider_identity_append(buf->data, sizeof(buf->data),
+            (uint8_t *)&resp->string - buf->data + strlen(&resp->string) + 1, cookie, boot);
+    }
     my_uart_transmit_packet(UART_CHAN, buf);
 }
 
@@ -476,6 +486,11 @@ void dispatch(void *ct)
         // }
         // gpio_set_level(IO_ESP_LED, 0); // ON!
         xQueueReceive(queue, &pbuffer, portMAX_DELAY); // No LED at all.
+        if (pbuffer->size < (int)sizeof(rpc_header_t) || pbuffer->size > (int)sizeof(pbuffer->data) ||
+            provider_control_receive(pbuffer->data, pbuffer->size)) {
+            my_uart_free_buffer(UART_CHAN, pbuffer);
+            continue;
+        }
 #if UART_DEBUG_RX
         printf("Received buffer %d with %d bytes.\n", pbuffer->bufnr, pbuffer->size);
 #endif
@@ -587,6 +602,7 @@ void dispatch(void *ct)
 void start_dispatch(QueueHandle_t queue)
 {
     tls_rpc_start();
+    provider_control_start();
     // Core 1, above the system tasks: the UART ISR that feeds this queue runs on core 1 too
     xTaskCreatePinnedToCore( dispatch, "Dispatch Task", DISPATCHER_STACK, queue, 19, NULL, 1 );
 }

@@ -22,6 +22,8 @@ void       my_uart_connect_pins(void);
 esp_err_t  my_uart_init(command_buf_context_t *buffers, uint8_t uart_num);
 BaseType_t my_uart_get_buffer(uint8_t uart_num, command_buf_t **buf, TickType_t ticks);
 BaseType_t my_uart_transmit_packet(uint8_t uart_num, command_buf_t *buf);
+// Zero-wait submission; consumes the buffer on success and failure.
+BaseType_t my_uart_try_transmit_packet(uint8_t uart_num, command_buf_t *buf);
 BaseType_t my_uart_receive_packet(uint8_t uart_num, command_buf_t **buf, TickType_t ticks);
 BaseType_t my_uart_free_buffer(uint8_t uart_num, command_buf_t *buf);
 

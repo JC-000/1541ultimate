@@ -25,6 +25,8 @@
 #include "soc/io_mux_reg.h"
 
 #include "sntp.h"
+#include "provider_sources.h"
+#include "provider_boot.h"
 #include "rpc_calls.h"
 #include "rpc_dispatch.h"
 #include "wifi_modem.h"
@@ -290,6 +292,9 @@ static void wifi_event_handler(void *esp_netif, esp_event_base_t base, int32_t e
     uint8_t evcode = 0;
     uint8_t disc_reason = 0;
     switch(event_id) {
+        case WIFI_EVENT_STA_STOP:
+            provider_sources_wifi_stopping();
+            break;
         case WIFI_EVENT_STA_START:
             // Attaching the lwIP netif resets netif->input, so a machine that
             // is off is watched again from here. One that is on is left alone:
@@ -1114,6 +1119,7 @@ static void uart_init_task(void *a)
 
 void setup_modem()
 {
+    provider_sources_init();
 	// Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
