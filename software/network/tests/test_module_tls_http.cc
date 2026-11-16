@@ -224,11 +224,11 @@ static void reset(const Scenario& s)
     module_steps = notifies_seen = last_trust = last_time_source = 0;
     last_sni.clear(); request_seen.clear(); tcp_host.clear(); tcp_port_seen = 0;
     plaintext_on_wire = false; server_in.clear(); server_out.clear(); http_request.clear(); server_fin = false;
-    memset(sessions, 0, sizeof(sessions));
+    for (Session& session : sessions) session = Session();
 }
 static void balanced(const char *label)
 {
-    expect(slots_taken == slots_given && tcp_open == 0 && module_closes == module_opens && !plaintext_on_wire, label);
+    expect(slots_taken == slots_given && tcp_open == 0 && !sessions[0].live && !sessions[1].live && !plaintext_on_wire, label);
 }
 
 extern "C" void outbyte(int byte) { fputc(byte, stdout); }
@@ -242,7 +242,7 @@ int main()
         ModuleTlsHttpProvider provider(port, 20000, 500);
         HttpTarget target(7, &provider);
         Reply r = get(target, URL);
-        expect(r.status == "000 OK" && r.data == "{\"answer\":42}", "https GET over the module returns the body");
+        expect(r.status.compare(0, 15, "HTTP/1.1 200 OK") == 0 && r.data == "{\"answer\":42}", "https GET over the module returns the body");
         expect(request_seen.compare(0, 14, "GET /probe HTT") == 0 && request_seen.find("Host: secure.test") != std::string::npos,
                "the server received the request through the module");
         expect(last_trust == WIFI_TLS_TRUST_BUNDLE && last_sni == "secure.test", "bundle trust, SNI is the host");
