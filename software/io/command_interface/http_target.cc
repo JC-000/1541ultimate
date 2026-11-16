@@ -14,7 +14,13 @@ static QueueHandle_t jobs;
 #include "provider_native_startup.h"
 HttpTarget http_target(6, provider_https_factory());
 #else
+#if defined(U64) && (U64 == 2) && !defined(RUNS_ON_PC) // MODULE_TLS_HTTP in module_tls_http.h
+// https:// over the WiFi module's TLS sessions, where there is a module with them
+HttpSecureProvider *module_tls_https_provider();
+HttpTarget http_target(6, module_tls_https_provider());
+#else
 HttpTarget http_target(6);
+#endif
 #endif
 
 static Message c_http_identification  = { 25, true, (uint8_t *)"ULTIMATE HTTP TARGET V1.0" };

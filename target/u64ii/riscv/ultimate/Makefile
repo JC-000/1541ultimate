@@ -45,6 +45,7 @@ SRCS_CC	 =  provider_manager.cc \
                provider_data.cc \
                provider_data_client.cc \
                owner_http_provider.cc \
+               module_tls_http.cc \
             provider_manager_runner.cc \
             provider_manager_task.cc \
             provider_flash_journal.cc \
@@ -169,6 +170,7 @@ SRCS_CC	 =  provider_manager.cc \
 			dos.cc \
 			network_target.cc \
 			network_target_tls.cc \
+			module_tls_port.cc \
 			control_target.cc \
 			filetype_tap.cc \
 			socket_stream.cc \
