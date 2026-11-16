@@ -1,12 +1,25 @@
 #include "../../io/uart/dma_uart.h"
 #include <stdio.h>
 unsigned uart_critical_depth;
+unsigned uart_scheduler_suspended;
 static unsigned checks, failures, losses, frees, resets, callbacks;
 static bool in_isr, have_receive = true, accept_receive = true;
 static dma_uart_t registers = {};
 static command_buf_t receive_buffer = {};
 static void expect(bool value, const char *label) { ++checks; if (!value) { ++failures; printf("FAIL %s\n", label); } }
-static void loss() { expect(in_isr || uart_critical_depth, "loss callback serialized"); ++losses; }
+// Another task that frees a receive buffer it held. It can run at any point where the scheduler is not suspended;
+// during ClearRxBuffer that would put its buffer into a half filled pool, which the reset then fills a second time.
+static bool in_clear;
+static unsigned raced, suspends, resumes, unserialized;
+static void preempt_point() { if (in_clear && !uart_scheduler_suspended) ++raced; }
+void vTaskSuspendAll(void) { ++suspends; ++uart_scheduler_suspended; }
+BaseType_t xTaskResumeAll(void) { assert(uart_scheduler_suspended); --uart_scheduler_suspended; ++resumes; return pdFALSE; }
+static void loss() {
+    if (in_clear && !uart_scheduler_suspended) ++unserialized;
+    expect(in_isr || uart_critical_depth || uart_scheduler_suspended, "loss callback serialized");
+    preempt_point();
+    ++losses;
+}
 QueueHandle_t xQueueCreate(unsigned, unsigned) { return &registers; }
 BaseType_t xQueueSendFromISR(QueueHandle_t, const void*, BaseType_t*) { return pdTRUE; }
 BaseType_t xQueueReceiveFromISR(QueueHandle_t, void *out, BaseType_t*) {
@@ -14,7 +27,7 @@ BaseType_t xQueueReceiveFromISR(QueueHandle_t, void *out, BaseType_t*) {
     if (!have_receive) return pdFALSE;
     *static_cast<command_buf_t**>(out) = &receive_buffer; return pdTRUE;
 }
-BaseType_t xQueueGenericReset(QueueHandle_t, BaseType_t) { return pdTRUE; }
+BaseType_t xQueueGenericReset(QueueHandle_t, BaseType_t) { preempt_point(); return pdTRUE; }
 BaseType_t xQueueSend(QueueHandle_t, const void*, TickType_t) { return pdTRUE; }
 unsigned uxQueueMessagesWaiting(QueueHandle_t) { return 0; }
 extern "C" {
@@ -22,7 +35,7 @@ BaseType_t cmd_buffer_received_isr(command_buf_context_t*, command_buf_t*, BaseT
 BaseType_t cmd_buffer_free_isr(command_buf_context_t*, command_buf_t*, BaseType_t*) { ++frees; return pdTRUE; }
 BaseType_t cmd_buffer_get_free_isr(command_buf_context_t*, command_buf_t**, BaseType_t*) { return pdFALSE; }
 BaseType_t cmd_buffer_get_tx_isr(command_buf_context_t*, command_buf_t**, BaseType_t*) { return pdFALSE; }
-void cmd_buffer_reset(command_buf_context_t*) { ++resets; }
+void cmd_buffer_reset(command_buf_context_t*) { preempt_point(); ++resets; }
 BaseType_t cmd_buffer_get(command_buf_context_t*, command_buf_t**, TickType_t) { return pdFALSE; }
 BaseType_t cmd_buffer_received(command_buf_context_t*, command_buf_t**, TickType_t) { return pdFALSE; }
 BaseType_t cmd_buffer_free(command_buf_context_t*, command_buf_t*) { return pdTRUE; }
@@ -41,7 +54,10 @@ int main()
     irq(uart,1); expect(losses == 1 && callbacks == 1 && frees == 0, "accepted receive preserves ownership");
     have_receive = false; irq(uart,1);
     expect(losses == 2 && frees == 0, "missing DMA buffer signals loss without invented free");
-    uart.ClearRxBuffer(); expect(losses == 3 && resets == 1, "receive reset signals loss");
+    in_clear = true; uart.ClearRxBuffer(); in_clear = false;
+    expect(losses == 3 && resets == 1, "receive reset signals loss");
+    expect(suspends == 1 && resumes == 1 && uart_scheduler_suspended == 0, "receive reset suspends the scheduler once and resumes it");
+    expect(raced == 0 && unserialized == 0, "no other task runs inside the receive reset or its loss callback");
     uart.SoftReset(); expect(losses == 4, "soft reset signals loss");
     uart.ResetReceiveCallback(); expect(losses == 5, "receiver handoff signals loss");
     uart.SetLossCallback(NULL); expect(losses == 6, "observer replacement retires previous lifetime");
