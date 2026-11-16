@@ -937,6 +937,9 @@ int wifi_tls_close(uint8_t slot, uint16_t tag, uint8_t *ct_out, uint16_t room, u
     if (!m.available) {
         return WIFI_TLS_NO_MODULE;
     }
+    if (unsent()) {
+        return WIFI_TLS_UNSENT;
+    }
     log_call(0x32, slot, tag, cancel);
     bool cancelled;
     module_wait(timeout_ms, cancel, 0, &cancelled);
@@ -994,6 +997,9 @@ int wifi_tls_close_all(int *esp_err, uint32_t timeout_ms)
 {
     FakeModule &m = world_module;
     *esp_err = 0;
+    if (unsent()) {
+        return WIFI_TLS_UNSENT;
+    }
     log_call(0x34, 0, 0, NULL);
     m.close_alls++;
     m.sess[0].live = false;

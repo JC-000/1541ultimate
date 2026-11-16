@@ -62,7 +62,9 @@ extern Message c_status_no_entropy; // network_target.cc: GET_RANDOM answers the
 #define TLS_WRITE_TOTAL_MS    10000
 #define TLS_SEND_MS           5000
 #define TLS_NOTIFY_SEND_MS    100
-#define TLS_UNSENT_RETRIES    10
+// Target 6's cleanup CLOSE can hold the dedicated module thread for TLS_CLOSE_RPC_MS (1000 ms), and the thread
+// refuses a second caller with UNSENT at once. 24 x 50 ms outlasts it, for every call target 3 sends.
+#define TLS_UNSENT_RETRIES    24
 #define TLS_UNSENT_DELAY_MS   50
 #define TLS_SLICE_MS          100  // the longest any wait goes without looking at a reset
 #define TLS_SNDTIMEO_MS       500  // caps lwIP's close when it cannot get memory for the FIN
@@ -426,6 +428,21 @@ void NetworkTarget :: tls_fail_step(TlsSocket *e, int esp_err, uint8_t alert_in)
     tls_fail(e, text);
 }
 
+// A CLOSE, sent again while it could not be sent at all.
+static int tls_close_retried(uint8_t slot, uint16_t tag, uint8_t *out, uint16_t room, uint16_t *notify_len, int *esp_err,
+                             tls_cancel_context_t *context, const wifi_tls_cancel_t *cancel)
+{
+    int result;
+    for (int i = 0; ; i++) {
+        result = wifi_tls_close(slot, tag, out, room, notify_len, esp_err, TLS_CLOSE_RPC_MS, cancel);
+        if ((result != WIFI_TLS_UNSENT) || (i == TLS_UNSENT_RETRIES) || tls_cancelled(context)) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));
+    }
+    return result;
+}
+
 // CLOSE with the reset as its only cancel, bounded by CLOSE_RPC_MS; what the
 // module answers is not sent. A module that no longer knows the session has
 // freed it all the same.
@@ -438,8 +455,8 @@ void NetworkTarget :: tls_cleanup_close(TlsSocket *e)
     wifi_tls_cancel_t cancel = { tls_cancelled, &context };
     uint16_t notify_len;
     int esp_err;
-    int result = wifi_tls_close(e->slot, e->tag, tls_ct_out, sizeof(tls_ct_out), &notify_len, &esp_err,
-                                TLS_CLOSE_RPC_MS, &cancel);
+    int result = tls_close_retried(e->slot, e->tag, tls_ct_out, sizeof(tls_ct_out), &notify_len, &esp_err,
+                                   &context, &cancel);
     if ((result == 0) || ((result == WIFI_TLS_REFUSED) && (esp_err == WIFI_TLS_ESP_NOT_FOUND))) {
         e->module_live = false;
     }
@@ -454,8 +471,8 @@ void NetworkTarget :: tls_close_entry(TlsSocket *e, bool send_notify)
         wifi_tls_cancel_t cancel = { tls_cancelled, &context };
         uint16_t notify_len = 0;
         int esp_err;
-        int result = wifi_tls_close(e->slot, e->tag, tls_ct_out, sizeof(tls_ct_out), &notify_len, &esp_err,
-                                    TLS_CLOSE_RPC_MS, &cancel);
+        int result = tls_close_retried(e->slot, e->tag, tls_ct_out, sizeof(tls_ct_out), &notify_len, &esp_err,
+                                       &context, &cancel);
         if ((result == 0) && send_notify && notify_len) {
             tls_send_all(e->socketnr, tls_ct_out, notify_len, tick_after(TLS_NOTIFY_SEND_MS));
         }
@@ -1662,7 +1679,9 @@ void NetworkTarget :: tls_reset(void)
     tls_new_ca_tag();
     if (wifi_tls_module_available()) {
         int esp_err;
-        wifi_tls_close_all(&esp_err, TLS_CLOSE_ALL_RPC_MS);
+        for (int i = 0; wifi_tls_close_all(&esp_err, TLS_CLOSE_ALL_RPC_MS) == WIFI_TLS_UNSENT && i < TLS_UNSENT_RETRIES; i++) {
+            vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));
+        }
     }
 }
 

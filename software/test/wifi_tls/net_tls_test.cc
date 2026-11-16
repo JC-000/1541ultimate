@@ -1563,6 +1563,43 @@ static void test_cleanup(void)
           "restart: CLOSE sends no RPC and closes the socket");
 }
 
+// Target 6's cleanup CLOSE holds the dedicated module thread for up to 1000 ms, and a second caller is refused
+// UNSENT at once. Target 3 sends its STEP, CLOSE and CLOSE_ALL again for longer than that, so it is not starved.
+static void test_target6_holds_the_thread(void)
+{
+    printf("Target 6's cleanup holds the module thread\n");
+    const int HELD = 20; // 20 x 50 ms: the 1000 ms cleanup budget
+    fresh();
+    int h = open_ok();
+    server_push(h, EV_DATA, record('D', 40, 7));
+    world_module.unsent_next = HELD;
+    std::string last;
+    bytes got;
+    for (int i = 0; i < 40 && got.size() < 40; i++) {
+        Res r = read_cmd(h, 100);
+        if (header(r) == 0xFFFF && r.status.compare(0, 3, "02,") != 0) {
+            last = r.status;
+            break;
+        }
+        bytes b = body(r);
+        got.insert(got.end(), b.begin(), b.end());
+    }
+    check(got == expected(7, 40), "held thread: a READ's STEP gets through (%s)", last.c_str());
+    world_module.unsent_next = 0;
+    world_module.calls.clear();
+    world_module.unsent_next = HELD;
+    Res r = close_cmd(h);
+    check(r.status == "00,OK" && world_count(0x32) == 1 && !world_module.sess[0].live,
+          "held thread: CLOSE reaches the module (%d)", world_count(0x32));
+    world_module.unsent_next = 0;
+    int a = open_ok();
+    check(a >= 0, "held thread: a session to reset");
+    world_module.unsent_next = HELD;
+    reset_c64();
+    check(world_module.close_alls == 1, "held thread: a reset's CLOSE_ALL reaches the module (%d)", world_module.close_alls);
+    world_module.unsent_next = 0;
+}
+
 // Every TLS status line is at most 40 bytes. The longest
 // templates, with the widest values each field can take (a 3-digit newlib
 // errno, 4 hex digits of mbedTLS code, 8 of flags).
@@ -1860,6 +1897,7 @@ int main(int argc, char **argv)
     test_ca();
     test_quick_commands();
     test_cleanup();
+    test_target6_holds_the_thread();
     test_status_lengths();
     test_empty_read_reply();
     test_edge_cases();
