@@ -29,6 +29,8 @@ struct Scenario {
     bool no_time = false;                  // the clock is not trustworthy
     bool slot_free = true;
     bool connect_fails = false;
+    bool no_length = false;                // no Content-Length: the body runs to the end of the connection
+    int cut = 0;                           // bytes of the body the server never sends
     int fragment = 5;                      // the most bytes one recv hands over
     CancellationSource *cancel_on_request = NULL;
 };
@@ -78,8 +80,9 @@ static void server_feed(const uint8_t *data, int length)
             if (http_request.find("\r\n\r\n") != std::string::npos && !sc.silent && server_out.find('D') == std::string::npos) {
                 request_seen = http_request;
                 if (sc.cancel_on_request) sc.cancel_on_request->signal();
-                std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
-                                       std::to_string(sc.body.size()) + "\r\n\r\n" + sc.body;
+                std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+                                       (sc.no_length ? std::string() : "Content-Length: " + std::to_string(sc.body.size()) + "\r\n") +
+                                       "\r\n" + sc.body.substr(0, sc.body.size() - sc.cut);
                 for (size_t at = 0; at < response.size(); at += 40) put_record(server_out, 'D', response.substr(at, 40), true);
                 if (sc.notify) put_record(server_out, 'C', "", false); else server_fin = true;
             }
@@ -259,6 +262,15 @@ int main()
         Reply r = get(target, URL);
         expect(r.data == s.body, "a response with a TCP end instead of close_notify");
         balanced("released after a TCP end");
+    }
+    {   // No Content-Length, the body cut short, TCP end without close_notify: that is a truncation, not a 200.
+        Scenario s; s.notify = false; s.no_length = true; s.cut = 5; s.body = std::string(300, 'x'); s.fragment = 1000;
+        reset(s);
+        ModuleTlsHttpProvider provider(port, 20000, 500);
+        HttpTarget target(7, &provider);
+        Reply r = get(target, URL);
+        expect(r.status.compare(0, 15, "HTTP/1.1 200 OK") != 0, "a body cut by a TCP end without close_notify is not a 200");
+        balanced("released after a truncated body");
     }
     {   // A certificate for another name: the module fails the handshake; no body, nothing leaked.
         Scenario s; s.cert_name = "other.test";

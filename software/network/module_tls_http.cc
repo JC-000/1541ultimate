@@ -234,7 +234,7 @@ public:
             if (st.state != WIFI_TLS_ESTABLISHED) return fail();
             module_more_ = st.pt_out_len || st.ct_out_len || result == WIFI_TLS_AGAIN;
             if (!module_more_ && fin_ && held_len_ == 0 && !rx_len_) {
-                eof_ = true;       // a TCP end without close_notify: the response's own framing says if it is whole
+                return fail();     // a TCP end without close_notify is a truncation, never a clean end (target 3: status 05)
             }
         }
     }
