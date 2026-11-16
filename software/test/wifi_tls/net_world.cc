@@ -19,6 +19,9 @@ uint32_t world_tick;
 uint32_t world_reset_at;
 uint32_t world_abort_at = 0xFFFFFFFF;
 void (*world_reset_hook)(void);
+void (*world_available_hook)(void);
+int world_available_calls, world_available_at, world_available_at_open;
+void (*world_open_hook)(void);
 void (*world_abort_hook)(void);
 static uint32_t reset_fired_for = 0xFFFFFFFF;
 static uint32_t abort_fired_for = 0xFFFFFFFF;
@@ -613,6 +616,12 @@ int gethostbyname_r(const char *name, struct hostent *ret, char *buf, size_t buf
 
 bool wifi_tls_module_available(void)
 {
+    world_available_calls++;
+    if (world_available_hook && world_available_calls == world_available_at) {
+        void (*hook)(void) = world_available_hook;
+        world_available_hook = NULL;
+        hook();
+    }
     return world_module.available;
 }
 
@@ -690,6 +699,12 @@ int wifi_tls_open(const wifi_tls_open_t *open, uint32_t timeout_ms, const wifi_t
     }
     if (unsent()) {
         return WIFI_TLS_UNSENT;
+    }
+    world_available_at_open = world_available_calls;
+    if (world_open_hook) {
+        void (*hook)(void) = world_open_hook;
+        world_open_hook = NULL;
+        hook();
     }
     RpcCall &c = log_call(0x30, open->slot, open->tag, cancel);
     c.open = *open;

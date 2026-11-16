@@ -19,6 +19,9 @@ uint32_t world_ms(void);             // world_tick in ms
 extern uint32_t world_reset_at;      // the UCI Server task notes a C64 reset at this tick (world_reset_hook); ~0 for never
 extern uint32_t world_abort_at;      // ... and an abort of the running command (world_abort_hook); ~0 for never
 extern void (*world_reset_hook)(void);
+extern void (*world_available_hook)(void); // once, at the world_available_at-th wifi_tls_module_available() since world_available_calls was zeroed
+extern int world_available_calls, world_available_at, world_available_at_open; // the last: the count when the latest wifi_tls_open() came
+extern void (*world_open_hook)(void);      // once, inside the next wifi_tls_open(), as the handshake starts
 extern void (*world_abort_hook)(void);
 extern uint32_t world_sntp;          // what sntp_utc_now() answers
 

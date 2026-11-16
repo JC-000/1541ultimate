@@ -146,6 +146,8 @@ static int open_status(std::string *status)
     return r.data.size() == 8 ? r.data[0] : -1;
 }
 
+static bool lent_in_hook;
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -182,6 +184,42 @@ int main(int argc, char **argv)
     Res r = run(open_cmd(0, 0, "nowhere.example"));
     check(r.status != "00,OK" && !net.tls[0].used && NetworkTarget::tls_lend_slot(&a, &ta) && a == 1 && NetworkTarget::tls_lend_slot(&b, &tb) && b == 0,
           "a failed OPEN leaves both slots free to lend (got %s)", r.status.c_str());
+    NetworkTarget::tls_return_slot(a);
+    NetworkTarget::tls_return_slot(b);
+    // A slot lent between tls_reserve and tls_prepare's claim is not taken by the OPEN (L2: the loan check).
+    // The call that tls_prepare makes is the last before the OPEN RPC; the C64-reset housekeeping run() does makes others.
+    fresh();
+    world_available_calls = 0;
+    h = open_status(&st);
+    int prepare_call = world_available_at_open;
+    run(close_cmd(h));
+    fresh();
+    check(NetworkTarget::tls_lend_slot(&a, &ta) && a == 1, "loan race: slot 1 lent, slot 0 the only one free");
+    world_available_calls = 0;
+    world_available_at = prepare_call;
+    world_available_hook = [] {
+        uint8_t s0; uint16_t t0;
+        lent_in_hook = NetworkTarget::tls_lend_slot(&s0, &t0) && s0 == 0;
+    };
+    lent_in_hook = false;
+    calls = world_module.calls.size();
+    int opened = open_status(&st);
+    check(lent_in_hook && opened < 0 && st == "91,TLS SESSIONS IN USE" && world_module.calls.size() == calls && !net.tls[0].used,
+          "loan race: a slot lent after the OPEN reserved it -> 91, no OPEN RPC (got %s)", st.c_str());
+    world_available_hook = NULL;
+    NetworkTarget::tls_return_slot(0);
+    NetworkTarget::tls_return_slot(a);
+    // A loan while the OPEN's handshake runs finds the slot taken (L4: the claim).
+    fresh();
+    check(NetworkTarget::tls_lend_slot(&a, &ta) && a == 1, "loan during the OPEN: slot 1 lent, slot 0 free");
+    world_open_hook = [] {
+        uint8_t s0; uint16_t t0;
+        lent_in_hook = NetworkTarget::tls_lend_slot(&s0, &t0);
+    };
+    lent_in_hook = true;
+    h = open_status(&st);
+    check(h >= 0 && st == "00,OK" && !lent_in_hook, "loan during the OPEN: no slot to lend while the OPEN holds its own (got %s)", st.c_str());
+    world_open_hook = NULL;
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
