@@ -57,6 +57,13 @@ private:
     ModuleTlsPort& port_;
     uint32_t exchange_ms_, cleanup_ms_;
     volatile bool occupied_;
+    // Slots whose CLOSE was never acknowledged: the module may still hold the session, so the slot stays lent (never
+    // given back to the allocator) until a later CLOSE of the same slot and tag is acknowledged or the module says
+    // it knows no such session. Retried by the next connection's open().
+    struct Withheld { bool held; uint8_t slot; uint16_t tag; };
+    enum { WITHHELD_MAX = 8 };
+    Withheld withheld_[WITHHELD_MAX];
+    void withhold(uint8_t slot, uint16_t tag);
     ModuleTlsHttpProvider(const ModuleTlsHttpProvider&) = delete;
     ModuleTlsHttpProvider& operator=(const ModuleTlsHttpProvider&) = delete;
 };

@@ -19,6 +19,12 @@
 
 static bool reached(uint32_t now, uint32_t at) { return (int32_t)(now - at) >= 0; }
 
+// The module's answer to a CLOSE that frees the session: accepted, or "no such session".
+static bool close_confirmed(int result, int esp_err)
+{
+    return result == 0 || (result == WIFI_TLS_REFUSED && esp_err == WIFI_TLS_ESP_NOT_FOUND);
+}
+
 class ModuleTlsHttpProvider::Connection : public HttpConnection
 {
     ModuleTlsHttpProvider& provider_;
@@ -95,8 +101,38 @@ class ModuleTlsHttpProvider::Connection : public HttpConnection
     }
 
     // OPEN, DNS and connect first (a dead network costs the module nothing), then the handshake.
+    // CLOSE sent again for every slot withheld since a CLOSE went unacknowledged; a slot is given back only when the
+    // module confirms it holds no session there. Bounded by the cleanup budget and the request's deadline.
+    void reclaim_withheld()
+    {
+        uint32_t end = port_.now_ms() + left(provider_.cleanup_ms_);
+        for (int i = 0; i < ModuleTlsHttpProvider::WITHHELD_MAX; i++) {
+            ModuleTlsHttpProvider::Withheld& w = provider_.withheld_[i];
+            if (!w.held) continue;
+            uint16_t notify = 0;
+            int esp_err = 0;
+            int result = close_retried(w.slot, w.tag, end, &notify, &esp_err);
+            if (close_confirmed(result, esp_err)) {
+                w.held = false;
+                port_.give_slot(w.slot);   // the notify, if any, has no socket to go to
+            }
+        }
+    }
+    // A CLOSE sent again while another caller holds the module thread, until end.
+    int close_retried(uint8_t slot, uint16_t tag, uint32_t end, uint16_t *notify, int *esp_err)
+    {
+        int result;
+        while (true) {
+            int32_t room = (int32_t)(end - port_.now_ms());
+            result = wifi_tls_close(slot, tag, ct_, sizeof(ct_), notify, esp_err, room > 0 ? (uint32_t)room : 1, NULL);
+            if (result != WIFI_TLS_UNSENT || (int32_t)(end - port_.now_ms()) <= UNSENT_DELAY_MS) break;
+            port_.sleep_ms(UNSENT_DELAY_MS);
+        }
+        return result;
+    }
     int establish(const char *host, uint16_t port)
     {
+        reclaim_withheld();
         if (!port_.take_slot(&slot_, &tag_)) return -1;
         have_slot_ = true;
         wifi_tls_cancel_t c = cancel();
@@ -282,21 +318,17 @@ public:
     {
         if (closed_) return;
         closed_ = true;
+        bool withhold = false;
         if (live_) {
             uint16_t notify = 0;
             int esp_err = 0;
             // Another caller may hold the module thread: sent again, within the cleanup budget.
-            uint32_t end = port_.now_ms() + provider_.cleanup_ms_;
-            int result;
-            while (true) {
-                int32_t room = (int32_t)(end - port_.now_ms());
-                result = wifi_tls_close(slot_, tag_, ct_, sizeof(ct_), &notify, &esp_err, room > 0 ? (uint32_t)room : 1, NULL);
-                if (result != WIFI_TLS_UNSENT || (int32_t)(end - port_.now_ms()) <= UNSENT_DELAY_MS) break;
-                port_.sleep_ms(UNSENT_DELAY_MS);
-            }
+            int result = close_retried(slot_, tag_, port_.now_ms() + provider_.cleanup_ms_, &notify, &esp_err);
             if (result == 0 && notify && sock_ >= 0) {
                 port_.tcp_send(sock_, ct_, notify, NOTIFY_SEND_MS, NULL);
             }
+            // No acknowledgement: the module may still hold the session, and the slot may not be lent again.
+            withhold = !close_confirmed(result, esp_err);
             live_ = false;
         }
         if (sock_ >= 0) {
@@ -304,14 +336,31 @@ public:
             sock_ = -1;
         }
         if (have_slot_) {
-            port_.give_slot(slot_);
+            if (withhold) provider_.withhold(slot_, tag_);
+            else port_.give_slot(slot_);
             have_slot_ = false;
         }
     }
 };
 
 ModuleTlsHttpProvider::ModuleTlsHttpProvider(ModuleTlsPort& port, uint32_t exchange_ms, uint32_t cleanup_ms) :
-    port_(port), exchange_ms_(exchange_ms), cleanup_ms_(cleanup_ms), occupied_(false) {}
+    port_(port), exchange_ms_(exchange_ms), cleanup_ms_(cleanup_ms), occupied_(false)
+{
+    memset(withheld_, 0, sizeof(withheld_));
+}
+
+void ModuleTlsHttpProvider::withhold(uint8_t slot, uint16_t tag)
+{
+    for (int i = 0; i < WITHHELD_MAX; i++) {
+        if (!withheld_[i].held) {
+            withheld_[i].held = true;
+            withheld_[i].slot = slot;
+            withheld_[i].tag = tag;
+            return;
+        }
+    }
+    // No room to remember it (the module has fewer slots than this): it simply stays lent, never given back.
+}
 
 bool ModuleTlsHttpProvider::available() const
 {

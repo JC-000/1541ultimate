@@ -41,6 +41,8 @@ struct Scenario {
 static Scenario sc;
 
 static uint32_t fake_now;
+static bool lent[2];
+static int tags_made;
 static int connects, tcp_closes, tcp_open, slots_taken, slots_given, module_opens, module_closes;
 static int module_steps, notifies_seen, last_trust, last_time_source;
 static std::string last_sni, request_seen, tcp_host;
@@ -99,11 +101,16 @@ struct FakePort : ModuleTlsPort {
     uint32_t now_ms() override { return fake_now; }
     void sleep_ms(uint32_t ms) override { fake_now += ms; }
     uint32_t utc_now() override { return sc.no_time ? 0 : 1800000000u; }
+    // Like NetworkTarget::tls_lend_slot: the highest free slot first, a new tag each time, held until given back.
     bool take_slot(uint8_t *slot, uint16_t *tag) override {
         if (!sc.slot_free) return false;
-        ++slots_taken; *slot = 1; *tag = 77; return true;
+        for (int i = 1; i >= 0; --i) {
+            if (lent[i]) continue;
+            lent[i] = true; ++slots_taken; *slot = (uint8_t)i; *tag = (uint16_t)(0x8000 + ++tags_made); return true;
+        }
+        return false;
     }
-    void give_slot(uint8_t) override { ++slots_given; }
+    void give_slot(uint8_t slot) override { ++slots_given; lent[slot] = false; }
     int tcp_connect(const char *host, uint16_t port, uint32_t, const wifi_tls_cancel_t *, int *handle) override {
         if (sc.connect_fails) return 111;
         ++connects; ++tcp_open; tcp_host = host; tcp_port_seen = port; *handle = 9; return 0;
@@ -237,6 +244,11 @@ static void reset(const Scenario& s)
     last_sni.clear(); request_seen.clear(); tcp_host.clear(); tcp_port_seen = 0;
     plaintext_on_wire = false; server_in.clear(); server_out.clear(); http_request.clear(); server_fin = false;
     for (Session& session : sessions) session = Session();
+    lent[0] = lent[1] = false; tags_made = 0;
+}
+static void new_peer()   // a fresh server for the next connection of the same scenario
+{
+    server_in.clear(); server_out.clear(); http_request.clear(); request_seen.clear(); server_fin = false;
 }
 static void balanced(const char *label)
 {
@@ -467,6 +479,57 @@ int main()
             delete c;
             balanced("released after a read that stopped");
         }
+    }
+    {   // A CLOSE that is never acknowledged: the module may still hold the session, so the slot is not lent again
+        // until the module has said it is gone. The next request sends the CLOSE again; a module that no longer knows
+        // the session is as good as an acknowledgement.
+        Scenario s; s.close_unsent = 100000;
+        reset(s);
+        ModuleTlsHttpProvider provider(port, 20000, 500);
+        {
+            HttpTarget target(7, &provider);
+            Reply r = get(target, URL);
+            expect(r.status.compare(0, 15, "HTTP/1.1 200 OK") == 0, "unacknowledged CLOSE: the exchange itself succeeded");
+            expect(sessions[1].live && slots_taken == 1 && slots_given == 0 && lent[1],
+                   "unacknowledged CLOSE: the slot is withheld, not given back");
+            expect(tcp_open == 0, "unacknowledged CLOSE: the socket is closed all the same");
+        }
+        {   // the other slot serves the next request; its CLOSE is lost too, so both are withheld
+            HttpTarget target(7, &provider);
+            new_peer();
+            Reply r = get(target, URL);
+            expect(r.status.compare(0, 15, "HTTP/1.1 200 OK") == 0 && slots_taken == 2 && slots_given == 0 && lent[0] && lent[1],
+                   "a withheld slot is not lent again: the next request gets the other one");
+            int opens = module_opens, conns = connects;
+            new_peer();
+            r = get(target, URL);
+            expect(r.status == "503 SERVICE UNAVAILABLE" && connects == conns && module_opens == opens && slots_taken == 2,
+                   "both slots withheld: refused before anything opens");
+        }
+        sc.close_unsent = 0;
+        {   // the module answers again: the next request closes the old sessions first, then opens its own
+            HttpTarget target(7, &provider);
+            new_peer();
+            Reply r = get(target, URL);
+            expect(r.status.compare(0, 15, "HTTP/1.1 200 OK") == 0 && r.data == "{\"answer\":42}", "after the module answers, a request works again");
+            expect(slots_taken == 3 && slots_given == 3 && !lent[0] && !lent[1] && !sessions[0].live && !sessions[1].live,
+                   "the retried CLOSEs free both withheld slots and their sessions");
+        }
+    }
+    {   // A withheld slot is also freed when the module answers 'no such session'.
+        Scenario s; s.close_unsent = 100000;
+        reset(s);
+        ModuleTlsHttpProvider provider(port, 20000, 500);
+        HttpTarget target(7, &provider);
+        get(target, URL);
+        expect(lent[1] && slots_given == 0, "withheld after an unacknowledged CLOSE");
+        sessions[1].live = false;   // the module has dropped it (a reset, a restart)
+        sc.close_unsent = 0; sc.slot_free = true;
+        int taken = slots_taken;
+        new_peer();
+        Reply r = get(target, URL);
+        expect(r.data == "{\"answer\":42}" && slots_given >= 1 && slots_taken == taken + 1,
+               "'no such session' frees the withheld slot, which is lent again");
     }
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
