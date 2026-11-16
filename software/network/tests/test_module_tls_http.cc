@@ -279,6 +279,15 @@ int main()
         expect(r.status.compare(0, 15, "HTTP/1.1 200 OK") != 0, "a body cut by a TCP end without close_notify is not a 200");
         balanced("released after a truncated body");
     }
+    {   // No Content-Length, a whole body, then close_notify: that is a clean end, and the body is the response.
+        Scenario s; s.notify = true; s.no_length = true; s.body = std::string(300, 'y'); s.fragment = 7;
+        reset(s);
+        ModuleTlsHttpProvider provider(port, 20000, 500);
+        HttpTarget target(7, &provider);
+        Reply r = get(target, URL);
+        expect(r.status.compare(0, 15, "HTTP/1.1 200 OK") == 0 && r.data == s.body, "no Content-Length, ended by close_notify: the whole body, 200");
+        balanced("released after a close_notify end");
+    }
     {   // A certificate for another name: the module fails the handshake; no body, nothing leaked.
         Scenario s; s.cert_name = "other.test";
         reset(s);

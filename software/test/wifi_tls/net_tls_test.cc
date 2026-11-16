@@ -1627,6 +1627,15 @@ static void test_target6_holds_the_thread(void)
     reset_c64();
     check(world_module.close_alls == 1, "streaming target 6: CLOSE_ALL outlasts a 5 s hold (%d)", world_module.close_alls);
     world_module.unsent_next = 0;
+
+    // The cleanup CLOSE of an OPEN nobody answered (tls_cleanup_close) is sent again too.
+    fresh();
+    world_module.open_delay_ms = 6000;
+    world_module.close_unsent_next = 20;
+    r = run(open_cmd(0, 0, "example.com"));
+    check(r.status == "17,TLS MODULE NOT RESPONDING" && world_count(0x32) == 1,
+          "cleanup CLOSE: UNSENT 20 times, then it reaches the module (%d)", world_count(0x32));
+    world_module.close_unsent_next = 0;
 }
 
 // Every TLS status line is at most 40 bytes. The longest
