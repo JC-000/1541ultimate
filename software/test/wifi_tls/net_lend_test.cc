@@ -125,6 +125,8 @@ static bytes close_cmd(int h)
 
 static void fresh(void)
 {
+    NetworkTarget::tls_return_slot(0); // whatever a check that failed left lent
+    NetworkTarget::tls_return_slot(1);
     world_reset();
     reset_c64();
     world_module.calls.clear();
@@ -145,6 +147,27 @@ static int open_status(std::string *status)
     *status = r.status;
     return r.data.size() == 8 ? r.data[0] : -1;
 }
+
+
+// Target 6's session on the module, in a slot it was lent.
+static bool module_open(uint8_t slot, uint16_t tag)
+{
+    wifi_tls_open_t o;
+    memset(&o, 0, sizeof(o));
+    o.trust = WIFI_TLS_TRUST_BUNDLE;
+    o.slot = slot;
+    o.tag = tag;
+    o.time_source = WIFI_TLS_TIME_NIOS;
+    o.unix_time = 1800000000u;
+    o.sni = "example.com";
+    o.sni_len = 11;
+    int esp_err;
+    uint8_t reason;
+    return wifi_tls_open(&o, 1000, NULL, &esp_err, &reason) == 0 && world_module.sess[slot].live;
+}
+
+static bool lent_session_opened;
+static uint8_t hook_slot;
 
 static bool lent_in_hook;
 
@@ -283,6 +306,121 @@ int main(int argc, char **argv)
     h = open_status(&st);
     reset_c64();
     check(world_module.close_alls == 1 && !world_module.sess[0].live, "reset: with no slot lent, CLOSE_ALL goes out once (%d)", world_module.close_alls);
+    // A slot whose CLOSE the module never confirmed stays lent (withheld). The CLOSE is sent again when the C64 resets,
+    // and when an OPEN_TLS finds no slot free; a slot is given back only when the module confirms it holds no session.
+    fresh();
+    world_module.close_result = -1;
+    check(NetworkTarget::tls_lend_slot(&a, &ta) && NetworkTarget::tls_lend_slot(&b, &tb) && a == 1 && b == 0, "withheld: both slots lent");
+    check(module_open(a, ta) && module_open(b, tb), "withheld: target 6's sessions are live on both");
+    NetworkTarget::tls_withhold_slot(a, ta);
+    NetworkTarget::tls_withhold_slot(b, tb);
+    check(!NetworkTarget::tls_lend_slot(&c, &tc), "withheld: a withheld slot is not lent again");
+    world_module.calls.clear();
+    h = open_status(&st);
+    check(h >= 0 && st == "00,OK", "withheld: an OPEN_TLS that finds no slot sends the CLOSEs again and gets one (got %s)", st.c_str());
+    check(world_count(0x32) >= 2 && !world_module.sess[1].live, "withheld: both withheld sessions were closed on the module (%d CLOSEs)", world_count(0x32));
+    run(close_cmd(h));
+    check(NetworkTarget::tls_lend_slot(&a, &ta) && NetworkTarget::tls_lend_slot(&b, &tb), "withheld: and both slots are lendable again");
+    NetworkTarget::tls_return_slot(a);
+    NetworkTarget::tls_return_slot(b);
+    // A CLOSE that is not confirmed (no answer, or a refusal other than 'no such session') keeps the slot withheld.
+    for (int forced = 0; forced < 2; forced++) {
+        fresh();
+        NetworkTarget::tls_lend_slot(&a, &ta);
+        NetworkTarget::tls_lend_slot(&b, &tb);
+        module_open(a, ta);
+        module_open(b, tb);
+        NetworkTarget::tls_withhold_slot(a, ta);
+        NetworkTarget::tls_withhold_slot(b, tb);
+        world_module.close_result = forced ? WIFI_TLS_REFUSED : WIFI_TLS_BUSY;
+        check(open_status(&st) < 0 && st == "91,TLS SESSIONS IN USE" && world_module.sess[1].live && !NetworkTarget::tls_lend_slot(&c, &tc),
+              "withheld: %s keeps both slots withheld (got %s)", forced ? "a refusal other than 'no such session'" : "a CLOSE with no answer", st.c_str());
+        world_module.close_result = -1;
+        world_module.close_unsent_next = 5; // another caller holds the module thread for a while
+        h = open_status(&st);
+        check(h >= 0 && st == "00,OK", "withheld: the module answers again, and the next OPEN_TLS gets a slot (got %s)", st.c_str());
+        run(close_cmd(h));
+        NetworkTarget::tls_return_slot(a);
+        NetworkTarget::tls_return_slot(b);
+    }
+    // 'No such session' frees the slot too (the module restarted, or dropped the session).
+    fresh();
+    NetworkTarget::tls_lend_slot(&a, &ta);
+    NetworkTarget::tls_withhold_slot(a, ta);   // nothing live on the module
+    reset_c64();
+    check(NetworkTarget::tls_lend_slot(&c, &tc) && c == 1, "withheld: 'no such session' frees the slot (the C64 reset sent the CLOSE again)");
+    NetworkTarget::tls_return_slot(c);
+    // The C64 reset sends the CLOSE of a withheld slot again, and a slot the module confirms is given back.
+    fresh();
+    NetworkTarget::tls_lend_slot(&a, &ta);
+    module_open(a, ta);
+    NetworkTarget::tls_withhold_slot(a, ta);
+    world_module.close_result = WIFI_TLS_BUSY;
+    reset_c64();
+    bool again = NetworkTarget::tls_lend_slot(&c, &tc);
+    check(world_module.sess[1].live && (!again || c == 0), "withheld: an unconfirmed CLOSE leaves slot 1 withheld across the reset");
+    if (again) NetworkTarget::tls_return_slot(c);
+    world_module.close_result = -1;
+    world_module.calls.clear();
+    reset_c64();
+    check(!world_module.sess[1].live && world_count(0x32) == 1, "withheld: the C64 reset sends the CLOSE again (%d CLOSEs)", world_count(0x32));
+    check(NetworkTarget::tls_lend_slot(&c, &tc) && c == 1, "withheld: the confirmed slot is lendable again");
+    NetworkTarget::tls_return_slot(c);
+    // An OPEN_TLS that got no answer left an entry that is not in use but that the module may hold: a reset with a
+    // slot lent closes it by slot and tag all the same.
+    fresh();
+    world_module.open_result = WIFI_TLS_BUSY;
+    world_module.close_result = WIFI_TLS_BUSY; // and the CLOSE that follows it too
+    h = open_status(&st);
+    world_module.open_result = -1;
+    world_module.close_result = -1;
+    check(h < 0 && !net.tls[0].used && net.tls[0].module_live, "orphan: the unanswered OPEN left slot 0 possibly live on the module (got %s)", st.c_str());
+    NetworkTarget::tls_lend_slot(&a, &ta);
+    check(a == 1, "orphan: slot 1 lent to target 6");
+    world_module.calls.clear();
+    reset_c64();
+    check(world_count(0x32) == 1 && world_module.close_alls == 0 && !net.tls[0].module_live,
+          "orphan: the reset closes it by slot and tag, with no CLOSE_ALL (%d CLOSEs)", world_count(0x32));
+    NetworkTarget::tls_return_slot(a);
+    // A slot lent while the reset runs is not ended by its CLOSE_ALL: the reset refuses loans from the moment it looks
+    // at what is lent until its last CLOSE is sent. The hook lends and opens a session just before the CLOSE_ALL goes out.
+    fresh();
+    lent_session_opened = false;
+    world_close_all_hook = [] {
+        uint16_t t;
+        if (NetworkTarget::tls_lend_slot(&hook_slot, &t)) {
+            lent_session_opened = module_open(hook_slot, t);
+        }
+    };
+    reset_c64();
+    world_close_all_hook = NULL;
+    check(!lent_session_opened || world_module.sess[hook_slot].live,
+          "reset race: a session that target 6 opens just before the CLOSE_ALL is not ended by it");
+    if (lent_session_opened) {
+        NetworkTarget::tls_return_slot(hook_slot);
+    }
+    check(NetworkTarget::tls_lend_slot(&a, &ta), "reset race: loans work again once the reset is over");
+    NetworkTarget::tls_return_slot(a);
+    // The same at every other point where the reset calls out.
+    for (int at = 1; at <= 12; at++) {
+        fresh();
+        world_available_calls = 0;
+        world_available_at = at;
+        lent_session_opened = false;
+        world_available_hook = [] {
+            uint16_t t;
+            if (NetworkTarget::tls_lend_slot(&hook_slot, &t)) {
+                lent_session_opened = module_open(hook_slot, t);
+            }
+        };
+        reset_c64();
+        world_available_hook = NULL;
+        check(!lent_session_opened || world_module.sess[hook_slot].live,
+              "reset race (call %d): a session opened by target 6 during the reset is not ended by it", at);
+        if (lent_session_opened) {
+            NetworkTarget::tls_return_slot(hook_slot);
+        }
+    }
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

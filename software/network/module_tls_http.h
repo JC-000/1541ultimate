@@ -28,6 +28,11 @@ public:
     // One of the module's session slots, exclusively, until given back.
     virtual bool take_slot(uint8_t *slot, uint16_t *tag) = 0;
     virtual void give_slot(uint8_t slot) = 0;
+    // A slot whose CLOSE the module never confirmed: it stays lent (never lent again, never given back) until a CLOSE
+    // of that slot and tag is confirmed. The port sends that CLOSE again from its own reset and slot-exhaustion paths.
+    virtual void withhold_slot(uint8_t slot, uint16_t tag) = 0;
+    // CLOSE again every withheld slot, for at most budget_ms; each one confirmed is given back.
+    virtual void reclaim_withheld(uint32_t budget_ms) = 0;
     // DNS and TCP connect. 0 with *handle, else an error (nonzero).
     virtual int tcp_connect(const char *host, uint16_t port, uint32_t budget_ms, const wifi_tls_cancel_t *cancel,
                         int *handle) = 0;
@@ -38,7 +43,8 @@ public:
     // peer's end of stream, -2 for an error.
     virtual int tcp_recv(int handle, uint8_t *buffer, int room, uint32_t budget_ms, const wifi_tls_cancel_t *cancel) = 0;
     virtual void tcp_close(int handle) = 0;
-    // The longest tcp_close can take. The provider's cleanup budget includes it.
+    // The time the port allows its tcp_close (what it sets on the socket, not a guarantee about every stall of the
+    // network stack). The provider's cleanup budget includes it, and the CLOSE and the close_notify share what is left.
     virtual uint32_t tcp_close_max_ms() = 0;
     // lwIP's own predicate for an IPv4 literal (ip4addr_aton: 127.1, 0x7f.0.0.1, a trailing space or \v), as target 3
     // asks it. host is NUL-terminated.
@@ -48,9 +54,11 @@ public:
 class ModuleTlsHttpProvider : public HttpSecureProvider
 {
 public:
-    // exchange_ms bounds a whole request (open, every read and write); cleanup_ms bounds the whole cleanup after it:
-    // the CLOSE (sent again while the module thread is busy), the close_notify and the local socket's disposal
-    // (the port's tcp_close_max_ms). A cleanup_ms that the disposal alone could use up makes the provider unavailable.
+    // exchange_ms bounds a whole request (open, every read and write). cleanup_ms is the budget of the cleanup after
+    // it: the CLOSE (sent again while the module thread is busy), the close_notify and the local socket's disposal,
+    // for which the port's stated bound (tcp_close_max_ms) is reserved. A cleanup_ms that the disposal alone could use
+    // up makes the provider unavailable. A CLOSE that still gets no confirmation within it leaves the slot withheld
+    // (see ModuleTlsPort::withhold_slot).
     ModuleTlsHttpProvider(ModuleTlsPort& port, uint32_t exchange_ms, uint32_t cleanup_ms);
     bool available() const override;
     HttpConnection *create_connection(const OperationCancellation& cancellation) override;
@@ -60,13 +68,6 @@ private:
     ModuleTlsPort& port_;
     uint32_t exchange_ms_, cleanup_ms_;
     volatile bool occupied_;
-    // Slots whose CLOSE was never acknowledged: the module may still hold the session, so the slot stays lent (never
-    // given back to the allocator) until a later CLOSE of the same slot and tag is acknowledged or the module says
-    // it knows no such session. Retried by the next connection's open().
-    struct Withheld { bool held; uint8_t slot; uint16_t tag; };
-    enum { WITHHELD_MAX = 8 };
-    Withheld withheld_[WITHHELD_MAX];
-    void withhold(uint8_t slot, uint16_t tag);
     ModuleTlsHttpProvider(const ModuleTlsHttpProvider&) = delete;
     ModuleTlsHttpProvider& operator=(const ModuleTlsHttpProvider&) = delete;
 };

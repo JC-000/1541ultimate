@@ -47,6 +47,7 @@ static Scenario sc;
 
 static uint32_t fake_now;
 static bool lent[2];
+static struct Held { bool held; uint16_t tag; } withheld[2];
 static int tags_made;
 static int connects, tcp_closes, tcp_open, slots_taken, slots_given, module_opens, module_closes;
 static int module_steps, notifies_seen, last_trust, last_time_source;
@@ -116,6 +117,16 @@ struct FakePort : ModuleTlsPort {
         return false;
     }
     void give_slot(uint8_t slot) override { ++slots_given; lent[slot] = false; }
+    // Like NetworkTarget: a withheld slot stays lent until a CLOSE of it, sent again, is confirmed.
+    void withhold_slot(uint8_t slot, uint16_t tag) override { withheld[slot].held = true; withheld[slot].tag = tag; }
+    void reclaim_withheld(uint32_t) override {
+        for (int i = 0; i < 2; i++) {
+            if (!withheld[i].held) continue;
+            uint8_t out[64]; uint16_t n = 0; int esp_err = 0;
+            int result = wifi_tls_close((uint8_t)i, withheld[i].tag, out, sizeof(out), &n, &esp_err, 100, NULL);
+            if (wifi_tls_close_confirmed(result, esp_err)) { withheld[i].held = false; give_slot((uint8_t)i); }
+        }
+    }
     int tcp_connect(const char *host, uint16_t port, uint32_t, const wifi_tls_cancel_t *, int *handle) override {
         if (sc.connect_fails) return 111;
         ++connects; ++tcp_open; tcp_host = host; tcp_port_seen = port; *handle = 9; return 0;
@@ -254,7 +265,7 @@ static void reset(const Scenario& s)
     last_sni.clear(); request_seen.clear(); tcp_host.clear(); tcp_port_seen = 0;
     plaintext_on_wire = false; server_in.clear(); server_out.clear(); http_request.clear(); server_fin = false;
     for (Session& session : sessions) session = Session();
-    lent[0] = lent[1] = false; tags_made = 0;
+    lent[0] = lent[1] = false; tags_made = 0; memset(withheld, 0, sizeof(withheld));
 }
 static void new_peer()   // a fresh server for the next connection of the same scenario
 {
@@ -605,6 +616,19 @@ int main()
                    phase == 0 ? "a CLOSE that got no answer (BUSY) keeps the slot withheld"
                               : "a CLOSE refused for another reason than 'no such session' keeps the slot withheld");
         }
+    }
+    {   // With the port's cleanup budget (2 s, of which 500 ms is the socket's disposal and at most 100 the close_notify)
+        // the CLOSE is sent again for more than a second while another caller holds the module thread, and is then
+        // confirmed: the slot is given back, not withheld.
+        Scenario s; s.close_unsent = 24; s.close_cost_ms = 500; s.close_max_ms = 500;
+        reset(s);
+        ModuleTlsHttpProvider provider(port, 20000, 2000);
+        HttpTarget target(7, &provider);
+        uint32_t before = fake_now;
+        Reply r = get(target, URL);
+        expect(r.data == "{\"answer\":42}" && slots_given == 1 && !lent[1] && !sessions[1].live,
+               "a CLOSE held off for 1.2 s is still confirmed within the cleanup budget");
+        (void)before;
     }
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

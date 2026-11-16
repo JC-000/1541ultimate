@@ -74,6 +74,13 @@
 #define WIFI_TLS_AGAIN     8 // STEP only: the module had no room and did not take the input, but its
                              // output is handed over as for 0; send the same input again
 
+// A CLOSE the module has confirmed: it freed the session, or it says it knows no such session. Anything else (no
+// answer, a refusal for another reason, nothing sent) leaves the session possibly alive on the module.
+static inline bool wifi_tls_close_confirmed(int result, int esp_err)
+{
+    return result == 0 || (result == WIFI_TLS_REFUSED && esp_err == WIFI_TLS_ESP_NOT_FOUND);
+}
+
 // Polled between the slices of a wait; true ends the wait with BUSY. NULL
 // for no cancelling.
 typedef struct {

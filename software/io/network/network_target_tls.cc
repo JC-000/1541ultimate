@@ -258,6 +258,12 @@ static NetworkTarget *tls_owner;
 // OPEN_TLS; every change and every test of it is in a critical section, with the claim in tls_prepare.
 static uint8_t tls_lent;
 static uint16_t tls_lent_tag;
+// Lent slots whose CLOSE the module never confirmed (tls_withhold_slot), with the tag of the session each may still
+// hold; one task at a time sends a slot's CLOSE again (tls_reclaiming). A C64 reset (tls_resetting) lends nothing
+// from the moment it looks at what is lent until its last CLOSE is sent.
+static uint8_t tls_withheld, tls_reclaiming;
+static uint16_t tls_withheld_tag[NET_MAX_TLS];
+static bool tls_resetting;
 
 // The cancel predicate of the module calls: the above, and a deadline for the waits that have one.
 typedef struct {
@@ -298,10 +304,17 @@ TlsSocket *NetworkTarget :: tls_find(int socketnr)
 // A free entry, not yet in use; the slot on the module is its index.
 TlsSocket *NetworkTarget :: tls_reserve(void)
 {
-    for (int i = 0; i < NET_MAX_TLS; i++) {
-        if (!tls[i].used && !(tls_lent & (1u << i))) {
-            return &tls[i];
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < NET_MAX_TLS; i++) {
+            if (!tls[i].used && !(tls_lent & (1u << i))) {
+                return &tls[i];
+            }
         }
+        // None free: a slot withheld for a CLOSE the module never confirmed may be free by now.
+        if (pass || !tls_withheld) {
+            break;
+        }
+        tls_reclaim_withheld(TLS_CLOSE_RPC_MS);
     }
     return NULL;
 }
@@ -313,7 +326,7 @@ bool NetworkTarget :: tls_lend_slot(uint8_t *slot, uint16_t *tag)
     }
     bool found = false;
     portENTER_CRITICAL();
-    for (int i = NET_MAX_TLS - 1; i >= 0; i--) { // the highest first: OPEN_TLS takes the lowest
+    for (int i = NET_MAX_TLS - 1; i >= 0 && !tls_resetting; i--) { // the highest first: OPEN_TLS takes the lowest
         if (!tls_owner->tls[i].used && !(tls_lent & (1u << i))) {
             tls_lent |= (uint8_t)(1u << i);
             if (++tls_lent_tag < 0x8000) { // target 3's tags are 1..0x7FFF
@@ -333,7 +346,58 @@ void NetworkTarget :: tls_return_slot(uint8_t slot)
 {
     portENTER_CRITICAL();
     tls_lent &= (uint8_t)~(1u << slot);
+    tls_withheld &= (uint8_t)~(1u << slot);
     portEXIT_CRITICAL();
+}
+
+// The slot stays lent. It is given back by tls_reclaim_withheld, once the module confirms that it holds no session
+// there, or by nobody: a module that never answers a CLOSE and never restarts keeps the session, and the slot with it.
+void NetworkTarget :: tls_withhold_slot(uint8_t slot, uint16_t tag)
+{
+    portENTER_CRITICAL();
+    tls_withheld |= (uint8_t)(1u << slot);
+    tls_withheld_tag[slot] = tag;
+    portEXIT_CRITICAL();
+}
+
+void NetworkTarget :: tls_reclaim_withheld(uint32_t budget_ms)
+{
+    uint32_t end = tick_after(budget_ms);
+    for (int i = 0; i < NET_MAX_TLS; i++) {
+        uint16_t tag;
+        bool mine;
+        portENTER_CRITICAL();
+        mine = (tls_withheld & (1u << i)) && !(tls_reclaiming & (1u << i));
+        tag = tls_withheld_tag[i];
+        if (mine) {
+            tls_reclaiming |= (uint8_t)(1u << i);
+        }
+        portEXIT_CRITICAL();
+        if (!mine) {
+            continue;
+        }
+        uint8_t notify[64]; // the close_notify has no socket to go to
+        uint16_t notify_len;
+        int esp_err = 0;
+        int result;
+        while (true) {
+            int32_t room = (int32_t)(end - xTaskGetTickCount());
+            result = wifi_tls_close((uint8_t)i, tag, notify, sizeof(notify), &notify_len, &esp_err,
+                                    room > 0 ? (uint32_t)room * portTICK_PERIOD_MS : 1, NULL);
+            if ((result != WIFI_TLS_UNSENT) || reached(end - pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS))) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));
+        }
+        bool confirmed = wifi_tls_close_confirmed(result, esp_err);
+        portENTER_CRITICAL();
+        tls_reclaiming &= (uint8_t)~(1u << i);
+        if (confirmed && (tls_withheld & (1u << i)) && tls_withheld_tag[i] == tag) {
+            tls_withheld &= (uint8_t)~(1u << i);
+            tls_lent &= (uint8_t)~(1u << i);
+        }
+        portEXIT_CRITICAL();
+    }
 }
 
 int NetworkTarget :: tls_in_use(bool unclaimed_only)
@@ -1676,39 +1740,49 @@ void NetworkTarget :: tls_reset(void)
     // with CLOSE_ALL, and if that is lost, with the next OPEN of each slot;
     // the CA with the new ca_tag, which the module's copy can never match.
     // While a slot is lent to target 6, CLOSE_ALL is not ours to send: it would end that session too. Each of
-    // this target's own sessions is closed by slot and tag instead, and the lent slots are left to their owner.
+    // this target's own sessions is closed by slot and tag instead, and the lent slots are left to their owner,
+    // except those withheld for an unconfirmed CLOSE: that CLOSE is sent again here. A session of ours that the
+    // module may still hold in a lent slot (an OPEN that went unanswered, or one from before a restart of this
+    // side) is not closed: the OPEN of the slot's new owner takes the slot over, as it does for any slot. No slot is lent from the moment
+    // the loans are looked at until the last CLOSE is sent, or a session opened in between would be ended by it.
     portENTER_CRITICAL();
-    uint8_t lent = tls_lent;
+    tls_resetting = true;
     portEXIT_CRITICAL();
     bool live[NET_MAX_TLS];
     for (int i = 0; i < NET_MAX_TLS; i++) {
-        live[i] = tls[i].used && tls[i].module_live;
+        live[i] = tls[i].module_live; // also an entry whose OPEN went unanswered (not used, but the module may hold it)
         tls[i].used = false;
     }
     ca_state = CA_EMPTY;
     tls_new_ca_tag();
-    if (!wifi_tls_module_available()) {
-        return;
-    }
-    if (!lent) {
-        int esp_err;
-        for (int i = 0; wifi_tls_close_all(&esp_err, TLS_CLOSE_ALL_RPC_MS) == WIFI_TLS_UNSENT && i < TLS_UNSENT_RETRIES; i++) {
-            vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));
+    if (wifi_tls_module_available()) {
+        tls_reclaim_withheld(TLS_CLOSE_RPC_MS);
+        portENTER_CRITICAL();
+        uint8_t lent = tls_lent;
+        portEXIT_CRITICAL();
+        if (!lent) {
+            int esp_err;
+            for (int i = 0; wifi_tls_close_all(&esp_err, TLS_CLOSE_ALL_RPC_MS) == WIFI_TLS_UNSENT && i < TLS_UNSENT_RETRIES; i++) {
+                vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));
+            }
+        } else {
+            for (int i = 0; i < NET_MAX_TLS; i++) {
+                if (!live[i] || (lent & (1u << i))) {
+                    continue;
+                }
+                uint16_t notify_len;
+                int esp_err;
+                for (int n = 0; wifi_tls_close(tls[i].slot, tls[i].tag, tls_ct_out, sizeof(tls_ct_out), &notify_len, &esp_err,
+                                               TLS_CLOSE_RPC_MS, NULL) == WIFI_TLS_UNSENT && n < TLS_UNSENT_RETRIES; n++) {
+                    vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));
+                }
+                tls[i].module_live = false;
+            }
         }
-        return;
     }
-    for (int i = 0; i < NET_MAX_TLS; i++) {
-        if (!live[i] || (lent & (1u << i))) {
-            continue;
-        }
-        uint16_t notify_len;
-        int esp_err;
-        for (int n = 0; wifi_tls_close(tls[i].slot, tls[i].tag, tls_ct_out, sizeof(tls_ct_out), &notify_len, &esp_err,
-                                       TLS_CLOSE_RPC_MS, NULL) == WIFI_TLS_UNSENT && n < TLS_UNSENT_RETRIES; n++) {
-            vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));
-        }
-        tls[i].module_live = false;
-    }
+    portENTER_CRITICAL();
+    tls_resetting = false;
+    portEXIT_CRITICAL();
 }
 
 #else // !NET_TLS

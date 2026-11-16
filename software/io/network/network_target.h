@@ -261,6 +261,11 @@ public:
     // closes its own session, by slot and tag); this target's own sessions are closed one by one.
     static bool tls_lend_slot(uint8_t *slot, uint16_t *tag);
     static void tls_return_slot(uint8_t slot);
+    // A lent slot whose CLOSE the module never confirmed stays lent: tls_withhold_slot records it with its tag, and
+    // tls_reclaim_withheld sends the CLOSE again (for at most budget_ms), giving back every slot the module confirms.
+    // This target does the same on a C64 reset and when an OPEN_TLS finds no slot free.
+    static void tls_withhold_slot(uint8_t slot, uint16_t tag);
+    static void tls_reclaim_withheld(uint32_t budget_ms);
 #endif
 
     void parse_command(Message *command, Message **reply, Message **status);

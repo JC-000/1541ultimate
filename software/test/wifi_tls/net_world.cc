@@ -20,6 +20,7 @@ uint32_t world_reset_at;
 uint32_t world_abort_at = 0xFFFFFFFF;
 void (*world_reset_hook)(void);
 void (*world_available_hook)(void);
+void (*world_close_all_hook)(void);
 int world_available_calls, world_available_at, world_available_at_open;
 void (*world_open_hook)(void);
 void (*world_abort_hook)(void);
@@ -1016,6 +1017,11 @@ int wifi_tls_close_all(int *esp_err, uint32_t timeout_ms)
 {
     FakeModule &m = world_module;
     *esp_err = 0;
+    if (world_close_all_hook) {
+        void (*hook)(void) = world_close_all_hook;
+        world_close_all_hook = NULL;
+        hook();
+    }
     if (unsent()) {
         return WIFI_TLS_UNSENT;
     }

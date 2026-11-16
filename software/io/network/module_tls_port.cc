@@ -28,7 +28,11 @@
 #define PORT_SLICE_MS        100
 #define PORT_SNDTIMEO_MS     500         // caps lwIP's close when it cannot get memory for the FIN
 #define PORT_EXCHANGE_MS     30000
-#define PORT_CLEANUP_MS      1000
+// The cleanup after a request: the CLOSE (sent again while another task holds the module thread), the close_notify
+// (at most 100 ms of it) and the socket's disposal (PORT_SNDTIMEO_MS). The CLOSE gets what is left, and that must not
+// be less than the second it had before the disposal was counted, or a busy module thread leaves slots withheld.
+#define PORT_CLEANUP_MS      2000
+static_assert(PORT_CLEANUP_MS - PORT_SNDTIMEO_MS - 100 >= 1000, "the CLOSE needs a second of the cleanup budget");
 
 static bool port_stopped(const wifi_tls_cancel_t *cancel)
 {
@@ -117,6 +121,8 @@ public:
     }
     bool take_slot(uint8_t *slot, uint16_t *tag) override { return NetworkTarget::tls_lend_slot(slot, tag); }
     void give_slot(uint8_t slot) override { NetworkTarget::tls_return_slot(slot); }
+    void withhold_slot(uint8_t slot, uint16_t tag) override { NetworkTarget::tls_withhold_slot(slot, tag); }
+    void reclaim_withheld(uint32_t budget_ms) override { NetworkTarget::tls_reclaim_withheld(budget_ms); }
 
     int tcp_connect(const char *host, uint16_t port, uint32_t budget_ms, const wifi_tls_cancel_t *cancel, int *handle) override
     {
