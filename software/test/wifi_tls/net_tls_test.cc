@@ -1598,6 +1598,35 @@ static void test_target6_holds_the_thread(void)
     reset_c64();
     check(world_module.close_alls == 1, "held thread: a reset's CLOSE_ALL reaches the module (%d)", world_module.close_alls);
     world_module.unsent_next = 0;
+
+    // Target 6 streaming a read sends STEPs back to back: the thread is taken for seconds, not one cleanup.
+    // STEP is sent again until its own deadline (10 s for a READ); CLOSE and CLOSE_ALL cover a 5 s hold.
+    fresh();
+    h = open_ok();
+    server_push(h, EV_DATA, record('D', 40, 9));
+    world_module.unsent_next = 150; // 7.5 s of polls
+    got.clear();
+    for (int i = 0; i < 40 && got.size() < 40; i++) {
+        r = read_cmd(h, 100);
+        if (header(r) == 0xFFFF && r.status.compare(0, 3, "02,") != 0) {
+            last = r.status;
+            break;
+        }
+        bytes b = body(r);
+        got.insert(got.end(), b.begin(), b.end());
+    }
+    check(got == expected(9, 40), "streaming target 6: a READ's STEP waits for its turn (%s)", last.c_str());
+    world_module.unsent_next = 0;
+    world_module.calls.clear();
+    world_module.unsent_next = 100; // a 5 s hold
+    r = close_cmd(h);
+    check(r.status == "00,OK" && world_count(0x32) == 1, "streaming target 6: CLOSE outlasts a 5 s hold (%d)", world_count(0x32));
+    world_module.unsent_next = 0;
+    a = open_ok();
+    world_module.unsent_next = 100;
+    reset_c64();
+    check(world_module.close_alls == 1, "streaming target 6: CLOSE_ALL outlasts a 5 s hold (%d)", world_module.close_alls);
+    world_module.unsent_next = 0;
 }
 
 // Every TLS status line is at most 40 bytes. The longest

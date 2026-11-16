@@ -62,9 +62,10 @@ extern Message c_status_no_entropy; // network_target.cc: GET_RANDOM answers the
 #define TLS_WRITE_TOTAL_MS    10000
 #define TLS_SEND_MS           5000
 #define TLS_NOTIFY_SEND_MS    100
-// Target 6's cleanup CLOSE can hold the dedicated module thread for TLS_CLOSE_RPC_MS (1000 ms), and the thread
-// refuses a second caller with UNSENT at once. 24 x 50 ms outlasts it, for every call target 3 sends.
-#define TLS_UNSENT_RETRIES    24
+// The dedicated module thread refuses a second caller with UNSENT at once, and target 6 can hold it for a whole
+// OPEN or STEP (5 s), or take it again and again while it streams. OPEN and STEP are therefore sent again until
+// their own deadline. CLOSE, CLOSE_ALL and SET_CA have none: 120 x 50 ms outlasts the longest single hold.
+#define TLS_UNSENT_RETRIES    120
 #define TLS_UNSENT_DELAY_MS   50
 #define TLS_SLICE_MS          100  // the longest any wait goes without looking at a reset
 #define TLS_SNDTIMEO_MS       500  // caps lwIP's close when it cannot get memory for the FIN
@@ -492,7 +493,7 @@ int NetworkTarget :: tls_run_step(TlsSocket *e, void *step, uint32_t deadline, b
     int result;
     for (int i = 0; ; i++) {
         result = wifi_tls_step(e->slot, e->tag, (wifi_tls_step_t *)step, TLS_STEP_RPC_MS, &cancel);
-        if ((result != WIFI_TLS_UNSENT) || (i == TLS_UNSENT_RETRIES) || tls_cancelled(&context)) {
+        if ((result != WIFI_TLS_UNSENT) || (!use_deadline && (i == TLS_UNSENT_RETRIES)) || tls_cancelled(&context)) {
             break;
         }
         vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));
@@ -711,9 +712,9 @@ Message *NetworkTarget :: tls_prepare(TlsSocket *e, uint8_t trust, uint8_t flags
     int esp_err;
     uint8_t reason;
     int result;
-    for (int i = 0; ; i++) {
+    for (;;) {
         result = wifi_tls_open(&open, TLS_OPEN_RPC_MS, &cancel, &esp_err, &reason);
-        if ((result != WIFI_TLS_UNSENT) || (i == TLS_UNSENT_RETRIES) || tls_cancelled(&context)) {
+        if ((result != WIFI_TLS_UNSENT) || tls_cancelled(&context)) { // its context always has a deadline
             break;
         }
         vTaskDelay(pdMS_TO_TICKS(TLS_UNSENT_DELAY_MS));

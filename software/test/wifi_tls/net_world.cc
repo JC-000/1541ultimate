@@ -952,6 +952,10 @@ int wifi_tls_close(uint8_t slot, uint16_t tag, uint8_t *ct_out, uint16_t room, u
     if (!m.available) {
         return WIFI_TLS_NO_MODULE;
     }
+    if (m.close_unsent_next > 0) {
+        m.close_unsent_next--;
+        return WIFI_TLS_UNSENT;
+    }
     if (unsent()) {
         return WIFI_TLS_UNSENT;
     }

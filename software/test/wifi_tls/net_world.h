@@ -193,6 +193,7 @@ struct FakeModule {
     int again_next;      // answer AGAIN this many times first
     FakeSession sess[2];
     std::vector<RpcCall> calls;
+    int close_unsent_next; // answer UNSENT to this many CLOSEs first (only CLOSE)
     int unsent_next;     // answer UNSENT this many times first (any call)
     bool quiet_alternate; // every other input-less step is quiet while plaintext is held
     bool quiet_last;
