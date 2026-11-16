@@ -315,7 +315,7 @@ bool NetworkTarget :: tls_lend_slot(uint8_t *slot, uint16_t *tag)
     for (int i = NET_MAX_TLS - 1; i >= 0; i--) { // the highest first: OPEN_TLS takes the lowest
         if (!tls_owner->tls[i].used && !(tls_lent & (1u << i))) {
             tls_lent |= (uint8_t)(1u << i);
-            if (++tls_lent_tag < 0x8000) { // apart from the tags of target 3
+            if (++tls_lent_tag < 0x8000) { // target 3's tags are 1..0x7FFF
                 tls_lent_tag = 0x8000;
             }
             *slot = (uint8_t)i;
@@ -350,7 +350,7 @@ int NetworkTarget :: tls_in_use(bool unclaimed_only)
 
 uint16_t NetworkTarget :: tls_new_tag(void)
 {
-    if (++tls_last_tag == 0) {
+    if (++tls_last_tag == 0 || tls_last_tag >= 0x8000) { // 0x8000 and up are target 6's
         tls_last_tag = 1;
     }
     return tls_last_tag;

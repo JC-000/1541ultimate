@@ -233,6 +233,21 @@ int main(int argc, char **argv)
     NetworkTarget::tls_return_slot(lent_a);
     NetworkTarget::tls_return_slot(lent_b);
     check(run(B({ 0x03, 0x23, 0xFF })).data[2] == 0, "info: both returned -> 0 in use");
+    // Target 3's tags stop at 0x7FFF and wrap to 1: 0x8000 and up are target 6's.
+    fresh();
+    net.tls_last_tag = 0x7FFD;
+    uint16_t seen[3] = { 0, 0, 0 };
+    for (int i = 0; i < 3; i++) {
+        world_module.calls.clear();
+        h = open_status(&st);
+        for (size_t k = 0; k < world_module.calls.size(); k++) {
+            if (world_module.calls[k].cmd == 0x30) {
+                seen[i] = world_module.calls[k].open.tag;
+            }
+        }
+        run(close_cmd(h));
+    }
+    check(seen[0] == 0x7FFE && seen[1] == 0x7FFF && seen[2] == 1, "tags: 0x7FFE, 0x7FFF, then 1 (got %04X %04X %04X)", seen[0], seen[1], seen[2]);
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
