@@ -254,6 +254,14 @@ public:
 	NetworkTarget(int id);
 	virtual ~NetworkTarget();
 
+#if NET_TLS
+    // For target 6's HTTPS over the module (module_tls_http.cc): one of the module's session slots, held
+    // exclusively until it is returned. An OPEN_TLS that has the slot at the same moment is refused with 91.
+    // Callable from any task; a C64 reset ends the session on the module (CLOSE_ALL) but never the loan.
+    static bool tls_lend_slot(uint8_t *slot, uint16_t *tag);
+    static void tls_return_slot(uint8_t slot);
+#endif
+
     void parse_command(Message *command, Message **reply, Message **status);
     void deferred_reply(Message **reply, Message **status);
     bool is_quick(Message *command);

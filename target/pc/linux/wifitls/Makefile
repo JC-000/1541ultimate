@@ -40,11 +40,13 @@ NET_DIR  = $(PATH_SW)/io/network
 NET_PATH = $(TEST)/netstub $(TEST)/stub $(NET_DIR) $(PATH_SW)/io/wifi $(PATH_SW)/io/command_interface $(PATH_SW)/network $(PATH_SW)/infra
 NET_OPTIONS = -std=gnu++11 -g -O0 -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations $(NIOS_OPT) -DU64=$(U64) $(addprefix -I, $(NET_PATH))
 NET_SRCS = net_tls_test.cc net_world.cc ip4addr_aton.cc
-NET_OBJS = $(addprefix $(OUTPUT)/net/, $(NET_SRCS:%.cc=%.o)) $(OUTPUT)/net/network_target.o $(OUTPUT)/net/network_target_tls.o $(OUTPUT)/net/wifi_random.o
+NET_COMMON = $(OUTPUT)/net/net_world.o $(OUTPUT)/net/ip4addr_aton.o $(OUTPUT)/net/network_target.o $(OUTPUT)/net/network_target_tls.o $(OUTPUT)/net/wifi_random.o
+NET_OBJS = $(OUTPUT)/net/net_tls_test.o $(NET_COMMON)
+LEND_OBJS = $(OUTPUT)/net/net_lend_test.o $(NET_COMMON)
 
 .PHONY: all test clean gate
 
-all: $(RESULT)/wifitls $(RESULT)/nettls
+all: $(RESULT)/wifitls $(RESULT)/nettls $(RESULT)/netlend
 
 $(OUTPUT)/tls/%.o: %.cc
 	@mkdir -p $(OUTPUT)/tls
@@ -81,6 +83,11 @@ $(RESULT)/nettls: $(NET_OBJS)
 	@mkdir -p $(RESULT)
 	$(CXX) -o $@ $(NET_OBJS)
 
+# The slots lent to target 6 (HTTPS over the module), apart from nettls so that its counts stay as they are.
+$(RESULT)/netlend: $(LEND_OBJS)
+	@mkdir -p $(RESULT)
+	$(CXX) -o $@ $(LEND_OBJS)
+
 # NET_TLS must be what this target has: on for the Nios II U64 and the U64-II, off for the RISC-V U64.
 gate:
 	$(CXX) $(NET_OPTIONS) -DEXPECT_NET_TLS=$(EXPECT_TLS) -fsyntax-only $(TEST)/net_gate_test.cc
@@ -88,6 +95,7 @@ gate:
 test: all gate
 	@$(RESULT)/wifitls
 	@$(RESULT)/nettls
+	@$(RESULT)/netlend
 ifeq ($(U64)$(NIOS),11)
 	@$(MAKE) U64=2 test
 	@$(MAKE) U64=1 NIOS=0 gate

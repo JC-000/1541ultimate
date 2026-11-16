@@ -251,6 +251,11 @@ static uint32_t earlier(uint32_t a, uint32_t b)
 // so that an aborted OPEN still tells the module to free its session.
 static NetworkTarget *tls_owner;
 
+// The slots lent to target 6 (tls_lend_slot), a bit each. A lent slot is neither reserved nor claimed by an
+// OPEN_TLS; every change and every test of it is in a critical section, with the claim in tls_prepare.
+static uint8_t tls_lent;
+static uint16_t tls_lent_tag;
+
 // The cancel predicate of the module calls: the above, and a deadline for the waits that have one.
 typedef struct {
     bool use_deadline;
@@ -291,11 +296,41 @@ TlsSocket *NetworkTarget :: tls_find(int socketnr)
 TlsSocket *NetworkTarget :: tls_reserve(void)
 {
     for (int i = 0; i < NET_MAX_TLS; i++) {
-        if (!tls[i].used) {
+        if (!tls[i].used && !(tls_lent & (1u << i))) {
             return &tls[i];
         }
     }
     return NULL;
+}
+
+bool NetworkTarget :: tls_lend_slot(uint8_t *slot, uint16_t *tag)
+{
+    if (!tls_owner) {
+        return false;
+    }
+    bool found = false;
+    portENTER_CRITICAL();
+    for (int i = NET_MAX_TLS - 1; i >= 0; i--) { // the highest first: OPEN_TLS takes the lowest
+        if (!tls_owner->tls[i].used && !(tls_lent & (1u << i))) {
+            tls_lent |= (uint8_t)(1u << i);
+            if (++tls_lent_tag < 0x8000) { // apart from the tags of target 3
+                tls_lent_tag = 0x8000;
+            }
+            *slot = (uint8_t)i;
+            *tag = tls_lent_tag;
+            found = true;
+            break;
+        }
+    }
+    portEXIT_CRITICAL();
+    return found;
+}
+
+void NetworkTarget :: tls_return_slot(uint8_t slot)
+{
+    portENTER_CRITICAL();
+    tls_lent &= (uint8_t)~(1u << slot);
+    portEXIT_CRITICAL();
 }
 
 int NetworkTarget :: tls_in_use(bool unclaimed_only)
@@ -624,6 +659,17 @@ Message *NetworkTarget :: tls_prepare(TlsSocket *e, uint8_t trust, uint8_t flags
     }
     memset(e, 0, offsetof(TlsSocket, rx)); // all but the buffers
     e->slot = (uint8_t)(e - tls);
+    // The entry is claimed here, against a slot lent to target 6 in the meantime; it stays claimed through the
+    // handshake, and is freed again below when the OPEN fails.
+    portENTER_CRITICAL();
+    bool lent = (tls_lent & (1u << e->slot)) != 0;
+    if (!lent) {
+        e->used = true;
+    }
+    portEXIT_CRITICAL();
+    if (lent) {
+        return &c_status_tls_in_use;
+    }
     e->tag = tls_new_tag();
     e->trust = trust;
     e->module_live = false;
@@ -657,6 +703,7 @@ Message *NetworkTarget :: tls_prepare(TlsSocket *e, uint8_t trust, uint8_t flags
         e->module_live = true;
         return NULL;
     }
+    e->used = false; // every way on from here is a failure
     if (result == WIFI_TLS_NO_MODULE) {
         return &c_status_tls_not_available;
     }
