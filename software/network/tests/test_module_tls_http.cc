@@ -97,14 +97,14 @@ struct FakePort : ModuleTlsPort {
         ++slots_taken; *slot = 1; *tag = 77; return true;
     }
     void give_slot(uint8_t) override { ++slots_given; }
-    int connect(const char *host, uint16_t port, uint32_t, const wifi_tls_cancel_t *, int *handle) override {
+    int tcp_connect(const char *host, uint16_t port, uint32_t, const wifi_tls_cancel_t *, int *handle) override {
         if (sc.connect_fails) return 111;
         ++connects; ++tcp_open; tcp_host = host; tcp_port_seen = port; *handle = 9; return 0;
     }
-    int send(int, const uint8_t *data, int length, uint32_t, const wifi_tls_cancel_t *) override {
+    int tcp_send(int, const uint8_t *data, int length, uint32_t, const wifi_tls_cancel_t *) override {
         server_feed(data, length); return 0;
     }
-    int recv(int, uint8_t *buffer, int room, uint32_t budget, const wifi_tls_cancel_t *cancel) override {
+    int tcp_recv(int, uint8_t *buffer, int room, uint32_t budget, const wifi_tls_cancel_t *cancel) override {
         if (cancel && cancel->cancelled && cancel->cancelled(cancel->context)) return 0;
         if (server_out.empty()) {
             fake_now += budget;
@@ -117,7 +117,7 @@ struct FakePort : ModuleTlsPort {
         server_out.erase(0, n);
         return n;
     }
-    void close(int) override { ++tcp_closes; --tcp_open; }
+    void tcp_close(int) override { ++tcp_closes; --tcp_open; }
 };
 
 // ---- the fake module ------------------------------------------------------

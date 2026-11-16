@@ -61,7 +61,7 @@ class ModuleTlsHttpProvider::Connection : public HttpConnection
     {
         if (length <= 0) return true;
         wifi_tls_cancel_t c = cancel();
-        return port_.send(sock_, data, length, left(SEND_MS), &c) == 0;
+        return port_.tcp_send(sock_, data, length, left(SEND_MS), &c) == 0;
     }
     int run_step(wifi_tls_step_t *st)
     {
@@ -82,7 +82,7 @@ class ModuleTlsHttpProvider::Connection : public HttpConnection
         uint32_t budget = left(SLICE_MS);
         if (!budget) return -1;
         wifi_tls_cancel_t c = cancel();
-        int n = port_.recv(sock_, held_, sizeof(held_), budget, &c);
+        int n = port_.tcp_recv(sock_, held_, sizeof(held_), budget, &c);
         if (n > 0) { held_len_ = (uint16_t)n; return n; }
         if (n == 0) return 0;
         if (n == -1) { fin_ = true; return 0; }
@@ -101,7 +101,7 @@ class ModuleTlsHttpProvider::Connection : public HttpConnection
         if (!port_.take_slot(&slot_, &tag_)) return -1;
         have_slot_ = true;
         wifi_tls_cancel_t c = cancel();
-        if (port_.connect(host, port, left(DNS_CONNECT_MS), &c, &sock_) != 0) { sock_ = -1; return -1; }
+        if (port_.tcp_connect(host, port, left(DNS_CONNECT_MS), &c, &sock_) != 0) { sock_ = -1; return -1; }
         wifi_tls_open_t open;
         memset(&open, 0, sizeof(open));
         open.trust = WIFI_TLS_TRUST_BUNDLE;
@@ -276,12 +276,12 @@ public:
             int esp_err = 0;
             int result = wifi_tls_close(slot_, tag_, ct_, sizeof(ct_), &notify, &esp_err, provider_.cleanup_ms_, NULL);
             if (result == 0 && notify && sock_ >= 0) {
-                port_.send(sock_, ct_, notify, NOTIFY_SEND_MS, NULL);
+                port_.tcp_send(sock_, ct_, notify, NOTIFY_SEND_MS, NULL);
             }
             live_ = false;
         }
         if (sock_ >= 0) {
-            port_.close(sock_);
+            port_.tcp_close(sock_);
             sock_ = -1;
         }
         if (have_slot_) {

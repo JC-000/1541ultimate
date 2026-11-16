@@ -118,7 +118,7 @@ public:
     bool take_slot(uint8_t *slot, uint16_t *tag) override { return NetworkTarget::tls_lend_slot(slot, tag); }
     void give_slot(uint8_t slot) override { NetworkTarget::tls_return_slot(slot); }
 
-    int connect(const char *host, uint16_t port, uint32_t budget_ms, const wifi_tls_cancel_t *cancel, int *handle) override
+    int tcp_connect(const char *host, uint16_t port, uint32_t budget_ms, const wifi_tls_cancel_t *cancel, int *handle) override
     {
         uint32_t end = now_ms() + budget_ms;
         uint32_t address = 0;
@@ -162,7 +162,7 @@ public:
         *handle = sock;
         return 0;
     }
-    int send(int sock, const uint8_t *data, int length, uint32_t budget_ms, const wifi_tls_cancel_t *cancel) override
+    int tcp_send(int sock, const uint8_t *data, int length, uint32_t budget_ms, const wifi_tls_cancel_t *cancel) override
     {
         uint32_t end = now_ms() + budget_ms;
         while (length > 0) {
@@ -186,7 +186,7 @@ public:
         }
         return 0;
     }
-    int recv(int sock, uint8_t *buffer, int room, uint32_t budget_ms, const wifi_tls_cancel_t *cancel) override
+    int tcp_recv(int sock, uint8_t *buffer, int room, uint32_t budget_ms, const wifi_tls_cancel_t *cancel) override
     {
         if (!port_stopped(cancel) && !wait(sock, false, budget_ms)) {
             return 0;
@@ -200,7 +200,7 @@ public:
         }
         return ((errno == EWOULDBLOCK) || (errno == EAGAIN)) ? 0 : -2;
     }
-    void close(int sock) override { lwip_close(sock); }
+    void tcp_close(int sock) override { lwip_close(sock); }
 };
 
 static FirmwareModuleTlsPort firmware_port;

@@ -29,15 +29,15 @@ public:
     virtual bool take_slot(uint8_t *slot, uint16_t *tag) = 0;
     virtual void give_slot(uint8_t slot) = 0;
     // DNS and TCP connect. 0 with *handle, else an error (nonzero).
-    virtual int connect(const char *host, uint16_t port, uint32_t budget_ms, const wifi_tls_cancel_t *cancel,
+    virtual int tcp_connect(const char *host, uint16_t port, uint32_t budget_ms, const wifi_tls_cancel_t *cancel,
                         int *handle) = 0;
     // 0 once all of it is sent, else an error.
-    virtual int send(int handle, const uint8_t *data, int length, uint32_t budget_ms,
+    virtual int tcp_send(int handle, const uint8_t *data, int length, uint32_t budget_ms,
                      const wifi_tls_cancel_t *cancel) = 0;
     // Waits up to budget_ms for data: bytes (>0), 0 for none yet, -1 for the
     // peer's end of stream, -2 for an error.
-    virtual int recv(int handle, uint8_t *buffer, int room, uint32_t budget_ms, const wifi_tls_cancel_t *cancel) = 0;
-    virtual void close(int handle) = 0;
+    virtual int tcp_recv(int handle, uint8_t *buffer, int room, uint32_t budget_ms, const wifi_tls_cancel_t *cancel) = 0;
+    virtual void tcp_close(int handle) = 0;
 };
 
 class ModuleTlsHttpProvider : public HttpSecureProvider
