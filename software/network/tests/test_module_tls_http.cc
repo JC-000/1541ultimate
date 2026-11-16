@@ -331,6 +331,33 @@ int main()
         target.begin_command(events.token());
         expect(get(target, URL).data == "{\"answer\":42}", "a fresh command works after a cancelled one");
     }
+    {   // A literal address names no certificate: bundle trust refuses it, and no address is ever sent as SNI.
+        const char *literals[] = { "https://192.0.2.1/probe", "https://[2001:db8::1]/probe", "https://[::1]:8443/probe", "https://0x7f.1/probe" };
+        for (const char *u : literals) {
+            reset(Scenario());
+            ModuleTlsHttpProvider provider(port, 20000, 500);
+            HttpTarget target(7, &provider);
+            Reply r = get(target, u);
+            // (the URL parser itself answers 500 to a bracketed IPv6 host; either way nothing opens)
+            expect(r.data.empty() && r.status.compare(0, 3, "200") != 0 && !slots_taken && !connects && !module_opens && last_sni.empty(), u);
+            balanced("nothing held for a literal address");
+        }
+        reset(Scenario());
+        ModuleTlsHttpProvider provider(port, 20000, 500);
+        const char *hosts[] = { "::1", "2001:db8::1", "10.0.0.1", "127.1", "0x7f.0.0.1", "2130706433" };
+        for (const char *h : hosts) {
+            HttpConnection *c = provider.create_connection(OperationCancellation());
+            expect(c && c->open(h, 443) != 0 && !connects && !module_opens && !slots_taken, h);
+            delete c;
+        }
+        {   // a name that only looks numeric is still a name
+            Scenario n; n.cert_name = "1.example.com";
+            reset(n);
+            HttpConnection *c = provider.create_connection(OperationCancellation());
+            expect(c && c->open("1.example.com", 443) == 0 && last_sni == "1.example.com", "1.example.com is a name");
+            delete c;
+        }
+    }
     {   // M5: an OPEN nobody answers may still have started the session: the CLOSE goes out all the same.
         Scenario s; s.open_unanswered = true;
         reset(s);

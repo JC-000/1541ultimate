@@ -1,6 +1,7 @@
 #include "module_tls_http.h"
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <new>
 
 // Limits taken from target 3 (network_target_tls.cc), which runs the same module calls.
@@ -178,6 +179,23 @@ public:
         close_session();
         provider_.occupied_ = false;
     }
+    // An IPv6 literal (a colon), or an IPv4 one in any form lwIP's ip4addr_aton takes (127.1, 0x7f.0.0.1, 2130706433):
+    // bundle trust checks a name, so a literal is refused, as target 3 does, and no address is sent as SNI.
+    static bool is_literal(const char *host, size_t length)
+    {
+        if (memchr(host, ':', length)) return true;
+        size_t at = 0;
+        int parts = 0;
+        while (true) {
+            bool hex = at + 1 < length && host[at] == '0' && (host[at + 1] == 'x' || host[at + 1] == 'X');
+            if (hex) at += 2;
+            size_t digits = at;
+            while (at < length && (hex ? isxdigit((unsigned char)host[at]) : (host[at] >= '0' && host[at] <= '9'))) at++;
+            if (at == digits || ++parts > 4) return false;   // an empty part, or too many for an address
+            if (at == length) return true;
+            if (host[at++] != '.') return false;
+        }
+    }
     int open(const char *host, uint16_t port) override
     {
         if (closed_ || attempted_) return -1;
@@ -185,7 +203,7 @@ public:
         deadline_ = port_.now_ms() + provider_.exchange_ms_;
         if (!host || !port) return -1;
         size_t length = strnlen(host, MAX_HOST + 1);
-        if (!length || length > MAX_HOST) return -1;
+        if (!length || length > MAX_HOST || is_literal(host, length)) return -1;
         if (stop() || !port_.module_ready()) return fail();
         if (establish(host, port) != 0) return fail();
         opened_ = true;
