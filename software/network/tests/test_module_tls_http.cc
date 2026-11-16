@@ -35,6 +35,8 @@ struct Scenario {
     bool no_length = false;                // no Content-Length: the body runs to the end of the connection
     int cut = 0;                           // bytes of the body the server never sends
     int fragment = 5;                      // the most bytes one recv hands over
+    int close_cost_ms = 0, close_max_ms = 0; // the local socket disposal takes this long, and the port says it can take at most that
+    bool notify_blocks = false;            // the peer takes nothing: the close_notify send uses its whole budget
     int late_step_ms = 0;                  // a STEP, once the request is out, takes this long (the clock moves)
     CancellationSource *cancel_on_request = NULL;
 };
@@ -115,7 +117,8 @@ struct FakePort : ModuleTlsPort {
         if (sc.connect_fails) return 111;
         ++connects; ++tcp_open; tcp_host = host; tcp_port_seen = port; *handle = 9; return 0;
     }
-    int tcp_send(int, const uint8_t *data, int length, uint32_t, const wifi_tls_cancel_t *) override {
+    int tcp_send(int, const uint8_t *data, int length, uint32_t budget, const wifi_tls_cancel_t *) override {
+        if (sc.notify_blocks && length >= 1 && data[0] == 'C') { fake_now += budget; return 110; }
         server_feed(data, length); return 0;
     }
     int tcp_recv(int, uint8_t *buffer, int room, uint32_t budget, const wifi_tls_cancel_t *cancel) override {
@@ -131,7 +134,8 @@ struct FakePort : ModuleTlsPort {
         server_out.erase(0, n);
         return n;
     }
-    void tcp_close(int) override { ++tcp_closes; --tcp_open; }
+    void tcp_close(int) override { ++tcp_closes; --tcp_open; fake_now += sc.close_cost_ms; }
+    uint32_t tcp_close_max_ms() override { return sc.close_max_ms; }
     bool is_ipv4_literal(const char *host) override { ip4_addr_t a; return ip4addr_aton(host, &a) != 0; }
 };
 
@@ -530,6 +534,26 @@ int main()
         Reply r = get(target, URL);
         expect(r.data == "{\"answer\":42}" && slots_given >= 1 && slots_taken == taken + 1,
                "'no such session' frees the withheld slot, which is lent again");
+    }
+    {   // The cleanup bound covers the CLOSE, the close_notify and the local socket's disposal together.
+        for (int phase = 0; phase < 2; ++phase) {
+            Scenario s; s.close_cost_ms = 400; s.close_max_ms = 400; s.notify_blocks = true;
+            s.close_unsent = phase ? 100000 : 0;
+            reset(s);
+            ModuleTlsHttpProvider provider(port, 20000, 450);
+            HttpConnection *c = provider.create_connection(OperationCancellation());
+            expect(c && c->open("secure.test", 443) == 0, "cleanup bound: opened");
+            uint32_t before = fake_now;
+            delete c;
+            expect(fake_now - before <= 450, phase ? "cleanup bound: an unanswered CLOSE, with the socket disposal, stays within it"
+                                                   : "cleanup bound: CLOSE, a blocked close_notify and the socket disposal stay within it");
+            expect(tcp_open == 0, "cleanup bound: the socket is closed");
+        }
+        // A bound the socket disposal alone could break is not offered.
+        Scenario s; s.close_max_ms = 500;
+        reset(s);
+        ModuleTlsHttpProvider provider(port, 20000, 500);
+        expect(!provider.available() && !provider.create_connection(OperationCancellation()), "cleanup bound: not available when the socket disposal alone can take all of it");
     }
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -38,6 +38,8 @@ public:
     // peer's end of stream, -2 for an error.
     virtual int tcp_recv(int handle, uint8_t *buffer, int room, uint32_t budget_ms, const wifi_tls_cancel_t *cancel) = 0;
     virtual void tcp_close(int handle) = 0;
+    // The longest tcp_close can take. The provider's cleanup budget includes it.
+    virtual uint32_t tcp_close_max_ms() = 0;
     // lwIP's own predicate for an IPv4 literal (ip4addr_aton: 127.1, 0x7f.0.0.1, a trailing space or \v), as target 3
     // asks it. host is NUL-terminated.
     virtual bool is_ipv4_literal(const char *host) = 0;
@@ -46,8 +48,9 @@ public:
 class ModuleTlsHttpProvider : public HttpSecureProvider
 {
 public:
-    // exchange_ms bounds a whole request (open, every read and write);
-    // cleanup_ms bounds the CLOSE and the close_notify after it.
+    // exchange_ms bounds a whole request (open, every read and write); cleanup_ms bounds the whole cleanup after it:
+    // the CLOSE (sent again while the module thread is busy), the close_notify and the local socket's disposal
+    // (the port's tcp_close_max_ms). A cleanup_ms that the disposal alone could use up makes the provider unavailable.
     ModuleTlsHttpProvider(ModuleTlsPort& port, uint32_t exchange_ms, uint32_t cleanup_ms);
     bool available() const override;
     HttpConnection *create_connection(const OperationCancellation& cancellation) override;

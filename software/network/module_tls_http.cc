@@ -318,14 +318,20 @@ public:
     {
         if (closed_) return;
         closed_ = true;
+        uint32_t start = port_.now_ms();
         bool withhold = false;
         if (live_) {
             uint16_t notify = 0;
             int esp_err = 0;
-            // Another caller may hold the module thread: sent again, within the cleanup budget.
-            int result = close_retried(slot_, tag_, port_.now_ms() + provider_.cleanup_ms_, &notify, &esp_err);
-            if (result == 0 && notify && sock_ >= 0) {
-                port_.tcp_send(sock_, ct_, notify, NOTIFY_SEND_MS, NULL);
+            // One budget for all of the cleanup: the CLOSE (sent again while another caller holds the module
+            // thread) and the close_notify come first, and the socket's disposal keeps the port's worst case.
+            uint32_t body_end = start + provider_.cleanup_ms_ - port_.tcp_close_max_ms();
+            uint32_t notify_ms = (provider_.cleanup_ms_ - port_.tcp_close_max_ms()) / 2;
+            if (notify_ms > NOTIFY_SEND_MS) notify_ms = NOTIFY_SEND_MS;
+            int result = close_retried(slot_, tag_, body_end - notify_ms, &notify, &esp_err);
+            int32_t room = (int32_t)(body_end - port_.now_ms());
+            if (result == 0 && notify && sock_ >= 0 && room > 0) {
+                port_.tcp_send(sock_, ct_, notify, (uint32_t)room < NOTIFY_SEND_MS ? (uint32_t)room : NOTIFY_SEND_MS, NULL);
             }
             // No acknowledgement: the module may still hold the session, and the slot may not be lent again.
             withhold = !close_confirmed(result, esp_err);
@@ -364,7 +370,8 @@ void ModuleTlsHttpProvider::withhold(uint8_t slot, uint16_t tag)
 
 bool ModuleTlsHttpProvider::available() const
 {
-    return exchange_ms_ && exchange_ms_ <= INT32_MAX && cleanup_ms_ && cleanup_ms_ <= INT32_MAX && port_.module_ready();
+    return exchange_ms_ && exchange_ms_ <= INT32_MAX && cleanup_ms_ && cleanup_ms_ <= INT32_MAX &&
+           cleanup_ms_ > port_.tcp_close_max_ms() && port_.module_ready();
 }
 
 HttpConnection *ModuleTlsHttpProvider::create_connection(const OperationCancellation& token)

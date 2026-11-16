@@ -206,6 +206,7 @@ public:
         return ip4addr_aton(host, &address) != 0;
     }
     void tcp_close(int sock) override { lwip_close(sock); }
+    uint32_t tcp_close_max_ms() override { return PORT_SNDTIMEO_MS; } // lwIP's close, when it cannot get memory for the FIN
 };
 
 static FirmwareModuleTlsPort firmware_port;
