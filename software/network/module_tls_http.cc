@@ -210,6 +210,7 @@ public:
         if (!length || length > MAX_HOST || is_literal(host, length)) return -1;
         if (stop() || !port_.module_ready()) return fail();
         if (establish(host, port) != 0) return fail();
+        if (stop()) return fail();     // cancelled, or past the deadline, as the last handshake send returned
         opened_ = true;
         return 0;
     }
