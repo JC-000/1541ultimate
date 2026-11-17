@@ -42,6 +42,8 @@ struct Scenario {
     int close_busy = 0;                    // CLOSE: sent but not answered (BUSY) this many times first; the session stays
     int close_refused = 0;                 // CLOSE: refused with this esp_err (the session stays), when not zero
     CancellationSource *cancel_on_request = NULL;
+    CancellationSource *cancel_on_fin = NULL; // signalled as the send of the client's last handshake record returns
+    int fin_send_ms = 0;                   // that send takes this long (the clock moves)
 };
 static Scenario sc;
 
@@ -133,7 +135,12 @@ struct FakePort : ModuleTlsPort {
     }
     int tcp_send(int, const uint8_t *data, int length, uint32_t budget, const wifi_tls_cancel_t *) override {
         if (sc.notify_blocks && length >= 1 && data[0] == 'C') { fake_now += budget; return 110; }
-        server_feed(data, length); return 0;
+        server_feed(data, length);
+        if (length >= 6 && data[0] == 'H' && memcmp(data + 3, "FIN", 3) == 0) {   // the handshake's last send
+            fake_now += sc.fin_send_ms;
+            if (sc.cancel_on_fin) sc.cancel_on_fin->signal();
+        }
+        return 0;
     }
     int tcp_recv(int, uint8_t *buffer, int room, uint32_t budget, const wifi_tls_cancel_t *cancel) override {
         if (cancel && cancel->cancelled && cancel->cancelled(cancel->context)) return 0;
@@ -602,6 +609,25 @@ int main()
         expect(c->write(req, (int)strlen(req)) < 0, "a write whose last step ended after the deadline fails");
         delete c;
         balanced("released after a late write");
+    }
+    {   // open() does not report success when the token is cancelled, or the deadline passes, as the handshake's
+        // final send returns: the next write is refused and no request is sent.
+        const char *req = "GET /probe HTTP/1.1\r\nHost: secure.test\r\n\r\n";
+        for (int phase = 0; phase < 2; ++phase) {
+            CancellationSource events; Scenario s;
+            if (phase == 0) s.cancel_on_fin = &events; else s.fin_send_ms = 25000;
+            reset(s);
+            ModuleTlsHttpProvider provider(port, 20000, 500);
+            HttpConnection *c = provider.create_connection(events.token());
+            expect(c && c->open("secure.test", 443) != 0,
+                   phase == 0 ? "open: cancelled as the final handshake send returns fails"
+                              : "open: the deadline passing as the final handshake send returns fails");
+            expect(c && c->write(req, (int)strlen(req)) < 0 && request_seen.empty(),
+                   phase == 0 ? "after that cancelled open, a write is refused and no request is sent"
+                              : "after that expired open, a write is refused and no request is sent");
+            delete c;
+            balanced(phase == 0 ? "released after open cancelled at the final send" : "released after open expired at the final send");
+        }
     }
     {   // A CLOSE that was sent but not answered (BUSY), or refused for any reason but "no such session", has not
         // freed the session: the slot stays withheld.
