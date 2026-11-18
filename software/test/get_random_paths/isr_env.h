@@ -21,6 +21,8 @@ typedef void *TaskHandle_t;
 typedef void *QueueHandle_t;
 #define pdTRUE  1
 #define pdFALSE 0
+#define portENTER_CRITICAL() do { } while (0) // dma_uart.cc's ClearRxBuffer brackets the reset; the host has no interrupts
+#define portEXIT_CRITICAL()  do { } while (0)
 typedef enum { eSetValueWithOverwrite } eNotifyAction;
 
 #define CMD_BUF_SIZE 1600
